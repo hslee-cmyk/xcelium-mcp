@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(C:/msys64/usr/bin/bash.exe -lc \"cd ''C:/Users/HSLEE/Documents/Todoc/fpga/alamo-c0-eprom'' && verilator --lint-only -Wall +define+JTAG_TEST +define+INC_EXT_DTOP --top-module alamo_c0_jtag_test_top -I./db/design/test/d_tst/mdl -I./db/design/dsgn/d_top/mdl -I./db/design/dsgn/d_enc/mdl -I./db/design/dsgn/d_dec/mdl -I./db/design/dsgn/d_i2c/mdl -I./db/design/dsgn/d_pcm/mdl ./db/top/alamo_c0_jtag_test_top.v 2>&1\")",
+      "WebSearch",
+      "mcp__context7__resolve-library-id",
+      "mcp__context7__query-docs",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:modelcontextprotocol.github.io)",
+      "Bash(python3:*)",
+      "WebFetch(domain:community.cadence.com)",
+      "WebFetch(domain:manualzz.com)",
+      "WebFetch(domain:www.alab.ee.nctu.edu.tw)",
+      "WebFetch(domain:asic.co.in)",
+      "WebFetch(domain:groups.google.com)",
+      "WebFetch(domain:wiki.tcl-lang.org)",
+      "WebFetch(domain:studylib.net)",
+      "mcp__sequential-thinking__sequentialthinking",
+      "Bash(python -m pip:*)",
+      "Bash(where:*)",
+      "Bash(C:/Python314/python.exe -m pip show mcp)",
+      "Bash(C:/Python314/python.exe:*)",
+      "Bash(pip install:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(python:*)"
+    ]
+  }
+}
