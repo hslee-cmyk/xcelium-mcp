@@ -66,20 +66,21 @@ class TclBridge:
         self._reader = None
         self._writer = None
 
-    async def execute(self, command: str) -> str:
+    async def execute(self, command: str, timeout: float | None = None) -> str:
         """Send a command and return the result body. Raises TclError on failure."""
-        resp = await self.execute_safe(command)
+        resp = await self.execute_safe(command, timeout=timeout)
         return resp.raise_on_error()
 
-    async def execute_safe(self, command: str) -> TclResponse:
+    async def execute_safe(self, command: str, timeout: float | None = None) -> TclResponse:
         """Send a command and return a TclResponse (does not raise on Tcl errors)."""
         if not self.connected:
             raise ConnectionError("Not connected to SimVision bridge")
 
+        effective_timeout = timeout if timeout is not None else self.timeout
         async with self._lock:
             return await asyncio.wait_for(
                 self._send_and_recv(command),
-                timeout=self.timeout,
+                timeout=effective_timeout,
             )
 
     async def _send_and_recv(self, command: str) -> TclResponse:

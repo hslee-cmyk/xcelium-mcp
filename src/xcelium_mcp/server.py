@@ -1,7 +1,8 @@
-"""Xcelium MCP Server — FastMCP server with 18 tools for SimVision control."""
+"""Xcelium MCP Server — FastMCP server with 25 tools for SimVision control."""
 
 from __future__ import annotations
 
+import asyncio
 import textwrap
 
 from mcp.server.fastmcp import FastMCP, Image
@@ -74,16 +75,20 @@ async def disconnect_simulator() -> str:
 
 
 @mcp.tool()
-async def sim_run(duration: str = "") -> str:
+async def sim_run(duration: str = "", timeout: float = 600.0) -> str:
     """Run the simulation, optionally for a specified duration.
 
     Args:
         duration: Simulation time to run (e.g. "100ns", "1us"). Empty = run until breakpoint or end.
+        timeout: MCP response timeout in seconds (default 600s for gate-level sim support).
     """
     bridge = _get_bridge()
     cmd = f"run {duration}" if duration else "run"
-    await bridge.execute(cmd)
-    where = await bridge.execute("where")
+    await bridge.execute(cmd, timeout=timeout)
+    try:
+        where = await bridge.execute("where")
+    except (TclError, asyncio.TimeoutError, ConnectionError):
+        where = "(position unknown)"
     return f"Simulation advanced. Current position: {where}"
 
 
@@ -92,7 +97,10 @@ async def sim_stop() -> str:
     """Stop a running simulation."""
     bridge = _get_bridge()
     await bridge.execute("stop")
-    where = await bridge.execute("where")
+    try:
+        where = await bridge.execute("where")
+    except (TclError, asyncio.TimeoutError, ConnectionError):
+        where = "(position unknown)"
     return f"Simulation stopped at: {where}"
 
 
@@ -372,6 +380,134 @@ async def run_debugger_mode() -> list:
     except Exception as e:
         report += f"\n\n*(Screenshot unavailable: {e})*"
         return [report]
+
+
+# ===================================================================
+# Phase 10 — Advanced Debug Tools (tools 19–25)
+# ===================================================================
+
+@mcp.tool()
+async def shutdown_simulator() -> str:
+    """Safely shutdown the simulator, preserving SHM waveform data.
+
+    Closes all SHM databases and terminates xmsim gracefully.
+    Always use this instead of disconnect_simulator when ending a debug session.
+    WARNING: exit or pkill will lose SHM data. This is the only safe way.
+    """
+    global _bridge
+    bridge = _get_bridge()
+    try:
+        resp = await bridge.execute_safe("__SHUTDOWN__")
+        return f"Simulator shutdown: {resp.body}"
+    except (ConnectionError, asyncio.TimeoutError):
+        return "Simulator shutdown completed (connection closed)."
+    finally:
+        _bridge = None
+
+
+@mcp.tool()
+async def watch_signal(signal: str, op: str = "==", value: str = "") -> str:
+    """Set a watchpoint to stop simulation when a signal matches a condition.
+
+    The simulation will automatically stop at the exact clock edge where
+    the condition becomes true. Much more efficient than manual probing.
+
+    Args:
+        signal: Full hierarchical signal path (e.g. "top.dut.r_state[3:0]").
+        op: Comparison operator ("==", "!=", ">", "<", ">=", "<=").
+        value: Target value in Verilog format (e.g. "8'h10", "4'b1010").
+    """
+    bridge = _get_bridge()
+    result = await bridge.execute(f"__WATCH__ {signal} {op} {value}")
+    return f"Watchpoint set: {result}"
+
+
+@mcp.tool()
+async def watch_clear(watch_id: str = "all") -> str:
+    """Clear watchpoints. Use "all" to clear all, or a specific stop ID.
+
+    Args:
+        watch_id: Watchpoint ID to clear, or "all" for all watchpoints.
+    """
+    bridge = _get_bridge()
+    result = await bridge.execute(f"__WATCH_CLEAR__ {watch_id}")
+    return result
+
+
+@mcp.tool()
+async def probe_control(mode: str, scope: str = "") -> str:
+    """Control SHM waveform recording to manage dump file size.
+
+    Disable probes during uninteresting simulation periods to save disk space.
+    Re-enable before the region of interest. Optionally target a specific scope.
+
+    Args:
+        mode: "enable" to start recording, "disable" to pause, "status" to check.
+        scope: Hierarchical scope to target (e.g. "top.hw.u_ext"). Empty = all probes.
+    """
+    bridge = _get_bridge()
+    cmd = f"__PROBE_CONTROL__ {mode} {scope}" if scope else f"__PROBE_CONTROL__ {mode}"
+    result = await bridge.execute(cmd)
+    return result
+
+
+@mcp.tool()
+async def save_checkpoint(name: str = "") -> str:
+    """Save a simulation checkpoint for later restoration.
+
+    Checkpoints capture the complete simulator state. Use restore_checkpoint
+    to return to this point without re-simulating from time 0.
+
+    Args:
+        name: Checkpoint name (alphanumeric, e.g. "chk_10ms"). Auto-generated if empty.
+    """
+    bridge = _get_bridge()
+    cmd = f"__SAVE__ {name}" if name else "__SAVE__"
+    result = await bridge.execute(cmd)
+    return result
+
+
+@mcp.tool()
+async def restore_checkpoint(name: str = "") -> str:
+    """Restore simulation to a previously saved checkpoint.
+
+    Args:
+        name: Checkpoint name to restore. Empty = last saved checkpoint.
+    """
+    bridge = _get_bridge()
+    cmd = f"__RESTORE__ {name}" if name else "__RESTORE__"
+    result = await bridge.execute(cmd, timeout=120.0)
+    return result
+
+
+@mcp.tool()
+async def bisect_signal(
+    signal: str,
+    op: str,
+    value: str,
+    start_ns: int,
+    end_ns: int,
+    precision_ns: int = 1000,
+) -> str:
+    """Find when a signal condition first becomes true using automated binary search.
+
+    Internally saves checkpoints and repeatedly restores/runs with watchpoints
+    to narrow down the exact time. Returns iteration log and final time range.
+
+    Args:
+        signal: Full hierarchical signal path.
+        op: Comparison operator (e.g. "==").
+        value: Target value (e.g. "8'h11").
+        start_ns: Start of search range in nanoseconds.
+        end_ns: End of search range in nanoseconds.
+        precision_ns: Stop when range is narrower than this (default 1000ns).
+    """
+    bridge = _get_bridge()
+    cmd = (
+        f"__BISECT__ {signal} {op} {value} {start_ns} {end_ns} {precision_ns}"
+    )
+    result = await bridge.execute(cmd, timeout=600.0)
+    return result
 
 
 # ---------------------------------------------------------------------------
