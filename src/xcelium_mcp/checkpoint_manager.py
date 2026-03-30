@@ -178,6 +178,55 @@ def find_nearest_checkpoint(sim_dir: str, bug_time_ns: int) -> list[dict]:
     return candidates
 
 
+# ---------------------------------------------------------------------------
+# TB analysis cache — P4-8
+# ---------------------------------------------------------------------------
+
+def update_tb_analysis_cache(
+    sim_dir: str,
+    test_name: str,
+    analysis_path: str,
+    checkpoint_name: str = "",
+) -> dict:
+    """Record that a TB analysis was performed for test_name.
+
+    Stores the analysis file path and the checkpoint that was active (if any)
+    when the analysis was done.  This lets find_nearest_checkpoint() callers
+    cross-reference which checkpoint corresponds to a cached TB analysis.
+
+    manifest["tb_analysis_cache"][test_name] = {
+        "analysis_path": <str>,
+        "checkpoint":    <str>,   # "" when no checkpoint was active
+        "updated_at":    <float>, # time.time()
+    }
+
+    Returns the new cache entry dict.
+    """
+    manifest = _read_manifest(sim_dir)
+    entry: dict = {
+        "analysis_path": analysis_path,
+        "checkpoint": checkpoint_name,
+        "updated_at": time.time(),
+    }
+    manifest.setdefault("tb_analysis_cache", {})[test_name] = entry
+    _write_manifest(sim_dir, manifest)
+    return entry
+
+
+def get_tb_analysis_cache(sim_dir: str, test_name: str) -> dict:
+    """Return the TB analysis cache entry for test_name.
+
+    Returns a dict with keys:
+      analysis_path — absolute path to the .analysis.md file
+      checkpoint    — checkpoint name active when the analysis was cached
+      updated_at    — timestamp (float) of last update
+
+    Returns an empty dict when no cache entry exists for test_name.
+    """
+    manifest = _read_manifest(sim_dir)
+    return manifest.get("tb_analysis_cache", {}).get(test_name, {})
+
+
 def cleanup_checkpoints(
     sim_dir: str,
     mode: str = "stale",
