@@ -817,8 +817,7 @@ async def sim_batch_run(
     """Run simulation for a single test.
 
     Normal run ([A]): from_checkpoint="" → compile + run → SHM dump.
-    Restore run ([A']): from_checkpoint=name → restore → probe_add → run → new SHM.
-      Note: [A'] restore requires Phase 4 checkpoint_manager (not yet implemented).
+    Restore run ([A']): from_checkpoint=name → restore_checkpoint → probe_add → run → new SHM.
 
     SHM overwrite prevention:
       Method 6-A (default): injects TEST_NAME env var; setup.tcl uses $env(TEST_NAME).
