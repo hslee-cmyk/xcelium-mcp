@@ -679,21 +679,30 @@ async def cleanup_checkpoints(
 async def bisect_restore_and_debug(
     checkpoint_name: str,
     probe_signals: list[str],
+    watch_signal_path: str = "",
+    watch_op: str = "==",
+    watch_value: str = "",
     run_duration: str = "10000ns",
+    shm_path: str = "",
     sim_dir: str = "",
-    keep_alive: bool = False,
+    keep_alive: bool = True,
 ) -> str:
-    """Restore a checkpoint, add probe signals, run for a duration, then stop.
+    """Restore a checkpoint, add probe signals, then run with optional watchpoint stop.
 
-    Pattern: restore → probe_add_signals → sim_run → watchpoint stop.
+    Pattern: restore → probe_add_signals → [set watchpoint] → sim_run → stop.
     Use for interactive debug after bisect_signal_dump identifies a bug time.
+    When shm_path is given, runs bisect_signal_dump after stop for immediate analysis.
 
     Args:
-        checkpoint_name: Checkpoint name to restore.
-        probe_signals:   Signal paths to add via probe_add_signals after restore.
-        run_duration:    How long to run after restore (e.g. "10000ns").
-        sim_dir:         Simulation directory (auto-detected if empty).
-        keep_alive:      True = don't stop after run, leave simulator running.
+        checkpoint_name:   Checkpoint name to restore.
+        probe_signals:     Signal paths to add via probe after restore.
+        watch_signal_path: Signal path to watch (stop when condition met). Empty = no watchpoint.
+        watch_op:          Watchpoint operator (==, !=, >, <). Default "==".
+        watch_value:       Watchpoint value. Required when watch_signal_path is set.
+        run_duration:      Fallback run duration when no watchpoint (e.g. "10000ns").
+        shm_path:          If given, run bisect_signal_dump(watch_signal, ...) after stop.
+        sim_dir:           Simulation directory (auto-detected if empty).
+        keep_alive:        True = leave simulator running after analysis (default).
     """
     resolved_dir = sim_dir if sim_dir else await _get_default_sim_dir()
 
@@ -713,20 +722,38 @@ async def bisect_restore_and_debug(
         except Exception as e:
             return f"Restore succeeded but probe_add_signals failed: {e}\nRestore result: {restore_result}"
 
-    # 3. Run
+    # 3. Run (with or without watchpoint)
     bridge = _get_bridge()
-    run_result = await bridge.execute(f"run {run_duration}", timeout=120.0)
+    if watch_signal_path and watch_value:
+        await bridge.execute(
+            f"stop -create -signal {watch_signal_path} -op {watch_op} -value {watch_value}",
+            timeout=10.0,
+        )
+        run_result = await bridge.execute("run", timeout=600.0)
+    else:
+        run_result = await bridge.execute(f"run {run_duration}", timeout=120.0)
 
-    if keep_alive:
-        return f"restore: {restore_result}\nrun: {run_result}\n(simulator left running)"
+    lines = [f"restore: {restore_result}", f"run: {run_result}"]
 
-    # 4. Stop
-    try:
-        await bridge.execute("stop", timeout=10.0)
-    except Exception:
-        pass
+    # 4. Optional CSV analysis after stop
+    if shm_path and watch_signal_path and watch_value:
+        csv_result = await bisect_signal_dump(
+            shm_path=shm_path,
+            signal=watch_signal_path,
+            op="eq" if watch_op == "==" else watch_op,
+            value=watch_value,
+        )
+        lines.append(f"bisect: {csv_result}")
 
-    return f"restore: {restore_result}\nrun: {run_result}"
+    if not keep_alive:
+        try:
+            await bridge.execute("stop", timeout=10.0)
+        except Exception:
+            pass
+    else:
+        lines.append("(simulator left running)")
+
+    return "\n".join(lines)
 
 
 # ===================================================================
@@ -802,21 +829,14 @@ async def sim_batch_run(
     Args:
         test_name: Test name (e.g. "TOP015").
         sim_dir: Simulation directory. Empty → use default from mcp_registry.json.
-        from_checkpoint: Checkpoint name for [A'] restore mode (Phase 4 required).
-        probe_signals: Additional signals to probe in [A'] mode (Phase 4 required).
+        from_checkpoint: Checkpoint name for [A'] restore mode.
+        probe_signals: Additional signals to probe in [A'] mode.
         shm_path: New SHM path for [A'] mode (default: dump/{test_name}_extra.shm).
         run_duration: Run only up to this time (e.g. "10ms"). Empty = run to end.
         rename_dump: Enable Method 6-B SHM rename fallback.
-        dump_signals: Additional signals to dump (prepare_dump_scope, Phase 3).
+        dump_signals: Additional signals to dump (prepare_dump_scope).
         timeout: SSH wait timeout in seconds.
     """
-    # [A'] mode guard — requires Phase 4
-    if from_checkpoint:
-        return (
-            "ERROR: [A'] restore mode requires Phase 4 checkpoint_manager "
-            "(not yet implemented). Run without from_checkpoint for [A] normal run."
-        )
-
     # Resolve sim_dir
     try:
         resolved_sim_dir = sim_dir if sim_dir else await _get_default_sim_dir()
@@ -859,12 +879,7 @@ async def sim_batch_run(
     except Exception as e:
         return f"ERROR running simulation: {e}"
 
-    # L1/L2 checkpoint saving stub (Phase 4)
-    chk_note = (
-        "\n[Note: L1/L2 checkpoint auto-save requires Phase 4 — skipped]"
-    )
-
-    return f"sim_batch_run {test_name} completed.\n\n{log}{chk_note}"
+    return f"sim_batch_run {test_name} completed.\n\n{log}"
 
 
 @mcp.tool()
@@ -889,16 +904,11 @@ async def sim_batch_regression(
     Args:
         test_list: List of test names. Empty → auto-detect from mcp_sim_config.json.
         sim_dir: Simulation directory. Empty → default from mcp_registry.json.
-        from_checkpoint: Checkpoint for [A'] mode (Phase 4 required).
-        dump_signals: Additional dump signals (Phase 3 required).
+        from_checkpoint: Checkpoint for [A'] restore mode.
+        dump_signals: Additional dump signals.
         rename_dump: Enable Method 6-B SHM rename fallback.
         parallel: Parallel screen execution (reserved for future phase).
     """
-    if from_checkpoint:
-        return (
-            "ERROR: from_checkpoint regression requires Phase 4 checkpoint_manager "
-            "(not yet implemented)."
-        )
 
     if parallel:
         return "ERROR: parallel=True is reserved for a future phase. Use parallel=False."
