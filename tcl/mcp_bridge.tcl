@@ -229,6 +229,18 @@ proc ::mcp_bridge::dispatch {channel cmd} {
         return
     }
 
+    # --- Phase 5 meta commands ---
+
+    if {[string match "__WAVEFORM_ADD_GROUP__*" $cmd]} {
+        # Protocol: "__WAVEFORM_ADD_GROUP__ {group_name} sig1 sig2 ..."
+        set args [string trim [string range $cmd 23 end]]
+        set parts [split $args " "]
+        set group_name [lindex $parts 0]
+        set sig_list [lrange $parts 1 end]
+        ::mcp_bridge::do_waveform_add_group $channel $group_name $sig_list
+        return
+    }
+
     # --- Phase 3 meta commands ---
 
     if {[string match "__BISECT__*" $cmd]} {
@@ -765,6 +777,43 @@ proc ::mcp_bridge::do_bisect {channel args_str} {
 
     lappend log_lines "bisect_done|iters:$iteration|found:${start_ns}-${end_ns}ns|value:$final_val"
     ::mcp_bridge::send_ok $channel [join $log_lines "\n"]
+}
+
+# ---------------------------------------------------------------------------
+# F7: __WAVEFORM_ADD_GROUP__ — AI_Debug group with duplicate skip (P5-2)
+# ---------------------------------------------------------------------------
+proc ::mcp_bridge::do_waveform_add_group {channel group_name sig_list} {
+    # 1. Create group if not exists (catch = no-op when already exists)
+    catch {waveform create -group $group_name}
+
+    # 2. Collect existing signals in this group for duplicate detection
+    set existing {}
+    catch {set existing [waveform list -using $group_name]}
+
+    # 3. Filter: only add signals not already in the group
+    set to_add {}
+    foreach sig $sig_list {
+        if {[lsearch -exact $existing $sig] < 0} {
+            lappend to_add $sig
+        }
+    }
+
+    set skipped [expr {[llength $sig_list] - [llength $to_add]}]
+
+    if {[llength $to_add] == 0} {
+        ::mcp_bridge::send_ok $channel \
+            "added:0|skipped:$skipped|group:$group_name (all signals already present)"
+        return
+    }
+
+    # 4. Add new signals to the group
+    if {[catch {waveform add -using $group_name -signals $to_add} err]} {
+        ::mcp_bridge::send_error $channel "waveform add failed: $err"
+        return
+    }
+
+    ::mcp_bridge::send_ok $channel \
+        "added:[llength $to_add]|skipped:$skipped|group:$group_name"
 }
 
 # ---------------------------------------------------------------------------

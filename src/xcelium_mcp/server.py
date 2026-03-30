@@ -1305,6 +1305,301 @@ async def generate_debug_tcl(
     )
 
 
+# ===================================================================
+# Phase 5 — UI/Visual (tools 34–37)
+# ===================================================================
+
+@mcp.tool()
+async def attach_to_simvision(
+    port: int = 9876,
+    timeout: int = 10,
+) -> str:
+    """Attach to an already-running SimVision session via TCP bridge.
+
+    Precondition: ~/.simvisionrc must source mcp_bridge.tcl so the bridge
+    starts automatically when SimVision is launched.
+
+    Setup (once):
+      echo 'source /path/to/mcp_bridge.tcl' >> ~/.simvisionrc
+
+    Difference from open_debug_view:
+      - open_debug_view: launches SimVision + configures waveform view
+      - attach_to_simvision: connects to already-running SimVision (no restart)
+
+    Args:
+        port:    TCP bridge port (default 9876).
+        timeout: Connection wait timeout in seconds.
+    """
+    check = await ssh_run(
+        f"nc -z localhost {port} 2>/dev/null && echo OK || echo FAIL",
+        timeout=float(timeout + 2),
+    )
+    if "OK" in check:
+        return await connect_simulator(host="localhost", port=port)
+    return (
+        f"SimVision bridge not found on port {port}.\n"
+        "Setup: echo 'source /path/to/mcp_bridge.tcl' >> ~/.simvisionrc\n"
+        "Then (re)start SimVision."
+    )
+
+
+@mcp.tool()
+async def open_debug_view(
+    shm_path: str,
+    signals: list[str],
+    center_time_ns: int,
+    zoom_range_ns: int = 10000,
+    cursor_time_ns: int = 0,
+    markers: list[dict] = [],
+    group_name: str = "AI_Debug",
+    context_note: str = "",
+    display: str = ":1",
+) -> str:
+    """Launch SimVision on VNC display with pre-configured AI debug view.
+
+    Flow:
+      1. Detect VNC display (vncserver -list)
+      2. If no VNC → generate_debug_tcl fallback (offline script)
+      3. Launch: DISPLAY={display} simvision {shm_path} &
+      4. Wait for TCP bridge on port 9876 (up to 30s)
+      5. connect_simulator → waveform_add_signals (AI_Debug group, dup skip)
+      6. zoom → cursor → markers → context note
+
+    Args:
+        shm_path:       SHM dump file path.
+        signals:        Signal paths to add to AI_Debug group.
+        center_time_ns: Bug time — waveform zoomed to ±zoom_range_ns.
+        zoom_range_ns:  Half-width of zoom in ns.
+        cursor_time_ns: Cursor position (0 = center_time_ns).
+        markers:        List of {"time_ns": int, "label": str}.
+        group_name:     Waveform group for AI signals (default "AI_Debug").
+        context_note:   AI analysis summary printed to SimVision console.
+        display:        VNC DISPLAY variable (default ":1").
+    """
+    # 1. VNC check
+    vnc_check = await ssh_run(
+        f"vncserver -list 2>/dev/null | grep '{display}' || echo NONE",
+        timeout=10.0,
+    )
+    if "NONE" in vnc_check or display not in vnc_check:
+        # Fallback: generate offline Tcl script
+        tcl_result = await generate_debug_tcl(
+            shm_path=shm_path,
+            signals=signals,
+            center_time_ns=center_time_ns,
+            zoom_range_ns=zoom_range_ns,
+            markers=markers,
+            context_note=context_note,
+        )
+        return (
+            f"VNC display {display} not active. Generated offline debug script:\n"
+            f"{tcl_result}"
+        )
+
+    # 2. Launch SimVision (detached)
+    await ssh_run(
+        f"DISPLAY={display} simvision {shm_path} &",
+        timeout=5.0,
+    )
+
+    # 3. Wait for bridge (15 × 2s = 30s)
+    bridge_ready = await ssh_run(
+        "for i in $(seq 1 15); do sleep 2; "
+        "nc -z localhost 9876 2>/dev/null && echo READY && break; done",
+        timeout=35.0,
+    )
+
+    if "READY" not in bridge_ready:
+        tcl_result = await generate_debug_tcl(
+            shm_path=shm_path, signals=signals, center_time_ns=center_time_ns,
+            zoom_range_ns=zoom_range_ns, markers=markers, context_note=context_note,
+        )
+        return (
+            f"SimVision launched but bridge not ready. Use offline script:\n"
+            f"{tcl_result}"
+        )
+
+    # 4. Connect
+    await connect_simulator(host="localhost", port=9876)
+    bridge = _get_bridge()
+
+    # 5. Add signals to AI_Debug group (duplicate skip via P5-2)
+    if signals:
+        sig_str = " ".join(signals)
+        await bridge.execute(
+            f"__WAVEFORM_ADD_GROUP__ {group_name} {sig_str}", timeout=30.0
+        )
+
+    # 6. Zoom
+    start_zoom = center_time_ns - zoom_range_ns
+    end_zoom = center_time_ns + zoom_range_ns
+    await bridge.execute(f"waveform zoom -range {start_zoom}:{end_zoom}ns", timeout=10.0)
+
+    # 7. Cursor
+    t_cursor = cursor_time_ns if cursor_time_ns else center_time_ns
+    await bridge.execute(f"cursor set -time {t_cursor}ns", timeout=10.0)
+
+    # 8. Markers
+    for m in markers:
+        t = m.get("time_ns", 0)
+        label = m.get("label", "").replace('"', "'")
+        try:
+            await bridge.execute(f'cursor set -time {t}ns -name "{label}"', timeout=5.0)
+        except Exception:
+            pass
+
+    # 9. Context note to SimVision console
+    if context_note:
+        safe_note = context_note.replace('"', "'")
+        await bridge.execute(f'puts "=== AI Debug Context: {safe_note} ==="', timeout=5.0)
+
+    display_num = display.lstrip(":")
+    vnc_port = 5900 + int(display_num)
+    return (
+        f"SimVision launched on {display}. "
+        f"Connect VNC viewer to localhost:{vnc_port}\n"
+        f"AI_Debug group: {len(signals)} signal(s) added, zoomed to "
+        f"{start_zoom}–{end_zoom}ns"
+    )
+
+
+@mcp.tool()
+async def compare_waveforms(
+    shm_before: str,
+    shm_after: str,
+    signals: list[str],
+    time_range_ns: list[int] = [],
+    output_mode: str = "csv_diff",
+) -> str:
+    """Compare two SHM waveform dumps and report signal differences.
+
+    csv_diff mode (default):
+      1. Extract CSV from both SHMs via simvisdbutil
+      2. Compare signal values at each timestamp
+      3. Return changed signal list + first change time
+
+    Args:
+        shm_before:    Reference SHM (before fix, or failing run).
+        shm_after:     Comparison SHM (after fix, or passing run).
+        signals:       Signal paths to compare.
+        time_range_ns: [start_ns, end_ns] to limit range. Empty = full range.
+        output_mode:   "csv_diff" (text diff) — simvision mode not yet available.
+    """
+    import csv as _csv
+
+    start_ns = time_range_ns[0] if len(time_range_ns) >= 1 else 0
+    end_ns = time_range_ns[1] if len(time_range_ns) >= 2 else 0
+
+    try:
+        csv_b = await csv_cache.extract(shm_before, signals, start_ns, end_ns, missing_ok=True)
+        csv_a = await csv_cache.extract(shm_after, signals, start_ns, end_ns, missing_ok=True)
+    except RuntimeError as e:
+        return f"ERROR extracting CSV: {e}"
+
+    def _load_rows(path: str) -> dict[int, dict]:
+        rows: dict[int, dict] = {}
+        with open(path, newline="", encoding="utf-8") as f:
+            for row in _csv.DictReader(f):
+                rows[int(row.get("time", 0))] = row
+        return rows
+
+    rows_b = _load_rows(csv_b)
+    rows_a = _load_rows(csv_a)
+
+    all_times = sorted(set(rows_b) | set(rows_a))
+    diffs: dict[str, list[tuple]] = {s: [] for s in signals}
+
+    for t in all_times:
+        rb = rows_b.get(t, {})
+        ra = rows_a.get(t, {})
+        for sig in signals:
+            vb = rb.get(sig, "?")
+            va = ra.get(sig, "?")
+            if vb != va:
+                diffs[sig].append((t, vb, va))
+
+    lines = [
+        f"=== Waveform Comparison ===",
+        f"BEFORE: {shm_before}",
+        f"AFTER:  {shm_after}",
+    ]
+    changed = 0
+    first_time: int | None = None
+
+    for sig in signals:
+        sig_diffs = diffs[sig]
+        lines.append(f"\nSignal: {sig}")
+        if not sig_diffs:
+            lines.append("  (no differences)")
+        else:
+            changed += 1
+            for t, vb, va in sig_diffs[:10]:
+                lines.append(f"  Time {t}ns: BEFORE={vb} | AFTER={va}  ← CHANGED")
+                if first_time is None or t < first_time:
+                    first_time = t
+            if len(sig_diffs) > 10:
+                lines.append(f"  ... ({len(sig_diffs) - 10} more)")
+
+    lines.append("")
+    lines.append(
+        f"Result: {changed} signal(s) changed, "
+        f"{len(signals) - changed} unchanged."
+    )
+    if first_time is not None:
+        lines.append(f"First change: {first_time}ns")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def export_debug_context(
+    test_name: str,
+    bug_description: str,
+    root_cause: str,
+    evidence: list[dict],
+    related_code: list[dict],
+    signals_to_check: list[str],
+    suggested_fix: str = "",
+    output_path: str = "",
+) -> str:
+    """Export AI analysis as a human-readable Markdown debug context document.
+
+    Generates a structured report with bug summary, root cause, CSV evidence
+    table, related code references, and signals to check in SimVision.
+
+    Args:
+        test_name:        Test name (e.g. "TOP015").
+        bug_description:  One-line bug summary.
+        root_cause:       AI-inferred root cause.
+        evidence:         List of {"time_ns", "signal", "value", "expected", "meaning"}.
+        related_code:     List of {"file", "line", "snippet"}.
+        signals_to_check: Signal paths for user to inspect in SimVision.
+        suggested_fix:    Optional fix suggestion.
+        output_path:      Output file path. Default: /tmp/debug_{test_name}.md
+    """
+    import time as _time
+
+    if not output_path:
+        output_path = f"/tmp/debug_{test_name}_{int(_time.time())}.md"
+
+    content = debug_tools.generate_debug_context_md(
+        test_name=test_name,
+        bug_description=bug_description,
+        root_cause=root_cause,
+        evidence=evidence,
+        related_code=related_code,
+        signals_to_check=signals_to_check,
+        suggested_fix=suggested_fix,
+    )
+
+    from pathlib import Path as _Path
+    _Path(output_path).write_text(content, encoding="utf-8")
+
+    if not _Path(output_path).exists():
+        return f"ERROR: Failed to write debug context to {output_path}"
+
+    return f"Debug context exported to: {output_path}"
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
