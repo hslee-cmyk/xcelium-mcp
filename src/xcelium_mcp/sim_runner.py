@@ -568,3 +568,208 @@ def _extract_script_name(exec_cmd: str) -> str:
     if name == "make" and len(parts) > 1:
         return parts[1].split("=")[0]  # "sim" from "sim TEST=..."
     return name
+
+
+# ---------------------------------------------------------------------------
+# Batch / Regression execution helpers (Phase 2)
+# ---------------------------------------------------------------------------
+
+async def _get_default_sim_dir() -> str:
+    """Return the default simulation directory from mcp_registry.json.
+
+    Falls back to _discover_sim_dir() if registry is empty.
+    Returns "" if nothing found.
+    """
+    registry = load_registry()
+    for project in registry.get("projects", {}).values():
+        for sim_dir, env in project.get("environments", {}).items():
+            if env.get("is_default"):
+                return sim_dir
+
+    # Fallback: auto-discover (may raise UserInputRequired)
+    envs = await _discover_sim_dir()
+    return envs[0]["sim_dir"] if envs else ""
+
+
+async def _run_batch_single(
+    sim_dir: str,
+    test_name: str,
+    runner: dict,
+    rename_dump: bool = False,
+    run_duration: str = "",
+    timeout: int = 600,
+) -> str:
+    """Execute a single simulation test and return combined log output.
+
+    Strategy (P2-8 SSH screen hybrid):
+      timeout <= 120 → direct ssh_run (synchronous, result returned immediately)
+      timeout  > 120 → screen session + log polling
+
+    SHM overwrite prevention:
+      Method 6-A (default): injects TEST_NAME env var so setup tcl uses
+          $env(TEST_NAME) to name the SHM file.
+      Method 6-B (rename_dump=True): moves dump/ci_top.shm to
+          dump/ci_top_{test_name}.shm after simulation completes.
+    """
+    import time as _time
+
+    info = _resolve_exec_cmd(runner, regression=False)
+    cmd = info.cmd.format(test_name=test_name) if info.needs_test_name else info.cmd
+
+    # Method 6-A: inject TEST_NAME for SHM file naming
+    env_prefix = f"TEST_NAME={test_name} "
+
+    if timeout <= 120:
+        # --- Direct ssh_run ---
+        full_cmd = f"cd {sim_dir} && {env_prefix}{cmd}"
+        result = await ssh_run(full_cmd, timeout=float(timeout))
+
+        if rename_dump:
+            # Method 6-B fallback
+            mv_cmd = (
+                f"cd {sim_dir} && "
+                f"if [ -d dump/ci_top.shm ]; then "
+                f"mv dump/ci_top.shm dump/ci_top_{test_name}.shm; fi"
+            )
+            await ssh_run(mv_cmd, timeout=30.0)
+
+        return result
+
+    # --- Screen session + log polling ---
+    ts = int(_time.time())
+    session = f"mcp_single_{ts}"
+    log_file = f"/tmp/screen_{session}.log"
+    login_shell = runner.get("login_shell", "/bin/sh")
+
+    # Start screen session with log capture
+    await ssh_run(
+        f"screen -dmS {session} -L -Logfile {log_file} {login_shell} -l",
+        timeout=15.0,
+    )
+    await ssh_run(f"screen -S {session} -X stuff 'cd {sim_dir}\\n'", timeout=10.0)
+    await ssh_run(
+        f"screen -S {session} -X stuff 'setenv TEST_NAME {test_name}\\n'",
+        timeout=10.0,
+    )
+    await ssh_run(f"screen -S {session} -X stuff '{cmd}\\n'", timeout=10.0)
+
+    # Poll for completion
+    deadline = _time.time() + timeout
+    while _time.time() < deadline:
+        log = await ssh_run(f"tail -5 {log_file} 2>/dev/null")
+        if any(kw in log for kw in ("$finish", "COMPLETE", "PASS", "FAIL", "Errors:")):
+            break
+        await asyncio.sleep(10)
+
+    # Method 6-B fallback
+    if rename_dump:
+        await ssh_run(
+            f"screen -S {session} -X stuff "
+            f"'if [ -d {sim_dir}/dump/ci_top.shm ]; then "
+            f"mv {sim_dir}/dump/ci_top.shm {sim_dir}/dump/ci_top_{test_name}.shm; fi\\n'",
+            timeout=10.0,
+        )
+
+    # Cleanup + collect results
+    await ssh_run(f"screen -X -S {session} quit 2>/dev/null", timeout=10.0)
+    result = await ssh_run(
+        f"grep -E 'PASS|FAIL|Errors:|\\$finish|COMPLETE' {log_file} 2>/dev/null | tail -30"
+    )
+    return result
+
+
+async def _run_batch_regression(
+    sim_dir: str,
+    test_list: list[str],
+    runner: dict,
+    from_checkpoint: str = "",
+    rename_dump: bool = False,
+) -> str:
+    """Execute regression tests via screen session with per-test polling.
+
+    Always uses screen (P2-8: regression always detaches).
+
+    needs_test_name=False → regression_script handles all tests → 1 cmd, poll REGRESSION_COMPLETE
+    needs_test_name=True  → iterate test_list, per-test poll, method 6-A/B for SHM naming
+    """
+    import time as _time
+
+    ts = int(_time.time())
+    session = f"mcp_regression_{ts}"
+    log_file = f"/tmp/screen_{session}.log"
+    login_shell = runner.get("login_shell", "/bin/sh")
+
+    # Check for existing mcp_regression screen sessions
+    existing = await ssh_run("screen -ls 2>/dev/null | grep mcp_regression || echo ''")
+    if existing.strip():
+        # Kill stale sessions
+        await ssh_run(
+            "screen -ls 2>/dev/null | grep mcp_regression "
+            "| awk '{print $1}' | xargs -I{} screen -X -S {} quit 2>/dev/null || true"
+        )
+
+    # Start screen session with log capture
+    await ssh_run(
+        f"screen -dmS {session} -L -Logfile {log_file} {login_shell} -l",
+        timeout=15.0,
+    )
+    await ssh_run(f"screen -S {session} -X stuff 'cd {sim_dir}\\n'", timeout=10.0)
+
+    info = _resolve_exec_cmd(runner, regression=True)
+
+    if not info.needs_test_name:
+        # regression_script handles all tests internally → 1 cmd
+        await ssh_run(
+            f"screen -S {session} -X stuff '{info.cmd}\\n'", timeout=10.0
+        )
+        # Poll for overall completion
+        for _ in range(360):  # max ~1 hour
+            log = await ssh_run(f"tail -5 {log_file} 2>/dev/null")
+            if "REGRESSION_COMPLETE" in log or "All tests done" in log:
+                break
+            await asyncio.sleep(10)
+
+    else:
+        # Per-test loop — needs {test_name} substitution
+        for test_name in test_list:
+            # Method 6-A: set TEST_NAME env var for SHM file naming
+            await ssh_run(
+                f"screen -S {session} -X stuff 'setenv TEST_NAME {test_name}\\n'",
+                timeout=10.0,
+            )
+            cmd = info.cmd.format(test_name=test_name)
+            await ssh_run(
+                f"screen -S {session} -X stuff '{cmd}\\n'", timeout=10.0
+            )
+
+            # Per-test completion poll (max 10 min each)
+            for _ in range(60):
+                log = await ssh_run(f"tail -3 {log_file} 2>/dev/null")
+                if any(kw in log for kw in ("$finish", "COMPLETE", "PASS", "FAIL")):
+                    break
+                await asyncio.sleep(10)
+
+            # Method 6-B fallback
+            if rename_dump:
+                await ssh_run(
+                    f"screen -S {session} -X stuff "
+                    f"'if [ -d {sim_dir}/dump/ci_top.shm ]; then "
+                    f"mv {sim_dir}/dump/ci_top.shm "
+                    f"{sim_dir}/dump/ci_top_{test_name}.shm; fi\\n'",
+                    timeout=10.0,
+                )
+
+    # Cleanup screen session
+    await ssh_run(f"screen -X -S {session} quit 2>/dev/null", timeout=10.0)
+
+    # Parse final results
+    raw = await ssh_run(
+        f"grep -E 'PASS|FAIL' {log_file} 2>/dev/null | tail -100"
+    )
+    pass_count = raw.count("PASS")
+    fail_count = raw.count("FAIL")
+    total = len(test_list)
+
+    summary = f"{pass_count}/{total} tests PASS, {fail_count} FAIL"
+    details = raw[:2000] if raw.strip() else "(no PASS/FAIL lines found in log)"
+    return f"{summary}\n\nLog ({log_file}):\n{details}"
