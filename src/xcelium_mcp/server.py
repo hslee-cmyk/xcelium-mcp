@@ -1470,6 +1470,7 @@ async def compare_waveforms(
     signals: list[str],
     time_range_ns: list[int] = [],
     output_mode: str = "csv_diff",
+    display: str = ":1",
 ) -> str:
     """Compare two SHM waveform dumps and report signal differences.
 
@@ -1478,15 +1479,111 @@ async def compare_waveforms(
       2. Compare signal values at each timestamp
       3. Return changed signal list + first change time
 
+    simvision mode:
+      1. Check VNC availability on {display}
+      2. Launch SimVision with shm_before as primary database
+      3. Wait for TCP bridge on port 9876 (up to 30s)
+      4. Open shm_after as second database via Tcl
+      5. Add two waveform groups: "BEFORE" and "AFTER" with signals from each DB
+      6. Return VNC connection instructions
+
     Args:
         shm_before:    Reference SHM (before fix, or failing run).
         shm_after:     Comparison SHM (after fix, or passing run).
         signals:       Signal paths to compare.
         time_range_ns: [start_ns, end_ns] to limit range. Empty = full range.
-        output_mode:   "csv_diff" (text diff) — simvision mode not yet available.
+        output_mode:   "csv_diff" (text diff) or "simvision" (GUI side-by-side).
+        display:       VNC DISPLAY for simvision mode (default ":1").
     """
     import csv as _csv
 
+    # ------------------------------------------------------------------ #
+    # simvision mode: open both SHMs in SimVision for side-by-side view   #
+    # ------------------------------------------------------------------ #
+    if output_mode == "simvision":
+        # 1. VNC check
+        vnc_check = await ssh_run(
+            f"vncserver -list 2>/dev/null | grep '{display}' || echo NONE",
+            timeout=10.0,
+        )
+        if "NONE" in vnc_check or display not in vnc_check:
+            return (
+                f"ERROR: VNC display {display} is not active.\n"
+                "Start a VNC session first (e.g. vncserver :1), then retry.\n"
+                "Fallback: use output_mode='csv_diff' for text-based comparison."
+            )
+
+        # 2. Launch SimVision with shm_before as primary database (detached)
+        await ssh_run(
+            f"DISPLAY={display} simvision {shm_before} &",
+            timeout=5.0,
+        )
+
+        # 3. Wait for bridge (15 × 2s = 30s)
+        bridge_ready = await ssh_run(
+            "for i in $(seq 1 15); do sleep 2; "
+            "nc -z localhost 9876 2>/dev/null && echo READY && break; done",
+            timeout=35.0,
+        )
+        if "READY" not in bridge_ready:
+            return (
+                f"SimVision launched on {display} but TCP bridge not ready on port 9876.\n"
+                "Ensure ~/.simvisionrc sources mcp_bridge.tcl.\n"
+                "Setup: echo 'source /path/to/mcp_bridge.tcl' >> ~/.simvisionrc\n"
+                "Fallback: use output_mode='csv_diff' for text-based comparison."
+            )
+
+        # 4. Connect bridge
+        await connect_simulator(host="localhost", port=9876)
+        bridge = _get_bridge()
+
+        # 5. Open shm_after as second database
+        try:
+            await bridge.execute(
+                f'database -open -shm -into cmp_after {shm_after}',
+                timeout=30.0,
+            )
+        except Exception as e:
+            return f"SimVision connected but failed to open shm_after: {e}"
+
+        # 6. Add BEFORE group (signals from primary / default database)
+        sig_str = " ".join(signals)
+        try:
+            await bridge.execute(
+                f"__WAVEFORM_ADD_GROUP__ BEFORE {sig_str}",
+                timeout=30.0,
+            )
+        except Exception as e:
+            return f"SimVision open but BEFORE group add failed: {e}"
+
+        # 7. Add AFTER group (signals qualified with cmp_after database scope)
+        # Signals from a named database are accessed as {db_name}.{signal_path}
+        after_signals = " ".join(f"cmp_after.{s}" for s in signals)
+        try:
+            await bridge.execute(
+                f"__WAVEFORM_ADD_GROUP__ AFTER {after_signals}",
+                timeout=30.0,
+            )
+        except Exception as e:
+            return f"BEFORE group added but AFTER group failed: {e}"
+
+        display_num = display.lstrip(":")
+        vnc_port = 5900 + int(display_num)
+        return (
+            f"=== compare_waveforms (simvision mode) ===\n"
+            f"BEFORE: {shm_before}\n"
+            f"AFTER:  {shm_after}\n\n"
+            f"SimVision launched on {display}.\n"
+            f"Connect VNC viewer to localhost:{vnc_port}\n\n"
+            f"Waveform groups added:\n"
+            f"  BEFORE — {len(signals)} signal(s) from primary database\n"
+            f"  AFTER  — {len(signals)} signal(s) from cmp_after database\n\n"
+            f"Use csv_diff mode for automated signal diffing without GUI."
+        )
+
+    # ------------------------------------------------------------------ #
+    # csv_diff mode (default)                                              #
+    # ------------------------------------------------------------------ #
     start_ns = time_range_ns[0] if len(time_range_ns) >= 1 else 0
     end_ns = time_range_ns[1] if len(time_range_ns) >= 2 else 0
 
