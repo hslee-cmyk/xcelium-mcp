@@ -854,6 +854,21 @@ async def sim_batch_run(
     except UserInputRequired as e:
         return f"USER INPUT REQUIRED:\n{e.prompt}"
 
+    # [A'] restore mode: restore checkpoint → add probe signals before run
+    if from_checkpoint:
+        restore_result = await restore_checkpoint(from_checkpoint, resolved_sim_dir)
+        if "ERROR" in restore_result or "restore failed" in restore_result:
+            return f"ERROR in [A'] restore: {restore_result}"
+        if probe_signals:
+            try:
+                bridge = _get_bridge()
+                sig_str = " ".join(probe_signals)
+                await bridge.execute(
+                    f"probe -create {{{sig_str}}} -shm -depth all", timeout=30.0
+                )
+            except Exception as e:
+                return f"Restore succeeded but probe_add_signals failed: {e}"
+
     # dump_signals: extend probe scope via prepare_dump_scope
     if dump_signals:
         try:
