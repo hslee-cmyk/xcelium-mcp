@@ -296,12 +296,8 @@ async def _detect_shell_and_env(sim_dir: str, script: str, project_root: str) ->
     if shebang.strip().startswith("#!"):
         script_shell = shebang.strip()[2:].split()[0]
 
-    # EDA env detection (UserInputRequired propagates to caller)
-    try:
-        eda = await _detect_eda_env(sim_dir, project_root, login_shell)
-    except UserInputRequired:
-        # caller decides how to handle (MCP tool surfaces it to user)
-        eda = {"env_files": [], "env_shell": login_shell, "source_separately": False}
+    # EDA env detection — UserInputRequired propagates to caller
+    eda = await _detect_eda_env(sim_dir, project_root, login_shell)
 
     return {
         "login_shell": login_shell,
