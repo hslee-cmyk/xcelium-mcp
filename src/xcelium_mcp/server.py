@@ -10,6 +10,7 @@ from mcp.server.fastmcp import FastMCP, Image
 from xcelium_mcp.tcl_bridge import TclBridge, TclError
 from xcelium_mcp.screenshot import ps_to_png
 import xcelium_mcp.csv_cache as csv_cache
+import xcelium_mcp.debug_tools as debug_tools
 from xcelium_mcp.sim_runner import (
     UserInputRequired,
     _get_default_sim_dir,
@@ -17,6 +18,7 @@ from xcelium_mcp.sim_runner import (
     _resolve_exec_cmd,
     _run_batch_regression,
     _run_batch_single,
+    ssh_run,
 )
 
 # ---------------------------------------------------------------------------
@@ -632,13 +634,6 @@ async def sim_batch_run(
             "(not yet implemented). Run without from_checkpoint for [A] normal run."
         )
 
-    # dump_signals guard — requires Phase 3
-    if dump_signals:
-        return (
-            "ERROR: dump_signals requires Phase 3 prepare_dump_scope "
-            "(not yet implemented). Run without dump_signals."
-        )
-
     # Resolve sim_dir
     try:
         resolved_sim_dir = sim_dir if sim_dir else await _get_default_sim_dir()
@@ -655,6 +650,18 @@ async def sim_batch_run(
         runner = await _load_or_detect_runner(resolved_sim_dir)
     except UserInputRequired as e:
         return f"USER INPUT REQUIRED:\n{e.prompt}"
+
+    # dump_signals: extend probe scope via prepare_dump_scope
+    if dump_signals:
+        try:
+            extended_tcl = await _prepare_dump_scope_internal(
+                resolved_sim_dir,
+                additional_signals=dump_signals,
+            )
+            runner = dict(runner)
+            runner["_extended_tcl"] = extended_tcl
+        except Exception as e:
+            return f"ERROR in prepare_dump_scope: {e}"
 
     # Execute simulation
     try:
@@ -710,12 +717,6 @@ async def sim_batch_regression(
             "(not yet implemented)."
         )
 
-    if dump_signals:
-        return (
-            "ERROR: dump_signals requires Phase 3 prepare_dump_scope "
-            "(not yet implemented)."
-        )
-
     if parallel:
         return "ERROR: parallel=True is reserved for a future phase. Use parallel=False."
 
@@ -735,6 +736,18 @@ async def sim_batch_regression(
         runner = await _load_or_detect_runner(resolved_sim_dir)
     except UserInputRequired as e:
         return f"USER INPUT REQUIRED:\n{e.prompt}"
+
+    # dump_signals: 1회만 prepare_dump_scope → 전 테스트 공유
+    if dump_signals:
+        try:
+            shared_tcl = await _prepare_dump_scope_internal(
+                resolved_sim_dir,
+                additional_signals=dump_signals,
+            )
+            runner = dict(runner)
+            runner["_extended_tcl"] = shared_tcl
+        except Exception as e:
+            return f"ERROR in prepare_dump_scope: {e}"
 
     # Auto-detect test_list from sim config if empty
     if not test_list:
@@ -763,6 +776,316 @@ async def sim_batch_regression(
 
     chk_note = "\n[Note: L1/L2 checkpoint auto-save requires Phase 4 — skipped]"
     return f"sim_batch_regression completed.\n\n{summary}{chk_note}"
+
+
+# ===================================================================
+# Phase 3 — Advanced Analysis (tools 29–33)
+# ===================================================================
+
+# ---------------------------------------------------------------------------
+# Internal helper: prepare_dump_scope logic (also used by sim_batch_run/regression)
+# ---------------------------------------------------------------------------
+
+async def _prepare_dump_scope_internal(
+    sim_dir: str,
+    additional_signals: list[str],
+    input_tcl: str = "",
+) -> str:
+    """Extend an existing setup Tcl file with additional probe signals.
+
+    Detects original Tcl from sim_dir if input_tcl is empty.
+    Returns path to the extended Tcl file (written as setup_rtl_debug.tcl).
+    """
+    from pathlib import Path
+
+    # Auto-detect input Tcl if not provided
+    if not input_tcl:
+        for candidate in ("setup_rtl.tcl", "input.tcl", "setup.tcl"):
+            p = Path(sim_dir) / candidate
+            if p.exists():
+                input_tcl = str(p)
+                break
+        if not input_tcl:
+            # Search sim_dir for any .tcl file
+            r = await ssh_run(f"ls {sim_dir}/*.tcl 2>/dev/null | head -1")
+            input_tcl = r.strip()
+
+    output_tcl = str(Path(sim_dir) / "setup_rtl_debug.tcl")
+
+    if input_tcl and Path(input_tcl).exists():
+        original = Path(input_tcl).read_text()
+    else:
+        original = ""
+
+    # Append new probe commands for additional signals
+    sig_list = " ".join(f'"{s}"' for s in additional_signals)
+    extra = (
+        f"\n# === Added by xcelium-mcp prepare_dump_scope ===\n"
+        f"probe -create {{{sig_list}}} -shm -depth all\n"
+        f"# ================================================\n"
+    )
+    Path(output_tcl).write_text(original + extra)
+    return output_tcl
+
+
+@mcp.tool()
+async def prepare_dump_scope(
+    additional_signals: list[str],
+    input_tcl: str = "",
+    sim_dir: str = "",
+) -> str:
+    """Extend a simulation setup Tcl file with additional probe signals.
+
+    Reads the original setup Tcl (auto-detected from sim_dir if not provided),
+    appends `probe -create {signals} -shm -depth all`, and writes the result
+    to `{sim_dir}/setup_rtl_debug.tcl`.
+
+    Use with sim_batch_run(dump_signals=[...]) to capture additional signals
+    without re-running from scratch.
+
+    Args:
+        additional_signals: Signal paths to add to probe scope.
+        input_tcl: Path to existing setup Tcl file. Auto-detected if empty.
+        sim_dir: Simulation directory for auto-detection and output. Uses default if empty.
+    """
+    try:
+        resolved_sim_dir = sim_dir if sim_dir else await _get_default_sim_dir()
+    except UserInputRequired as e:
+        return f"USER INPUT REQUIRED:\n{e.prompt}"
+
+    try:
+        out = await _prepare_dump_scope_internal(
+            resolved_sim_dir, additional_signals, input_tcl
+        )
+    except Exception as e:
+        return f"ERROR: {e}"
+
+    return f"Extended Tcl written to: {out}\nAdded signals: {additional_signals}"
+
+
+@mcp.tool()
+async def probe_add_signals(
+    signals: list[str],
+    shm_path: str = "",
+    depth: str = "all",
+) -> str:
+    """Dynamically add probe signals to the connected SimVision bridge session.
+
+    Wraps: probe -create {signals} [-shm {shm_path}] -depth {depth}
+    Requires active bridge connection. Use before sim_run to capture
+    additional signals not in the original probe scope.
+
+    Args:
+        signals:  Signal paths to add (hierarchical, e.g. "top.hw.u_ext.r_state").
+        shm_path: SHM file to write probe data to. Empty = current session SHM.
+        depth:    Probe depth ("all", "1", "2", ...).
+    """
+    bridge = _get_bridge()
+    sig_str = " ".join(signals)
+    if shm_path:
+        cmd = f"probe -create {{{sig_str}}} -shm {shm_path} -depth {depth}"
+    else:
+        cmd = f"probe -create {{{sig_str}}} -shm -depth {depth}"
+    result = await bridge.execute(cmd)
+    return f"Probe added for {len(signals)} signal(s). {result}"
+
+
+@mcp.tool()
+async def bisect_signal_dump(
+    shm_path: str,
+    signal: str,
+    op: str,
+    value: str,
+    start_ns: int = 0,
+    end_ns: int = 0,
+    context_signals: list[str] = [],
+) -> str:
+    """Binary search in SHM dump CSV for first occurrence of a signal condition.
+
+    No simulator connection required — pure offline CSV analysis.
+    If signal is absent from SHM, suggests calling request_additional_signals.
+
+    Op values: "eq" (==), "ne" (!=), "gt" (>), "lt" (<), "change" (any change).
+
+    Args:
+        shm_path:        SHM dump file path.
+        signal:          Signal path to search.
+        op:              Comparison operator.
+        value:           Target value (hex/dec/oct; ignored for "change").
+        start_ns:        Search start time in nanoseconds.
+        end_ns:          Search end time in nanoseconds (0 = to end).
+        context_signals: Additional signals to include in CSV extract for context.
+    """
+    all_signals = list({signal} | set(context_signals))
+
+    try:
+        csv_path = await csv_cache.extract(
+            shm_path=shm_path,
+            signals=all_signals,
+            start_ns=start_ns,
+            end_ns=end_ns,
+            missing_ok=True,
+        )
+    except RuntimeError as e:
+        return f"ERROR extracting CSV: {e}"
+
+    result = csv_cache.bisect_csv(
+        csv_path=csv_path,
+        signal=signal,
+        op=op,
+        value=value,
+        start_ns=start_ns,
+        end_ns=end_ns,
+        context_rows=2,
+    )
+
+    if "error" in result:
+        # Signal not in SHM
+        return (
+            f"Signal '{signal}' not found in SHM.\n"
+            f"{result['error']}\n\n"
+            "Tip: Call request_additional_signals to re-run simulation with this signal probed."
+        )
+
+    if not result["found"]:
+        return (
+            f"No match found for {signal} {op} {value} "
+            f"in range [{start_ns}ns, {end_ns or 'end'}]."
+        )
+
+    # Format context table
+    ctx = result["context"]
+    match_idx = result["match_row"]
+    cols = [signal] + context_signals
+
+    lines = [
+        f"Match at {result['match_time_ns']}ns: {signal} = {result['match_value']}",
+        "",
+        "Context:",
+    ]
+    header = "  time(ns)   | " + " | ".join(f"{c[-20:]}" for c in cols)
+    lines.append(header)
+    lines.append("  " + "-" * (len(header) - 2))
+
+    for i, row in enumerate(ctx):
+        prefix = "★ " if i == match_idx else "  "
+        vals = " | ".join(row.get(c, "?") for c in cols)
+        lines.append(f"{prefix}{row.get('time', '?'):>10} | {vals}")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def request_additional_signals(
+    missing_signals: list[str],
+    shm_path: str,
+    bug_time_ns: int = 0,
+    available_checkpoints: list[str] = [],
+) -> str:
+    """Signal absence handler — presents capture mode options when signals are missing from SHM.
+
+    Called automatically by bisect_signal_dump when a signal is not in the SHM dump.
+    Presents 3 options:
+      [A]  Full re-run with extended probe scope (sim_batch_run + prepare_dump_scope)
+      [A'] Restore from nearest checkpoint + add probes + partial re-run (Phase 4)
+      [B]  Bridge mode: attach to simulator, add probes live (requires active connection)
+
+    Args:
+        missing_signals:       Signals not found in the SHM dump.
+        shm_path:              SHM path being analyzed.
+        bug_time_ns:           Approximate bug time (used for checkpoint selection in [A']).
+        available_checkpoints: Known checkpoint names (auto-queried from registry if empty).
+    """
+    lines = [
+        f"Signals not in SHM dump ({shm_path}):",
+    ]
+    for s in missing_signals:
+        lines.append(f"  - {s}")
+    lines.append("")
+    lines.append("Select a capture strategy:")
+    lines.append("")
+    lines.append(
+        "[A] Full re-run with extended probe scope\n"
+        "    → sim_batch_run(dump_signals=[missing_signals])\n"
+        "    → New SHM with all signals included\n"
+        "    Cost: full simulation time"
+    )
+    lines.append("")
+    lines.append(
+        "[A'] Restore from nearest checkpoint + add probes + partial run\n"
+        "    → restore_checkpoint + probe_add_signals + sim_run\n"
+        "    → Faster than full re-run (Phase 4 required)\n"
+        "    Cost: partial simulation time from checkpoint"
+    )
+
+    if bug_time_ns:
+        lines.append(f"    Bug time: {bug_time_ns}ns")
+    if available_checkpoints:
+        lines.append(f"    Available: {', '.join(available_checkpoints)}")
+    else:
+        lines.append("    (Phase 4 checkpoint_manager not yet implemented — use [A] for now)")
+
+    lines.append("")
+    lines.append(
+        "[B] Bridge mode: add probes to live simulator session\n"
+        "    → probe_add_signals(missing_signals) + sim_run\n"
+        "    → Requires active SimVision connection (connect_simulator)\n"
+        "    Cost: none if bridge already connected"
+    )
+    lines.append("")
+    lines.append("Reply with [A], [A'], or [B] to proceed.")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def generate_debug_tcl(
+    shm_path: str,
+    signals: list[str],
+    center_time_ns: int,
+    zoom_range_ns: int = 10000,
+    markers: list[dict] = [],
+    context_note: str = "",
+    output_path: str = "",
+) -> str:
+    """Generate a SimVision Tcl script for offline debugging.
+
+    Creates a ready-to-use .tcl file that opens the SHM dump, adds the
+    specified signals to the waveform viewer, zooms to the bug region,
+    sets cursors at key times, and prints the AI analysis context.
+
+    User runs: simvision -input {output_path} {shm_path}
+    Returns: path to generated Tcl script.
+
+    Args:
+        shm_path:       SHM dump file path.
+        signals:        Signal paths to add to waveform.
+        center_time_ns: Bug time — waveform zoomed to center ± zoom_range_ns.
+        zoom_range_ns:  Half-width of zoom range in nanoseconds.
+        markers:        List of {"time_ns": int, "label": str} dicts.
+        context_note:   AI analysis summary printed to SimVision console.
+        output_path:    Output .tcl path. Auto-generated in SHM parent dir if empty.
+    """
+    import time as _time
+    from pathlib import Path
+
+    if not output_path:
+        ts = int(_time.time())
+        output_path = str(Path(shm_path).parent / f"debug_{ts}.tcl")
+
+    content = debug_tools.generate_debug_tcl_content(
+        shm_path=shm_path,
+        signals=signals,
+        center_time_ns=center_time_ns,
+        zoom_range_ns=zoom_range_ns,
+        markers=markers,
+        context_note=context_note,
+    )
+
+    Path(output_path).write_text(content)
+    return (
+        f"Debug Tcl script written to: {output_path}\n"
+        f"Run: simvision -input {output_path} {shm_path}"
+    )
 
 
 # ---------------------------------------------------------------------------
