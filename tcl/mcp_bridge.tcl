@@ -210,14 +210,22 @@ proc ::mcp_bridge::dispatch {channel cmd} {
     }
 
     if {[string match "__SAVE__*" $cmd]} {
-        set path [string trim [string range $cmd 8 end]]
-        ::mcp_bridge::do_save $channel $path
+        # Protocol: "__SAVE__ {name} {dir}"  — dir is optional, defaults to /tmp/mcp_checkpoints
+        set args [string trim [string range $cmd 8 end]]
+        set parts [split $args " "]
+        set name [lindex $parts 0]
+        set dir  [lindex $parts 1]
+        ::mcp_bridge::do_save $channel $name $dir
         return
     }
 
     if {[string match "__RESTORE__*" $cmd]} {
-        set path [string trim [string range $cmd 11 end]]
-        ::mcp_bridge::do_restore $channel $path
+        # Protocol: "__RESTORE__ {name} {dir}"  — dir is optional
+        set args [string trim [string range $cmd 11 end]]
+        set parts [split $args " "]
+        set name [lindex $parts 0]
+        set dir  [lindex $parts 1]
+        ::mcp_bridge::do_restore $channel $name $dir
         return
     }
 
@@ -551,17 +559,25 @@ proc ::mcp_bridge::do_probe_control {channel args_str} {
 # ---------------------------------------------------------------------------
 # F5: __SAVE__ / __RESTORE__ — simulation checkpoint
 # ---------------------------------------------------------------------------
-proc ::mcp_bridge::do_save {channel name} {
+proc ::mcp_bridge::do_save {channel name {dir ""}} {
     variable _checkpoint_dir
     variable _checkpoint_name
 
     if {$name eq ""} {
         set name "chk_[clock seconds]"
     }
+    if {$dir eq ""} {
+        set dir "/tmp/mcp_checkpoints"
+    }
 
-    set dir "/tmp/mcp_checkpoints"
+    # 1. Ensure simulator is stopped before save
+    if {[catch {set st [status]} err]} { set st "" }
+    if {![string match "*stopped*" $st]} { catch {stop} }
+
+    # 2. Create checkpoint directory
     file mkdir $dir
 
+    # 3. Execute save
     if {[catch {save -simulation $name -path $dir -overwrite} err]} {
         ::mcp_bridge::send_error $channel "save failed: $err"
         return
@@ -573,7 +589,7 @@ proc ::mcp_bridge::do_save {channel name} {
     ::mcp_bridge::send_ok $channel "saved:worklib.$name:module|dir:$dir"
 }
 
-proc ::mcp_bridge::do_restore {channel name} {
+proc ::mcp_bridge::do_restore {channel name {dir ""}} {
     variable _checkpoint_dir
     variable _checkpoint_name
 
@@ -584,18 +600,27 @@ proc ::mcp_bridge::do_restore {channel name} {
         }
         set name $_checkpoint_name
     }
-
-    set dir "/tmp/mcp_checkpoints"
-    if {[info exists _checkpoint_dir] && $_checkpoint_dir ne ""} {
-        set dir $_checkpoint_dir
+    if {$dir eq ""} {
+        if {[info exists _checkpoint_dir] && $_checkpoint_dir ne ""} {
+            set dir $_checkpoint_dir
+        } else {
+            set dir "/tmp/mcp_checkpoints"
+        }
     }
 
     set snapshot "worklib.$name:module"
 
+    # 1. Restore simulation state
     if {[catch {restart $snapshot -path $dir} err]} {
         ::mcp_bridge::send_error $channel "restore failed: $err"
         return
     }
+
+    # 2. Clear stale breakpoints to prevent spurious $finish (P4-9)
+    catch {stop -delete -all}
+
+    set _checkpoint_dir $dir
+    set _checkpoint_name $name
 
     if {[catch {set w [where]} err]} {
         set w "unknown"

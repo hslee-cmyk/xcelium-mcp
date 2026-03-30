@@ -612,6 +612,12 @@ async def _run_batch_single(
           dump/ci_top_{test_name}.shm after simulation completes.
     """
     import time as _time
+    from xcelium_mcp import checkpoint_manager as _ckpt_mgr
+
+    # P4-4: Recompile detection — invalidate stale checkpoints before run
+    stale_removed = _ckpt_mgr.invalidate_stale_checkpoints(
+        sim_dir, reason=f"pre-run recompile check for {test_name}"
+    )
 
     info = _resolve_exec_cmd(runner, regression=False)
     cmd = info.cmd.format(test_name=test_name) if info.needs_test_name else info.cmd
@@ -633,7 +639,10 @@ async def _run_batch_single(
             )
             await ssh_run(mv_cmd, timeout=30.0)
 
-        return result
+        prefix = (
+            f"[Stale checkpoints removed: {stale_removed}]\n" if stale_removed else ""
+        )
+        return prefix + result
 
     # --- Screen session + log polling ---
     ts = int(_time.time())

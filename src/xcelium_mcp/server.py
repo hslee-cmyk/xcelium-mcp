@@ -11,6 +11,7 @@ from xcelium_mcp.tcl_bridge import TclBridge, TclError
 from xcelium_mcp.screenshot import ps_to_png
 import xcelium_mcp.csv_cache as csv_cache
 import xcelium_mcp.debug_tools as debug_tools
+import xcelium_mcp.checkpoint_manager as checkpoint_manager
 from xcelium_mcp.sim_runner import (
     UserInputRequired,
     _get_default_sim_dir,
@@ -488,30 +489,83 @@ async def probe_control(mode: str, scope: str = "") -> str:
 
 
 @mcp.tool()
-async def save_checkpoint(name: str = "") -> str:
-    """Save a simulation checkpoint for later restoration.
+async def save_checkpoint(
+    name: str = "",
+    sim_dir: str = "",
+    saved_time_ns: int = 0,
+) -> str:
+    """Save a simulation checkpoint to persistent storage.
 
-    Checkpoints capture the complete simulator state. Use restore_checkpoint
-    to return to this point without re-simulating from time 0.
+    Checkpoints are saved to {sim_dir}/checkpoints/ and registered in the
+    manifest with a compile_hash for automatic invalidation on recompile.
+    Use restore_checkpoint to return to this state without re-simulating.
 
     Args:
-        name: Checkpoint name (alphanumeric, e.g. "chk_10ms"). Auto-generated if empty.
+        name:          Checkpoint name (alphanumeric, e.g. "L1_common_init").
+                       Auto-generated from timestamp if empty.
+        sim_dir:       Simulation directory (auto-detected if empty).
+        saved_time_ns: Current simulation time in ns for nearest-checkpoint lookup.
     """
     bridge = _get_bridge()
-    cmd = f"__SAVE__ {name}" if name else "__SAVE__"
+
+    resolved_dir = sim_dir if sim_dir else await _get_default_sim_dir()
+    import os
+    chk_base = os.path.join(resolved_dir, "checkpoints") if resolved_dir else "/tmp/mcp_checkpoints"
+
+    cmd = f"__SAVE__ {name} {chk_base}" if name else f"__SAVE__  {chk_base}"
     result = await bridge.execute(cmd)
+
+    # Register in manifest on success
+    if "save failed" not in result and resolved_dir:
+        # Extract actual name from response "saved:worklib.{name}:module|dir:..."
+        actual_name = name
+        if not actual_name and "saved:worklib." in result:
+            try:
+                actual_name = result.split("saved:worklib.")[1].split(":module")[0]
+            except IndexError:
+                pass
+        if actual_name:
+            checkpoint_manager.register_checkpoint(resolved_dir, actual_name, saved_time_ns)
+
     return result
 
 
 @mcp.tool()
-async def restore_checkpoint(name: str = "") -> str:
+async def restore_checkpoint(
+    name: str = "",
+    sim_dir: str = "",
+) -> str:
     """Restore simulation to a previously saved checkpoint.
 
+    Verifies compile_hash before restore — rejects stale checkpoints created
+    before the last RTL recompile.  Stale breakpoints are cleared automatically
+    after restore to prevent spurious $finish.
+
     Args:
-        name: Checkpoint name to restore. Empty = last saved checkpoint.
+        name:    Checkpoint name to restore. Empty = last saved checkpoint.
+        sim_dir: Simulation directory (auto-detected if empty).
     """
+    resolved_dir = sim_dir if sim_dir else await _get_default_sim_dir()
+
+    import os
+    chk_base = os.path.join(resolved_dir, "checkpoints") if resolved_dir else "/tmp/mcp_checkpoints"
+
+    # compile_hash verification
+    if resolved_dir and name:
+        valid, reason = checkpoint_manager.verify_checkpoint(resolved_dir, name)
+        if not valid:
+            stale = checkpoint_manager.invalidate_stale_checkpoints(
+                resolved_dir, reason="hash mismatch on restore"
+            )
+            msg = (
+                f"ERROR: {reason}\n"
+                f"Stale checkpoints removed: {stale}\n"
+                f"Re-run sim_batch_run to create new checkpoints."
+            )
+            return msg
+
     bridge = _get_bridge()
-    cmd = f"__RESTORE__ {name}" if name else "__RESTORE__"
+    cmd = f"__RESTORE__ {name} {chk_base}" if name else f"__RESTORE__  {chk_base}"
     result = await bridge.execute(cmd, timeout=120.0)
     return result
 
@@ -524,26 +578,155 @@ async def bisect_signal(
     start_ns: int,
     end_ns: int,
     precision_ns: int = 1000,
+    shm_path: str = "",
 ) -> str:
-    """Find when a signal condition first becomes true using automated binary search.
+    """Find when a signal condition first becomes true.
 
-    Internally saves checkpoints and repeatedly restores/runs with watchpoints
-    to narrow down the exact time. Returns iteration log and final time range.
+    Mode A (preferred, no active simulator required): when shm_path is given,
+    uses bisect_signal_dump — extracts CSV from SHM and performs in-memory
+    binary search.  No bridge connection needed.
+
+    Mode B (bridge, legacy): when shm_path is empty and a bridge is connected,
+    uses the simulator's native __BISECT__ binary search with save/restore.
+
+    v2 API: shm_path parameter is new; all other parameters are unchanged.
 
     Args:
-        signal: Full hierarchical signal path.
-        op: Comparison operator (e.g. "==").
-        value: Target value (e.g. "8'h11").
-        start_ns: Start of search range in nanoseconds.
-        end_ns: End of search range in nanoseconds.
-        precision_ns: Stop when range is narrower than this (default 1000ns).
+        signal:       Full hierarchical signal path.
+        op:           Comparison operator: "eq","ne","gt","lt","change"
+                      (bridge mode also accepts "==", "!=", etc.)
+        value:        Target value (hex/dec/oct; ignored for "change").
+        start_ns:     Start of search range in nanoseconds.
+        end_ns:       End of search range in nanoseconds.
+        precision_ns: (Bridge mode) Stop when range < this (default 1000ns).
+        shm_path:     SHM dump path for Mode A (CSV-based).  Empty = Mode B.
     """
+    if shm_path:
+        # Mode A: SHM dump → CSV → in-memory search (P4-7)
+        return await bisect_signal_dump(
+            shm_path=shm_path,
+            signal=signal,
+            op=op,
+            value=value,
+            start_ns=start_ns,
+            end_ns=end_ns,
+        )
+
+    # Mode B: bridge-based binary search (legacy)
     bridge = _get_bridge()
-    cmd = (
-        f"__BISECT__ {signal} {op} {value} {start_ns} {end_ns} {precision_ns}"
-    )
+    cmd = f"__BISECT__ {signal} {op} {value} {start_ns} {end_ns} {precision_ns}"
     result = await bridge.execute(cmd, timeout=600.0)
     return result
+
+
+# ===================================================================
+# Phase 4 supplement — Checkpoint management tools (inserted before Phase 2)
+# ===================================================================
+
+@mcp.tool()
+async def cleanup_checkpoints(
+    sim_dir: str = "",
+    mode: str = "stale",
+    project_filter: str = "",
+    dry_run: bool = True,
+) -> str:
+    """List or remove checkpoints from {sim_dir}/checkpoints/.
+
+    mode:
+      "list"    — list all checkpoints (no deletion)
+      "stale"   — checkpoints whose compile_hash no longer matches (default)
+      "project" — checkpoints whose path contains project_filter
+      "all"     — every checkpoint
+
+    dry_run=True (default): report candidates only, no deletion.
+    Set dry_run=False to actually remove.
+
+    Args:
+        sim_dir:        Simulation directory (auto-detected if empty).
+        mode:           Cleanup mode (list/stale/project/all).
+        project_filter: Path substring for "project" mode.
+        dry_run:        True = report only, False = delete.
+    """
+    resolved_dir = sim_dir if sim_dir else await _get_default_sim_dir()
+    if not resolved_dir:
+        return "ERROR: Could not determine sim_dir. Pass sim_dir explicitly."
+
+    result = checkpoint_manager.cleanup_checkpoints(
+        resolved_dir, mode=mode, project_filter=project_filter, dry_run=dry_run
+    )
+
+    lines = [
+        f"sim_dir: {result['sim_dir']}",
+        f"mode: {result['mode']}  dry_run: {result['dry_run']}",
+        f"compile_hash (current): {result['current_hash']}",
+        "",
+    ]
+    if result["removed"]:
+        verb = "Would remove" if dry_run else "Removed"
+        lines.append(f"{verb} ({len(result['removed'])}):")
+        for n in result["removed"]:
+            lines.append(f"  - {n}")
+    else:
+        lines.append("No checkpoints to remove.")
+    if result["kept"]:
+        lines.append(f"Kept ({len(result['kept'])}):")
+        for n in result["kept"]:
+            lines.append(f"  - {n}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def bisect_restore_and_debug(
+    checkpoint_name: str,
+    probe_signals: list[str],
+    run_duration: str = "10000ns",
+    sim_dir: str = "",
+    keep_alive: bool = False,
+) -> str:
+    """Restore a checkpoint, add probe signals, run for a duration, then stop.
+
+    Pattern: restore → probe_add_signals → sim_run → watchpoint stop.
+    Use for interactive debug after bisect_signal_dump identifies a bug time.
+
+    Args:
+        checkpoint_name: Checkpoint name to restore.
+        probe_signals:   Signal paths to add via probe_add_signals after restore.
+        run_duration:    How long to run after restore (e.g. "10000ns").
+        sim_dir:         Simulation directory (auto-detected if empty).
+        keep_alive:      True = don't stop after run, leave simulator running.
+    """
+    resolved_dir = sim_dir if sim_dir else await _get_default_sim_dir()
+
+    # 1. Restore
+    restore_result = await restore_checkpoint(checkpoint_name, resolved_dir)
+    if "ERROR" in restore_result or "restore failed" in restore_result:
+        return f"Restore failed: {restore_result}"
+
+    # 2. Add probe signals
+    if probe_signals:
+        bridge = _get_bridge()
+        sig_str = " ".join(probe_signals)
+        try:
+            await bridge.execute(
+                f"probe -create {{{sig_str}}} -shm -depth all", timeout=30.0
+            )
+        except Exception as e:
+            return f"Restore succeeded but probe_add_signals failed: {e}\nRestore result: {restore_result}"
+
+    # 3. Run
+    bridge = _get_bridge()
+    run_result = await bridge.execute(f"run {run_duration}", timeout=120.0)
+
+    if keep_alive:
+        return f"restore: {restore_result}\nrun: {run_result}\n(simulator left running)"
+
+    # 4. Stop
+    try:
+        await bridge.execute("stop", timeout=10.0)
+    except Exception:
+        pass
+
+    return f"restore: {restore_result}\nrun: {run_result}"
 
 
 # ===================================================================
@@ -996,6 +1179,14 @@ async def request_additional_signals(
         bug_time_ns:           Approximate bug time (used for checkpoint selection in [A']).
         available_checkpoints: Known checkpoint names (auto-queried from registry if empty).
     """
+    # Auto-query nearest checkpoints from checkpoint_manager when not provided
+    resolved_checkpoints = list(available_checkpoints)
+    if not resolved_checkpoints and bug_time_ns:
+        sim_dir = await _get_default_sim_dir()
+        if sim_dir:
+            nearest = checkpoint_manager.find_nearest_checkpoint(sim_dir, bug_time_ns)
+            resolved_checkpoints = [c["name"] for c in nearest[:3]]
+
     lines = [
         f"Signals not in SHM dump ({shm_path}):",
     ]
@@ -1011,19 +1202,21 @@ async def request_additional_signals(
         "    Cost: full simulation time"
     )
     lines.append("")
-    lines.append(
+
+    a_prime = (
         "[A'] Restore from nearest checkpoint + add probes + partial run\n"
         "    → restore_checkpoint + probe_add_signals + sim_run\n"
-        "    → Faster than full re-run (Phase 4 required)\n"
+        "    → Faster than full re-run\n"
         "    Cost: partial simulation time from checkpoint"
     )
+    lines.append(a_prime)
 
     if bug_time_ns:
         lines.append(f"    Bug time: {bug_time_ns}ns")
-    if available_checkpoints:
-        lines.append(f"    Available: {', '.join(available_checkpoints)}")
+    if resolved_checkpoints:
+        lines.append(f"    Available checkpoints: {', '.join(resolved_checkpoints)}")
     else:
-        lines.append("    (Phase 4 checkpoint_manager not yet implemented — use [A] for now)")
+        lines.append("    No checkpoints found (use [A] for now or save_checkpoint first)")
 
     lines.append("")
     lines.append(
