@@ -527,15 +527,22 @@ async def _load_or_detect_runner(sim_dir: str) -> dict:
     if cfg is not None:
         return cfg.get("runner", cfg)
 
-    # Tier 2: auto-detect
+    # Tier 2: auto-detect runner + shell/EDA env
     detected = await _auto_detect_runner(sim_dir)
     if detected["confidence"] == "high":
-        login_shell = (await ssh_run("echo $SHELL")).strip() or "/bin/sh"
+        script = _extract_script_name(detected["exec_cmd"])
+
+        # git root for EDA env search scope
+        r = await ssh_run("git rev-parse --show-toplevel 2>/dev/null || echo ~")
+        project_root = r.strip()
+
+        # detect shell + EDA env (UserInputRequired propagates if env not found)
+        shell_env = await _detect_shell_and_env(sim_dir, script, project_root)
+
         runner: dict = {
             "type": detected["runner"],
-            "script": _extract_script_name(detected["exec_cmd"]),
-            "login_shell": login_shell,
-            "source_separately": False,
+            "script": script,
+            **shell_env,
         }
         cfg = {"version": 1, "runner": runner}
         await save_sim_config(sim_dir, cfg)
