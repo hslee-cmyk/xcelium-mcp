@@ -106,10 +106,35 @@ async def sim_stop() -> str:
 
 @mcp.tool()
 async def sim_restart() -> str:
-    """Restart the simulation from time 0."""
+    """Restart the simulation from time 0.
+
+    Tries run -clean first, then snapshot restore, then plain restart.
+    Returns method used: run-clean | snapshot | plain.
+    """
     bridge = _get_bridge()
-    await bridge.execute("restart")
-    return "Simulation restarted to time 0."
+    result = await bridge.execute("__RESTART__")
+    return f"Simulation restarted to time 0. ({result})"
+
+
+@mcp.tool()
+async def execute_tcl(
+    tcl_cmd: str,
+    timeout: int = 30,
+) -> str:
+    """Execute arbitrary Tcl command in the connected SimVision bridge session.
+
+    Returns raw Tcl output. Raises if not connected or command times out.
+    Use for commands not covered by dedicated tools: database -open, probe -create, etc.
+
+    WARNING: State-changing commands (finish, exit, restart) can cause unintended
+    termination — caller's responsibility. Prefer dedicated tools when available.
+
+    Args:
+        tcl_cmd: Tcl command to execute (single or multi-line).
+        timeout: Response timeout in seconds.
+    """
+    bridge = _get_bridge()
+    return await bridge.execute(tcl_cmd, timeout=float(timeout))
 
 
 @mcp.tool()

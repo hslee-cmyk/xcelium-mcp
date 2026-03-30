@@ -39,6 +39,7 @@ namespace eval ::mcp_bridge {
     variable watch_ids [list]
     variable _checkpoint_dir ""
     variable _checkpoint_name ""
+    variable _init_snapshot_dir ""
 }
 
 # ---------------------------------------------------------------------------
@@ -70,6 +71,9 @@ proc ::mcp_bridge::init {} {
     } err]} {
         puts "MCP Bridge: WARNING: could not create ready file: $err"
     }
+
+    # Save init snapshot for sim_restart fallback
+    ::mcp_bridge::on_init
 }
 
 # ---------------------------------------------------------------------------
@@ -155,6 +159,17 @@ proc ::mcp_bridge::dispatch {channel cmd} {
 
     if {$cmd eq "__SHUTDOWN__"} {
         ::mcp_bridge::do_shutdown $channel
+        return
+    }
+
+    if {$cmd eq "__RESTART__"} {
+        ::mcp_bridge::do_restart $channel
+        return
+    }
+
+    if {[string match "__EXECUTE_TCL__*" $cmd]} {
+        set tcl_cmd [string trim [string range $cmd 16 end]]
+        ::mcp_bridge::do_execute_tcl $channel $tcl_cmd
         return
     }
 
@@ -265,6 +280,68 @@ proc ::mcp_bridge::do_screenshot {channel path} {
     }
 
     ::mcp_bridge::send_ok $channel $path
+}
+
+# ---------------------------------------------------------------------------
+# F0: __RESTART__ — safe restart with run-clean → snapshot → plain fallback
+# ---------------------------------------------------------------------------
+proc ::mcp_bridge::init_snapshot {} {
+    variable _init_snapshot_dir
+    set _init_snapshot_dir "/tmp/mcp_init"
+    file mkdir $_init_snapshot_dir
+    catch {save -simulation mcp_init -path $_init_snapshot_dir -overwrite}
+}
+
+proc ::mcp_bridge::on_init {} {
+    variable _init_snapshot_dir
+    set _init_snapshot_dir "/tmp/mcp_init"
+    if {[file exists $_init_snapshot_dir]} {
+        catch {file delete -force $_init_snapshot_dir}
+    }
+    ::mcp_bridge::init_snapshot
+}
+
+proc ::mcp_bridge::do_restart {channel} {
+    variable _init_snapshot_dir
+
+    # Method 1: run -clean (full restart, cleanest)
+    set err_a ""
+    if {![catch {run -clean} err_a]} {
+        ::mcp_bridge::send_ok $channel "restarted:run-clean|time:0"
+        return
+    }
+
+    # Method 2: restore init snapshot (saved at bridge startup)
+    set err_b "(no init snapshot)"
+    if {[info exists _init_snapshot_dir] && $_init_snapshot_dir ne "" \
+            && [file exists $_init_snapshot_dir]} {
+        if {![catch {restart worklib.mcp_init:module -path $_init_snapshot_dir} err_b]} {
+            catch {stop -delete -all}
+            ::mcp_bridge::send_ok $channel "restarted:snapshot|time:0"
+            return
+        }
+    }
+
+    # Method 3: plain restart (SimVision built-in)
+    set err_c ""
+    if {![catch {restart} err_c]} {
+        ::mcp_bridge::send_ok $channel "restarted:plain|time:0"
+        return
+    }
+
+    ::mcp_bridge::send_error $channel \
+        "restart failed: run-clean='$err_a' snapshot='$err_b' plain='$err_c'"
+}
+
+# ---------------------------------------------------------------------------
+# F0b: __EXECUTE_TCL__ — execute arbitrary Tcl in global namespace
+# ---------------------------------------------------------------------------
+proc ::mcp_bridge::do_execute_tcl {channel cmd_str} {
+    if {[catch {uplevel #0 $cmd_str} result]} {
+        ::mcp_bridge::send_error $channel "TclError: $result"
+        return
+    }
+    ::mcp_bridge::send_ok $channel $result
 }
 
 # ---------------------------------------------------------------------------
