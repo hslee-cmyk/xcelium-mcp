@@ -202,8 +202,13 @@ def bisect_csv(
     rows: list[dict] = []
     with open(csv_path, newline="") as fh:
         reader = _csv.DictReader(fh)
+        # simvisdbutil uses "SimTime" (in femtoseconds), not "time" (ns)
         for row in reader:
-            ns = int(row.get("time", 0))
+            raw_time = row.get("time") or row.get("SimTime") or "0"
+            time_val = int(raw_time)
+            # Detect femtosecond scale (SimTime > 1e9 for typical ns-range sims)
+            ns = time_val // 1000 if time_val > 1_000_000_000 else time_val
+            row["_ns"] = ns  # normalized time in ns
             if start_ns and ns < start_ns:
                 continue
             if end_ns and ns > end_ns:
@@ -214,7 +219,7 @@ def bisect_csv(
         return {"found": False, "match_time_ns": 0, "match_value": "", "context": []}
 
     if signal not in rows[0]:
-        available = [k for k in rows[0].keys() if k != "time"]
+        available = [k for k in rows[0].keys() if k not in ("time", "SimTime", "_ns")]
         return {
             "found": False,
             "match_time_ns": 0,
@@ -231,7 +236,7 @@ def bisect_csv(
             ctx_end = min(len(rows), i + context_rows + 1)
             return {
                 "found": True,
-                "match_time_ns": int(row["time"]),
+                "match_time_ns": row["_ns"],
                 "match_value": cur_val,
                 "match_index": i,
                 "context": rows[ctx_start:ctx_end],
