@@ -19,6 +19,8 @@ from xcelium_mcp.sim_runner import (
     _resolve_exec_cmd,
     _run_batch_regression,
     _run_batch_single,
+    _update_registry_env,
+    load_registry,
     ssh_run,
 )
 
@@ -73,7 +75,53 @@ async def connect_simulator(
     except TclError:
         where = "(unknown — simulation may not be loaded)"
 
+    # Auto-register sim_dir in mcp_registry from running xmsim process
+    try:
+        await _auto_register_sim_dir()
+    except Exception:
+        pass  # non-fatal: registry is convenience, not required
+
     return f"Connected to SimVision at {host}:{port} (ping={ping})\nCurrent position: {where}"
+
+
+async def _auto_register_sim_dir() -> None:
+    """Detect sim_dir from running xmsim process and register in mcp_registry.
+
+    Parses xmsim cmdline to find the -input setup script path,
+    then derives sim_dir from it. Skips if already registered.
+    """
+    from pathlib import Path as _Path
+
+    # Get xmsim process cmdline
+    ps_out = await ssh_run("pgrep -a xmsim 2>/dev/null", timeout=5)
+    if not ps_out.strip():
+        return
+
+    # Parse -input argument to find setup script → derive sim_dir
+    # Example: xmsim ... -input /users/.../ncsim/scripts/setup_rtl_mcp_batch.tcl ...
+    parts = ps_out.strip().split()
+    for i, p in enumerate(parts):
+        if p == "-input" and i + 1 < len(parts):
+            setup_script = parts[i + 1]
+            # scripts/ is typically one level below sim_dir
+            scripts_dir = _Path(setup_script).parent
+            sim_dir = str(scripts_dir.parent) if scripts_dir.name == "scripts" else str(scripts_dir)
+
+            # Check if already registered
+            registry = load_registry()
+            for proj in registry.get("projects", {}).values():
+                if sim_dir in proj.get("environments", {}):
+                    return  # already registered
+
+            # Detect TB type from setup script name
+            tb_type = "ncsim"
+            if "uvm" in setup_script.lower():
+                tb_type = "uvm"
+            elif "gate" in setup_script.lower():
+                tb_type = "gate"
+
+            _update_registry_env(sim_dir, tb_type)
+            return
 
 
 @mcp.tool()
