@@ -1368,12 +1368,14 @@ async def _start_bridge(
     await ssh_run(f"rm -f {ready_file}", timeout=5)
 
     # S-4: Start via run script with env vars
+    # Use script_shell from registry (csh/tcsh for legacy scripts, bash for shell scripts)
+    script_shell = runner.get("script_shell", runner.get("env_shell", "/bin/sh"))
     log_file = f"/tmp/sim_start_{port}.log"
     cmd = (
         f"nohup env "
         f"MCP_INPUT_TCL={bridge_tcl} "
         f"MCP_SETUP_TCL={setup_tcl} "
-        f"bash {sim_dir}/{script} {test_name} "
+        f"{script_shell} {sim_dir}/{script} {test_name} "
         f"{_build_redirect(log_file)} &"
     )
     await ssh_run(cmd, timeout=10)
