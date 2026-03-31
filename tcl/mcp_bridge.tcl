@@ -78,10 +78,29 @@ proc ::mcp_bridge::init {} {
     # v4: Source project setup TCL via MCP_SETUP_TCL env var
     # When sim_start sets MCP_SETUP_TCL, this sources the project's original
     # setup.tcl (probe settings, dump scope, etc.) after bridge initialization.
+    # IMPORTANT: Intercept 'run', 'exit', 'finish' during source — these are
+    # batch commands that would block or terminate the bridge. Only probe/database
+    # setup should execute. Commands are restored after source completes.
     if {[info exists ::env(MCP_SETUP_TCL)] && $::env(MCP_SETUP_TCL) ne ""} {
         if {[file exists $::env(MCP_SETUP_TCL)]} {
             puts "MCP Bridge: sourcing setup TCL: $::env(MCP_SETUP_TCL)"
+            # Intercept blocking/terminating commands
+            rename run _mcp_orig_run
+            rename exit _mcp_orig_exit
+            proc run {args} { puts "MCP Bridge: intercepted 'run $args' (bridge mode)" }
+            proc exit {args} { puts "MCP Bridge: intercepted 'exit $args' (bridge mode)" }
+            catch {rename finish _mcp_orig_finish}
+            catch {proc finish {args} { puts "MCP Bridge: intercepted 'finish $args' (bridge mode)" }}
+
             source $::env(MCP_SETUP_TCL)
+
+            # Restore original commands
+            rename run ""
+            rename _mcp_orig_run run
+            rename exit ""
+            rename _mcp_orig_exit exit
+            catch {rename finish ""; rename _mcp_orig_finish finish}
+            puts "MCP Bridge: setup TCL loaded (run/exit intercepted)"
         } else {
             puts "MCP Bridge: WARNING — MCP_SETUP_TCL not found: $::env(MCP_SETUP_TCL)"
         }
