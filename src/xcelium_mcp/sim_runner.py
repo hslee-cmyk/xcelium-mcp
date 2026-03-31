@@ -1390,12 +1390,13 @@ async def _start_bridge(
             inner_parts.append(f"source {ef}")
     inner_parts.append(f"./{script} {test_args}")
     inner_cmd = "; ".join(inner_parts)
+    # Wrap in subshell + < /dev/null to fully detach from asyncio PIPE
     cmd = (
         f"cd {sim_dir} && "
-        f"nohup {env_shell} -c '{inner_cmd}' "
-        f"{_build_redirect(log_file)} &"
+        f"(nohup {env_shell} -c '{inner_cmd}' "
+        f"{_build_redirect(log_file)} < /dev/null &)"
     )
-    await ssh_run(cmd, timeout=30)
+    await ssh_run(cmd, timeout=15)
 
     # S-5: Poll for bridge ready
     for i in range(timeout // 2):
