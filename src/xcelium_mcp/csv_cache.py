@@ -120,7 +120,8 @@ async def extract(
 
     # --- Build simvisdbutil command with EDA env ---
     svdb = await _resolve_simvisdbutil()
-    parts = [svdb, shm_path, "-csv", "-output", output_path, "-overwrite"]
+    # -timeunits ns: force nanosecond output regardless of SHM time resolution
+    parts = [svdb, shm_path, "-csv", "-output", output_path, "-overwrite", "-timeunits", "ns"]
 
     if start_ns or end_ns:
         parts += ["-range", f"{start_ns}:{end_ns}ns"]
@@ -202,13 +203,11 @@ def bisect_csv(
     rows: list[dict] = []
     with open(csv_path, newline="") as fh:
         reader = _csv.DictReader(fh)
-        # simvisdbutil uses "SimTime" (in femtoseconds), not "time" (ns)
+        # simvisdbutil uses "SimTime" column. With -timeunits ns, values are in ns.
         for row in reader:
-            raw_time = row.get("time") or row.get("SimTime") or "0"
-            time_val = int(raw_time)
-            # Detect femtosecond scale (SimTime > 1e9 for typical ns-range sims)
-            ns = time_val // 1000 if time_val > 1_000_000_000 else time_val
-            row["_ns"] = ns  # normalized time in ns
+            raw_time = row.get("SimTime") or row.get("time") or "0"
+            ns = int(raw_time)
+            row["_ns"] = ns
             if start_ns and ns < start_ns:
                 continue
             if end_ns and ns > end_ns:
