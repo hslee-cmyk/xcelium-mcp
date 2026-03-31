@@ -1376,6 +1376,16 @@ async def _start_bridge(
     args_format = runner.get("args_format", "-test {test_name} --")
     test_args = args_format.format(test_name=test_name)
     log_file = f"/tmp/sim_start_{port}.log"
+
+    # Pre-filter setup TCL: remove run/exit/finish/database-close for bridge mode
+    filtered_tcl = f"/tmp/mcp_setup_filtered_{port}.tcl"
+    await ssh_run(
+        f"sed '/^[[:space:]]*run\\b/d; /^[[:space:]]*exit\\b/d; "
+        f"/^[[:space:]]*finish\\b/d; /^[[:space:]]*database[[:space:]]*-close/d' "
+        f"{setup_tcl} > {filtered_tcl}",
+        timeout=10,
+    )
+
     # Source EDA env before running script (xmvlog/xmsim need PATH)
     env_files = runner.get("env_files", [])
     env_shell = runner.get("env_shell", script_shell)
@@ -1383,7 +1393,7 @@ async def _start_bridge(
     # All inside env_shell -c '...' so csh setenv syntax works
     inner_parts = [
         f"setenv MCP_INPUT_TCL {bridge_tcl}",
-        f"setenv MCP_SETUP_TCL {setup_tcl}",
+        f"setenv MCP_SETUP_TCL {filtered_tcl}",
     ]
     if runner.get("source_separately") and env_files:
         for ef in env_files:

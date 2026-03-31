@@ -83,32 +83,12 @@ proc ::mcp_bridge::init {} {
     # setup should execute. Commands are restored after source completes.
     if {[info exists ::env(MCP_SETUP_TCL)] && $::env(MCP_SETUP_TCL) ne ""} {
         if {[file exists $::env(MCP_SETUP_TCL)]} {
+            # MCP_SETUP_TCL is pre-filtered by sim_start (Python side)
+            # to remove run/exit/finish/database-close lines.
+            # Only probe/database-open setup remains.
             puts "MCP Bridge: sourcing setup TCL: $::env(MCP_SETUP_TCL)"
-            # Filter out blocking/terminating commands from setup TCL
-            # instead of renaming simulator built-ins (which can't be restored).
-            # Creates a temp file with run/exit/finish/database-close lines removed.
-            set _src $::env(MCP_SETUP_TCL)
-            set _tmp "/tmp/mcp_setup_filtered_[pid].tcl"
-            set _fin [open $_src r]
-            set _fout [open $_tmp w]
-            while {[gets $_fin _line] >= 0} {
-                set _trimmed [string trim $_line]
-                # Skip: run, exit, finish, database -close
-                if {[regexp {^(run|exit|finish)\b} $_trimmed]} {
-                    puts "MCP Bridge: filtered out '$_trimmed'"
-                    continue
-                }
-                if {[regexp {^database\s+-close\b} $_trimmed]} {
-                    puts "MCP Bridge: filtered out '$_trimmed'"
-                    continue
-                }
-                puts $_fout $_line
-            }
-            close $_fin
-            close $_fout
-            source $_tmp
-            file delete $_tmp
-            puts "MCP Bridge: setup TCL loaded (run/exit/finish filtered)"
+            source $::env(MCP_SETUP_TCL)
+            puts "MCP Bridge: setup TCL loaded"
         } else {
             puts "MCP Bridge: WARNING — MCP_SETUP_TCL not found: $::env(MCP_SETUP_TCL)"
         }
