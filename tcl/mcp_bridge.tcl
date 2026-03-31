@@ -84,13 +84,26 @@ proc ::mcp_bridge::init {} {
     if {[info exists ::env(MCP_SETUP_TCL)] && $::env(MCP_SETUP_TCL) ne ""} {
         if {[file exists $::env(MCP_SETUP_TCL)]} {
             puts "MCP Bridge: sourcing setup TCL: $::env(MCP_SETUP_TCL)"
-            # Intercept blocking/terminating commands
+            # Intercept blocking/terminating/cleanup commands
+            # run      — blocks until $finish (batch mode)
+            # exit     — terminates simulator
+            # finish   — terminates simulator
+            # database -close — closes SHM (needed for later dump)
             rename run _mcp_orig_run
             rename exit _mcp_orig_exit
             proc run {args} { puts "MCP Bridge: intercepted 'run $args' (bridge mode)" }
             proc exit {args} { puts "MCP Bridge: intercepted 'exit $args' (bridge mode)" }
             catch {rename finish _mcp_orig_finish}
             catch {proc finish {args} { puts "MCP Bridge: intercepted 'finish $args' (bridge mode)" }}
+            # Wrap 'database' to intercept -close but pass through -open
+            rename database _mcp_orig_database
+            proc database {args} {
+                if {[lindex $args 0] eq "-close"} {
+                    puts "MCP Bridge: intercepted 'database $args' (bridge mode)"
+                } else {
+                    _mcp_orig_database {*}$args
+                }
+            }
 
             source $::env(MCP_SETUP_TCL)
 
@@ -99,6 +112,8 @@ proc ::mcp_bridge::init {} {
             rename _mcp_orig_run run
             rename exit ""
             rename _mcp_orig_exit exit
+            rename database ""
+            rename _mcp_orig_database database
             catch {rename finish ""; rename _mcp_orig_finish finish}
             puts "MCP Bridge: setup TCL loaded (run/exit intercepted)"
         } else {
