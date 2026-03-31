@@ -1403,21 +1403,29 @@ async def _start_bridge(
     # Source EDA env before running script (xmvlog/xmsim need PATH)
     env_files = runner.get("env_files", [])
     env_shell = runner.get("env_shell", script_shell)
+    login_shell = runner.get("login_shell", "/bin/sh")
     # Build inner command: setenv MCP vars + source EDA + run script
-    # All inside env_shell -c '...' so csh setenv syntax works
     inner_parts = [
         f"setenv MCP_INPUT_TCL {bridge_tcl}",
         f"setenv MCP_SETUP_TCL {filtered_tcl}",
     ]
     if runner.get("source_separately") and env_files:
+        # EDA env from explicit env files
         for ef in env_files:
             inner_parts.append(f"source {ef}")
-    inner_parts.append(f"./{script} {test_args}")
-    inner_cmd = "; ".join(inner_parts)
+        inner_parts.append(f"./{script} {test_args}")
+        inner_cmd = "; ".join(inner_parts)
+        shell_cmd = f"{env_shell} -c '{inner_cmd}'"
+    else:
+        # EDA env from login shell (source_separately=False)
+        # Must use login shell wrapper to get EDA PATH
+        inner_parts.append(f"./{script} {test_args}")
+        inner_cmd = "; ".join(inner_parts)
+        shell_cmd = _login_shell_cmd(login_shell, inner_cmd)
     # Wrap in subshell + < /dev/null to fully detach from asyncio PIPE
     cmd = (
         f"cd {sim_dir} && "
-        f"(nohup {env_shell} -c '{inner_cmd}' "
+        f"(nohup {shell_cmd} "
         f"{_build_redirect(log_file)} < /dev/null &)"
     )
     await ssh_run(cmd, timeout=15)
