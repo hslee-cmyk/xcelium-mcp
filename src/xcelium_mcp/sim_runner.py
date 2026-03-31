@@ -324,13 +324,11 @@ async def _detect_eda_env(sim_dir: str, project_root: str, login_shell: str) -> 
                 "source_separately": True,
             }
 
-    # Step 4: not found — include debug info
+    # Step 4: not found
     raise UserInputRequired(
         "EDA env file not found. Enter path (or press Enter to skip):\n"
         "  Example: ~/.cadence_setup.csh\n"
-        "  Example: /opt/cadence/etc/setup.csh\n"
-        f"\n  DEBUG searched: {[s[0] for s in search_specs]}"
-        f"\n  DEBUG candidates found: {candidates}"
+        "  Example: /opt/cadence/etc/setup.csh"
     )
 
 
@@ -1107,12 +1105,7 @@ async def run_full_discovery(sim_dir: str = "", force: bool = False) -> str:
     script_name = _extract_script_name(runner_info.get("exec_cmd", ""))
     r = await ssh_run("git rev-parse --show-toplevel 2>/dev/null || echo ~")
     project_root = r.strip()
-    # DEBUG: capture intermediate state
-    _debug = [f"script_name={script_name}", f"project_root={project_root}", f"sim_dir={sim_dir}"]
-    try:
-        shell_env = await _detect_shell_and_env(sim_dir, script_name, project_root)
-    except UserInputRequired as e:
-        raise UserInputRequired(f"{e.prompt}\n\nDEBUG: {'; '.join(_debug)}\nrunner_info={runner_info}")
+    shell_env = await _detect_shell_and_env(sim_dir, script_name, project_root)
 
     # D-6: mcp_bridge.tcl (install origin)
     bridge_tcl = await _detect_bridge_tcl()

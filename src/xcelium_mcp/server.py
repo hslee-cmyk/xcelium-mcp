@@ -72,9 +72,6 @@ async def sim_discover(
         return await run_full_discovery(sim_dir, force)
     except UserInputRequired as e:
         return f"USER INPUT REQUIRED:\n{e.prompt}"
-    except Exception as e:
-        import traceback
-        return f"ERROR: {e}\n\n{traceback.format_exc()}"
 
 
 @mcp.tool()
