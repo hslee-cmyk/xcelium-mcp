@@ -1379,20 +1379,23 @@ async def _start_bridge(
     # Source EDA env before running script (xmvlog/xmsim need PATH)
     env_files = runner.get("env_files", [])
     env_shell = runner.get("env_shell", script_shell)
+    # Build inner command: setenv MCP vars + source EDA + run script
+    # All inside env_shell -c '...' so csh setenv syntax works
+    inner_parts = [
+        f"setenv MCP_INPUT_TCL {bridge_tcl}",
+        f"setenv MCP_SETUP_TCL {setup_tcl}",
+    ]
     if runner.get("source_separately") and env_files:
-        source_cmd = " && ".join(f"source {f}" for f in env_files)
-        run_cmd = f"{source_cmd} && ./{script} {test_args}"
-    else:
-        run_cmd = f"./{script} {test_args}"
+        for ef in env_files:
+            inner_parts.append(f"source {ef}")
+    inner_parts.append(f"./{script} {test_args}")
+    inner_cmd = "; ".join(inner_parts)
     cmd = (
         f"cd {sim_dir} && "
-        f"nohup env "
-        f"MCP_INPUT_TCL={bridge_tcl} "
-        f"MCP_SETUP_TCL={setup_tcl} "
-        f"{env_shell} -c '{run_cmd}' "
+        f"nohup {env_shell} -c '{inner_cmd}' "
         f"{_build_redirect(log_file)} &"
     )
-    await ssh_run(cmd, timeout=10)
+    await ssh_run(cmd, timeout=30)
 
     # S-5: Poll for bridge ready
     for i in range(timeout // 2):
