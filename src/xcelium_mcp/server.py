@@ -232,14 +232,14 @@ async def list_signals(scope: str, pattern: str = "*") -> str:
     """List signals in a scope, optionally filtered by pattern.
 
     Args:
-        scope: Hierarchical scope path (e.g. "/tb/dut").
+        scope: Hierarchical scope path (e.g. "top.hw.u_ext").
         pattern: Glob pattern to filter signals (default "*").
     """
     bridge = _get_bridge()
 
-    # Change to the target scope and list
-    await bridge.execute(f"scope {scope}")
-    result = await bridge.execute(f"scope -describe {pattern}")
+    # Use 'describe' with hierarchical path + pattern
+    # 'scope -describe' does NOT accept pattern args (causes SCMULT error)
+    result = await bridge.execute(f"describe {scope}.{pattern}")
     return result
 
 

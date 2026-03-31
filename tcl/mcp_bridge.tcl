@@ -589,10 +589,14 @@ proc ::mcp_bridge::do_save {channel name {dir ""}} {
     # 2. Create checkpoint directory
     file mkdir $dir
 
-    # 3. Execute save
-    if {[catch {save -simulation $name -path $dir -overwrite} err]} {
-        ::mcp_bridge::send_error $channel "save failed: $err"
-        return
+    # 3. Execute save — use worklib.NAME:module format (consistent with do_restore)
+    set snapshot "worklib.$name:module"
+    if {[catch {save -simulation $snapshot -path $dir -overwrite} err]} {
+        # Fallback: some xmsim versions don't support -path for save
+        if {[catch {save -simulation $snapshot -overwrite} err2]} {
+            ::mcp_bridge::send_error $channel "save failed: $err2"
+            return
+        }
     }
 
     set _checkpoint_dir $dir
