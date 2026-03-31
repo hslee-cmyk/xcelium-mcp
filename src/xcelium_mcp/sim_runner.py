@@ -594,7 +594,8 @@ def _extract_script_name(exec_cmd: str) -> str:
 async def _get_default_sim_dir() -> str:
     """Return the default simulation directory from mcp_registry.json.
 
-    Falls back to _discover_sim_dir() if registry is empty.
+    v4: Falls back to run_full_discovery() (not _discover_sim_dir directly)
+    to enforce single entry point for all environment detection.
     Returns "" if nothing found.
     """
     registry = load_registry()
@@ -603,9 +604,19 @@ async def _get_default_sim_dir() -> str:
             if env.get("is_default"):
                 return sim_dir
 
-    # Fallback: auto-discover (may raise UserInputRequired)
-    envs = await _discover_sim_dir()
-    return envs[0]["sim_dir"] if envs else ""
+    # v4: delegate to run_full_discovery (single entry point for detection)
+    try:
+        await run_full_discovery()
+    except (UserInputRequired, RuntimeError):
+        return ""
+
+    # Re-read registry after discovery
+    registry = load_registry()
+    for project in registry.get("projects", {}).values():
+        for sim_dir, env in project.get("environments", {}).items():
+            if env.get("is_default"):
+                return sim_dir
+    return ""
 
 
 async def _run_batch_single(
