@@ -1104,7 +1104,12 @@ async def run_full_discovery(sim_dir: str = "", force: bool = False) -> str:
     script_name = _extract_script_name(runner_info.get("exec_cmd", ""))
     r = await ssh_run("git rev-parse --show-toplevel 2>/dev/null || echo ~")
     project_root = r.strip()
-    shell_env = await _detect_shell_and_env(sim_dir, script_name, project_root)
+    # DEBUG: capture intermediate state
+    _debug = [f"script_name={script_name}", f"project_root={project_root}", f"sim_dir={sim_dir}"]
+    try:
+        shell_env = await _detect_shell_and_env(sim_dir, script_name, project_root)
+    except UserInputRequired as e:
+        raise UserInputRequired(f"{e.prompt}\n\nDEBUG: {'; '.join(_debug)}\nrunner_info={runner_info}")
 
     # D-6: mcp_bridge.tcl (install origin)
     bridge_tcl = await _detect_bridge_tcl()
