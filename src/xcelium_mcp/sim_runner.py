@@ -91,12 +91,19 @@ def _login_shell_cmd(login_shell: str, cmd: str) -> str:
     """Build a command that runs in login shell environment.
 
     tcsh 6.18 (CentOS 7) does not support '-l -c' combination.
-    Workaround: source ~/.tcshrc (or ~/.cshrc) explicitly before the command.
+    Workaround: source rc files explicitly before the command.
+    tcsh reads ~/.tcshrc (or ~/.cshrc if no .tcshrc), so try both.
     For bash: '-l -c' works fine.
     """
     if "tcsh" in login_shell or "csh" in login_shell:
-        # tcsh/csh: source rc file explicitly
-        return f"{login_shell} -c 'source ~/.tcshrc >& /dev/null; {cmd}'"
+        # tcsh/csh: source rc files in tcsh's native order
+        # tcsh reads ~/.tcshrc first; if absent, reads ~/.cshrc
+        return (
+            f"{login_shell} -c '"
+            f"if (-f ~/.tcshrc) source ~/.tcshrc >& /dev/null; "
+            f"if (-f ~/.cshrc) source ~/.cshrc >& /dev/null; "
+            f"{cmd}'"
+        )
     # bash/sh/zsh: -l -c works
     return f"{login_shell} -l -c '{cmd}'"
 
@@ -1378,11 +1385,18 @@ async def _start_bridge(
     log_file = f"/tmp/sim_start_{port}.log"
 
     # Pre-filter setup TCL: remove run/exit/finish/database-close for bridge mode
+    # Uses POSIX sed (no \b) — matches 'run', 'run ', 'run 10ms' but not 'run_sim'
     filtered_tcl = f"/tmp/mcp_setup_filtered_{port}.tcl"
     await ssh_run(
-        f"sed '/^[[:space:]]*run\\b/d; /^[[:space:]]*exit\\b/d; "
-        f"/^[[:space:]]*finish\\b/d; /^[[:space:]]*database[[:space:]]*-close/d' "
-        f"{setup_tcl} > {filtered_tcl}",
+        f"sed '"
+        f"/^[[:space:]]*run[[:space:]]*$/d; "       # 'run' alone
+        f"/^[[:space:]]*run[[:space:]]/d; "          # 'run ...' with args
+        f"/^[[:space:]]*exit[[:space:]]*$/d; "       # 'exit' alone
+        f"/^[[:space:]]*exit[[:space:]]/d; "         # 'exit ...'
+        f"/^[[:space:]]*finish[[:space:]]*$/d; "     # 'finish' alone
+        f"/^[[:space:]]*finish[[:space:]]/d; "       # 'finish ...'
+        f"/^[[:space:]]*database[[:space:]]*-close/d"  # 'database -close ...'
+        f"' {setup_tcl} > {filtered_tcl}",
         timeout=10,
     )
 
