@@ -323,11 +323,13 @@ async def _detect_eda_env(sim_dir: str, project_root: str, login_shell: str) -> 
                 "source_separately": True,
             }
 
-    # Step 4: not found
+    # Step 4: not found — include debug info
     raise UserInputRequired(
         "EDA env file not found. Enter path (or press Enter to skip):\n"
         "  Example: ~/.cadence_setup.csh\n"
-        "  Example: /opt/cadence/etc/setup.csh"
+        "  Example: /opt/cadence/etc/setup.csh\n"
+        f"\n  DEBUG searched: {[s[0] for s in search_specs]}"
+        f"\n  DEBUG candidates found: {candidates}"
     )
 
 
