@@ -304,7 +304,7 @@ async def _detect_eda_env(sim_dir: str, project_root: str, login_shell: str) -> 
     candidates: list[str] = []
 
     for search_dir, pat in search_specs:
-        r = await ssh_run(f"find {search_dir} -maxdepth 1 -type f {pat} 2>/dev/null")
+        r = await ssh_run(f"find {search_dir} -maxdepth 1 \\( -type f -o -type l \\) {pat} 2>/dev/null")
         for f in r.strip().splitlines():
             if not f:
                 continue
