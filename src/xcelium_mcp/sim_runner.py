@@ -315,7 +315,8 @@ async def _detect_eda_env(sim_dir: str, project_root: str, login_shell: str) -> 
     # Step 3: validate
     for candidate in candidates:
         env_shell = await _detect_env_shell(candidate, login_shell)
-        r = await ssh_run(f"{env_shell} -c 'source {candidate} && which xrun 2>/dev/null'")
+        # No '2>/dev/null' inside csh/tcsh -c — causes Ambiguous redirect error
+        r = await ssh_run(f"{env_shell} -c 'source {candidate} && which xrun'")
         if r.strip() and "/" in r.strip():
             return {
                 "env_files": [candidate],
