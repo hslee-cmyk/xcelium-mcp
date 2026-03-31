@@ -74,6 +74,18 @@ proc ::mcp_bridge::init {} {
 
     # Save init snapshot for sim_restart fallback
     ::mcp_bridge::on_init
+
+    # v4: Source project setup TCL via MCP_SETUP_TCL env var
+    # When sim_start sets MCP_SETUP_TCL, this sources the project's original
+    # setup.tcl (probe settings, dump scope, etc.) after bridge initialization.
+    if {[info exists ::env(MCP_SETUP_TCL)] && $::env(MCP_SETUP_TCL) ne ""} {
+        if {[file exists $::env(MCP_SETUP_TCL)]} {
+            puts "MCP Bridge: sourcing setup TCL: $::env(MCP_SETUP_TCL)"
+            source $::env(MCP_SETUP_TCL)
+        } else {
+            puts "MCP Bridge: WARNING — MCP_SETUP_TCL not found: $::env(MCP_SETUP_TCL)"
+        }
+    }
 }
 
 # ---------------------------------------------------------------------------

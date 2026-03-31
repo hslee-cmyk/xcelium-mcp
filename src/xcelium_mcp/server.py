@@ -19,8 +19,10 @@ from xcelium_mcp.sim_runner import (
     _resolve_exec_cmd,
     _run_batch_regression,
     _run_batch_single,
-    _update_registry_env,
+    _update_registry_from_config,
     load_registry,
+    load_sim_config,
+    run_full_discovery,
     ssh_run,
 )
 
@@ -42,6 +44,32 @@ def _get_bridge() -> TclBridge:
             "Not connected to SimVision. Call connect_simulator first."
         )
     return _bridge
+
+
+# ===================================================================
+# v4 — Simulation Lifecycle Management
+# ===================================================================
+
+
+@mcp.tool()
+async def sim_discover(
+    sim_dir: str = "",
+    force: bool = False,
+) -> str:
+    """Discover simulation environment and register in mcp_registry.
+
+    Detects: sim_dir, TB type, runner, shell/EDA env, mcp_bridge.tcl,
+    setup TCLs, EDA tool paths, bridge port.
+    Also updates ~/.simvisionrc and patches legacy run scripts.
+
+    Args:
+        sim_dir: Explicit simulation directory. Empty = auto-discover.
+        force:   Re-detect even if registry already exists.
+    """
+    try:
+        return await run_full_discovery(sim_dir, force)
+    except UserInputRequired as e:
+        return f"USER INPUT REQUIRED:\n{e.prompt}"
 
 
 # ===================================================================
