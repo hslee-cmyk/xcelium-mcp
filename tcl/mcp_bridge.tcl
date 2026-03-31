@@ -844,9 +844,12 @@ proc ::mcp_bridge::do_waveform_add_group {channel group_name sig_list} {
 # ---------------------------------------------------------------------------
 ::mcp_bridge::init
 
-# After -input script completes, xmsim enters interactive mode.
-# The Tcl event loop is active in interactive mode, processing
-# fileevent callbacks (socket accept/read) without needing vwait.
-# NOTE: vwait causes xmsim to enter its simulator event loop which
-# advances simulation time — this blocks socket event processing.
-puts "MCP Bridge: ready (interactive mode)"
+# When run via nohup (stdin=/dev/null), xmsim exits after -input script
+# instead of entering interactive mode. vwait keeps the process alive
+# and processes fileevent (socket) callbacks.
+# Note: vwait in stopped state does NOT advance simulation.
+puts "MCP Bridge: ready (waiting for client)"
+if {![info exists ::mcp_bridge::_shutdown_flag]} {
+    set ::mcp_bridge::_shutdown_flag 0
+}
+vwait ::mcp_bridge::_shutdown_flag
