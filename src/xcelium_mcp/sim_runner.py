@@ -285,8 +285,9 @@ async def _detect_eda_env(sim_dir: str, project_root: str, login_shell: str) -> 
     Returns: dict with env_files, env_shell, source_separately.
     """
     # Step 1: login shell direct test
+    # Check for "/" to distinguish real path from "Command not found" stderr
     r = await ssh_run(_login_shell_cmd(login_shell, "which xrun"), timeout=10)
-    if r.strip():
+    if r.strip() and "/" in r.strip():
         return {"env_files": [], "env_shell": login_shell, "source_separately": False}
 
     # Step 2: candidate search
@@ -315,7 +316,7 @@ async def _detect_eda_env(sim_dir: str, project_root: str, login_shell: str) -> 
     for candidate in candidates:
         env_shell = await _detect_env_shell(candidate, login_shell)
         r = await ssh_run(f"{env_shell} -c 'source {candidate} && which xrun 2>/dev/null'")
-        if r.strip():
+        if r.strip() and "/" in r.strip():
             return {
                 "env_files": [candidate],
                 "env_shell": env_shell,
