@@ -24,40 +24,40 @@ _simvisdbutil_path: str | None = None
 
 
 async def _resolve_simvisdbutil() -> str:
-    """Find the absolute path of simvisdbutil, caching the result.
+    """Get simvisdbutil path from registry. Falls back to sim_discover.
 
-    Search order:
-      1. Already cached
-      2. Direct 'which simvisdbutil' (works if PATH already includes EDA)
-      3. Login shell: 'tcsh -l -c "which simvisdbutil"' (cloud0 tcshrc has EDA PATH)
-      4. Common Xcelium install locations via glob
+    v4: Registry eda_tools is the single source. No direct which/glob detection.
     """
     global _simvisdbutil_path
     if _simvisdbutil_path:
         return _simvisdbutil_path
 
-    # Try direct
-    r = (await ssh_run("which simvisdbutil 2>/dev/null", timeout=5)).strip()
-    if r and "/" in r:
-        _simvisdbutil_path = r
-        return r
+    # Try registry first
+    from xcelium_mcp.sim_runner import _get_default_sim_dir, load_sim_config
+    sim_dir = await _get_default_sim_dir()
+    if sim_dir:
+        cfg = await load_sim_config(sim_dir)
+        if cfg and "eda_tools" in cfg:
+            path = cfg["eda_tools"].get("simvisdbutil", "")
+            if path:
+                _simvisdbutil_path = path
+                return path
 
-    # Try login shell (tcsh on cloud0)
-    r = (await ssh_run("tcsh -l -c 'which simvisdbutil' 2>/dev/null", timeout=10)).strip()
-    if r and "/" in r:
-        _simvisdbutil_path = r
-        return r
+    # Fallback: trigger sim_discover
+    from xcelium_mcp.sim_runner import run_full_discovery
+    await run_full_discovery(sim_dir or "")
 
-    # Glob common locations
-    r = (await ssh_run("ls /apps/eda/cdns/*/tools/bin/simvisdbutil 2>/dev/null | tail -1", timeout=5)).strip()
-    if r and "/" in r:
-        _simvisdbutil_path = r
-        return r
+    # Retry after discover
+    sim_dir = await _get_default_sim_dir()
+    if sim_dir:
+        cfg = await load_sim_config(sim_dir)
+        if cfg and "eda_tools" in cfg:
+            path = cfg["eda_tools"].get("simvisdbutil", "")
+            if path:
+                _simvisdbutil_path = path
+                return path
 
-    raise RuntimeError(
-        "simvisdbutil not found. Ensure Xcelium EDA tools are installed and "
-        "accessible via login shell (tcsh) or set PATH manually."
-    )
+    raise RuntimeError("simvisdbutil not found even after sim_discover.")
 
 
 # ---------------------------------------------------------------------------

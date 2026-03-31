@@ -552,42 +552,23 @@ async def _discover_sim_dir(hint: str = "") -> list[dict]:
 async def _load_or_detect_runner(sim_dir: str) -> dict:
     """Return runner config for sim_dir.
 
-    Tier 1: load .mcp_sim_config.json (explicit config wins).
-    Tier 2: auto-detect runner, save if high-confidence.
-    Tier 3: raise UserInputRequired for ambiguous/none.
+    v4: Tier 2 self-detection removed. Config not found -> sim_discover delegation.
 
-    Returns: runner sub-dict from config.
+    Tier 1: load .mcp_sim_config.json (explicit config wins).
+    Tier 2: (removed) -> sim_discover auto-call.
     """
     # Tier 1: explicit config
     cfg = await load_sim_config(sim_dir)
     if cfg is not None:
         return cfg.get("runner", cfg)
 
-    # Tier 2: auto-detect runner + shell/EDA env
-    detected = await _auto_detect_runner(sim_dir)
-    if detected["confidence"] == "high":
-        script = _extract_script_name(detected["exec_cmd"])
+    # v4: delegate to sim_discover instead of self-detecting
+    await run_full_discovery(sim_dir)
+    cfg = await load_sim_config(sim_dir)
+    if cfg is not None:
+        return cfg.get("runner", cfg)
 
-        # git root for EDA env search scope
-        r = await ssh_run("git rev-parse --show-toplevel 2>/dev/null || echo ~")
-        project_root = r.strip()
-
-        # detect shell + EDA env (UserInputRequired propagates if env not found)
-        shell_env = await _detect_shell_and_env(sim_dir, script, project_root)
-
-        runner: dict = {
-            "type": detected["runner"],
-            "script": script,
-            **shell_env,
-        }
-        cfg = {"version": 1, "runner": runner}
-        await save_sim_config(sim_dir, cfg)
-        return runner
-
-    # Tier 3: ambiguous or none
-    await _ask_user_runner(sim_dir, detected.get("candidates", []))
-    # _ask_user_runner always raises; this line is unreachable
-    raise RuntimeError("unreachable")
+    raise RuntimeError(f"sim_discover failed for {sim_dir}")
 
 
 def _extract_script_name(exec_cmd: str) -> str:
