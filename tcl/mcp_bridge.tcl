@@ -870,3 +870,11 @@ proc ::mcp_bridge::do_waveform_add_group {channel group_name sig_list} {
 # Start the bridge
 # ---------------------------------------------------------------------------
 ::mcp_bridge::init
+
+# Keep the Tcl event loop alive for fileevent-based socket handling.
+# Without vwait, xmsim exits after -input script completes.
+# The variable ::mcp_bridge::_shutdown_flag is set by __SHUTDOWN__ handler.
+if {![info exists ::mcp_bridge::_shutdown_flag]} {
+    set ::mcp_bridge::_shutdown_flag 0
+}
+vwait ::mcp_bridge::_shutdown_flag
