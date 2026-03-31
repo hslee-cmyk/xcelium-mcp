@@ -870,4 +870,9 @@ proc ::mcp_bridge::do_waveform_add_group {channel group_name sig_list} {
 if {![info exists ::mcp_bridge::_shutdown_flag]} {
     set ::mcp_bridge::_shutdown_flag 0
 }
+# Ensure simulator is stopped so Tcl event loop processes socket events.
+# Without stop, vwait enters the simulator's run loop and socket accept
+# is never processed.
+catch {stop}
+puts "MCP Bridge: waiting for client connection (simulator stopped)"
 vwait ::mcp_bridge::_shutdown_flag
