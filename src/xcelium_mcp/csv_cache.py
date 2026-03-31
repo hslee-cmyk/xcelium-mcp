@@ -118,7 +118,7 @@ async def extract(
     if not output_path:
         output_path = _default_output_path(shm_path, signals, start_ns, end_ns)
 
-    # --- Build simvisdbutil command ---
+    # --- Build simvisdbutil command with EDA env ---
     svdb = await _resolve_simvisdbutil()
     parts = [svdb, shm_path, "-csv", "-output", output_path, "-overwrite"]
 
@@ -131,7 +131,26 @@ async def extract(
     for sig in signals:
         parts += ["-sig", sig]
 
-    cmd = " ".join(parts)
+    svdb_cmd = " ".join(parts)
+
+    # simvisdbutil is a wrapper script that needs EDA env (cds_root in PATH).
+    # Source env from registry before execution.
+    from xcelium_mcp.sim_runner import _get_default_sim_dir, load_sim_config, _login_shell_cmd
+    sim_dir = await _get_default_sim_dir()
+    cfg = await load_sim_config(sim_dir) if sim_dir else None
+    if cfg:
+        runner = cfg.get("runner", {})
+        env_files = runner.get("env_files", [])
+        if runner.get("source_separately") and env_files:
+            env_shell = runner.get("env_shell", "/bin/csh")
+            source_cmd = "; ".join(f"source {f}" for f in env_files)
+            cmd = f"{env_shell} -c '{source_cmd}; {svdb_cmd}'"
+        else:
+            login_shell = runner.get("login_shell", "/bin/sh")
+            cmd = _login_shell_cmd(login_shell, svdb_cmd)
+    else:
+        cmd = svdb_cmd  # fallback: try direct
+
     out = await ssh_run(cmd, timeout=120.0)
 
     # Validate output
