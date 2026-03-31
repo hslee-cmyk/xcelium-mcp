@@ -1376,12 +1376,20 @@ async def _start_bridge(
     args_format = runner.get("args_format", "-test {test_name} --")
     test_args = args_format.format(test_name=test_name)
     log_file = f"/tmp/sim_start_{port}.log"
+    # Source EDA env before running script (xmvlog/xmsim need PATH)
+    env_files = runner.get("env_files", [])
+    env_shell = runner.get("env_shell", script_shell)
+    if runner.get("source_separately") and env_files:
+        source_cmd = " && ".join(f"source {f}" for f in env_files)
+        run_cmd = f"{source_cmd} && ./{script} {test_args}"
+    else:
+        run_cmd = f"./{script} {test_args}"
     cmd = (
         f"cd {sim_dir} && "
         f"nohup env "
         f"MCP_INPUT_TCL={bridge_tcl} "
         f"MCP_SETUP_TCL={setup_tcl} "
-        f"{script_shell} ./{script} {test_args} "
+        f"{env_shell} -c '{run_cmd}' "
         f"{_build_redirect(log_file)} &"
     )
     await ssh_run(cmd, timeout=10)
