@@ -1168,3 +1168,240 @@ def _format_discovery_result(
         f"\nSaved to: {_REGISTRY_PATH}\n"
         f"          {sim_dir}/.mcp_sim_config.json"
     )
+
+
+# ===========================================================================
+# v4 Phase 2: mcp_config — dot-notation config editor
+# ===========================================================================
+
+_MISSING = object()
+
+
+def _dot_get(data: dict, key: str):
+    """Traverse dict by dot-separated key. Returns _MISSING if not found."""
+    parts = key.split(".")
+    cur = data
+    for p in parts:
+        if isinstance(cur, dict) and p in cur:
+            cur = cur[p]
+        else:
+            return _MISSING
+    return cur
+
+
+def _dot_set(data: dict, key: str, value) -> None:
+    """Set value at dot-separated key, creating intermediate dicts as needed."""
+    parts = key.split(".")
+    cur = data
+    for p in parts[:-1]:
+        if p not in cur or not isinstance(cur[p], dict):
+            cur[p] = {}
+        cur = cur[p]
+    cur[parts[-1]] = value
+
+
+def _dot_delete(data: dict, key: str) -> bool:
+    """Delete key at dot-separated path. Returns True if deleted."""
+    parts = key.split(".")
+    cur = data
+    for p in parts[:-1]:
+        if isinstance(cur, dict) and p in cur:
+            cur = cur[p]
+        else:
+            return False
+    if parts[-1] in cur:
+        del cur[parts[-1]]
+        return True
+    return False
+
+
+def _parse_json_value(value: str):
+    """Parse value string to appropriate Python type.
+
+    "9876" -> 9876 (int)
+    "true"/"false" -> True/False (bool)
+    "3.14" -> 3.14 (float)
+    Everything else -> str
+    """
+    if value.lower() == "true":
+        return True
+    if value.lower() == "false":
+        return False
+    try:
+        return int(value)
+    except ValueError:
+        pass
+    try:
+        return float(value)
+    except ValueError:
+        pass
+    return value
+
+
+async def config_action(action: str, file: str, key: str, value: str) -> str:
+    """Execute mcp_config action."""
+    # Load target file
+    if file == "registry":
+        data = load_registry()
+        path = _REGISTRY_PATH
+    else:
+        sim_dir = await _get_default_sim_dir()
+        if not sim_dir:
+            raise RuntimeError("No default sim_dir. Run sim_discover first.")
+        cfg = await load_sim_config(sim_dir)
+        if cfg is None:
+            raise RuntimeError(f"No .mcp_sim_config.json in {sim_dir}. Run sim_discover first.")
+        data = cfg
+        path = Path(sim_dir) / ".mcp_sim_config.json"
+
+    if action == "show":
+        return json.dumps(data, indent=2)
+
+    if action == "get":
+        val = _dot_get(data, key)
+        if val is _MISSING:
+            return f"Key '{key}' not found"
+        return json.dumps(val, indent=2) if isinstance(val, (dict, list)) else str(val)
+
+    if action == "set":
+        parsed = _parse_json_value(value)
+        _dot_set(data, key, parsed)
+        _write_json(path, data)
+        return f"Set {key} = {json.dumps(parsed)}"
+
+    if action == "delete":
+        if _dot_delete(data, key):
+            _write_json(path, data)
+            return f"Deleted {key}"
+        return f"Key '{key}' not found"
+
+    return f"Unknown action: {action}"
+
+
+# ===========================================================================
+# v4 Phase 2: sim_start — registry-based simulation lifecycle
+# ===========================================================================
+
+
+async def start_simulation(
+    test_name: str,
+    sim_dir: str = "",
+    mode: str = "bridge",
+    sim_mode: str = "",
+    run_duration: str = "",
+    timeout: int = 120,
+) -> str:
+    """Start simulation. Registry없으면 sim_discover 자동 호출."""
+
+    # S-1: registry 로드 (없으면 sim_discover 자동 호출)
+    resolved_dir = sim_dir if sim_dir else await _get_default_sim_dir()
+    if not resolved_dir:
+        await run_full_discovery(sim_dir)
+        resolved_dir = sim_dir if sim_dir else await _get_default_sim_dir()
+        if not resolved_dir:
+            raise RuntimeError("sim_discover failed to create registry.")
+
+    config = await load_sim_config(resolved_dir)
+    if config is None:
+        await run_full_discovery(resolved_dir)
+        config = await load_sim_config(resolved_dir)
+        if config is None:
+            raise RuntimeError(f"sim_discover failed for {resolved_dir}")
+
+    runner = config.get("runner", {})
+    bridge = config.get("bridge", {})
+
+    # sim_mode 결정
+    effective_mode = sim_mode or runner.get("default_mode", "rtl")
+    setup_tcls = runner.get("setup_tcls", {})
+    if effective_mode not in setup_tcls:
+        available = ", ".join(setup_tcls.keys())
+        raise RuntimeError(f"sim_mode '{effective_mode}' not found. Available: {available}")
+
+    setup_tcl = f"{resolved_dir}/{setup_tcls[effective_mode]}"
+
+    if mode == "bridge":
+        return await _start_bridge(
+            resolved_dir, config, test_name, setup_tcl, effective_mode, timeout
+        )
+    elif mode == "batch":
+        return await _start_batch(
+            resolved_dir, config, test_name, setup_tcl, run_duration
+        )
+    else:
+        raise ValueError(f"Unknown mode: {mode}. Use 'bridge' or 'batch'.")
+
+
+async def _start_bridge(
+    sim_dir: str,
+    config: dict,
+    test_name: str,
+    setup_tcl: str,
+    sim_mode: str,
+    timeout: int,
+) -> str:
+    """Start simulation in bridge mode via legacy run script + env vars."""
+    runner = config["runner"]
+    bridge = config["bridge"]
+    port = bridge.get("port", 9876)
+    bridge_tcl = bridge.get("tcl_path", "")
+    script = runner.get("script", "run_sim")
+
+    # S-2: Check existing xmsim
+    ps = await ssh_run("pgrep -la xmsim 2>/dev/null", timeout=5)
+    if ps.strip():
+        return (
+            f"ERROR: xmsim already running:\n{ps.strip()}\n"
+            f"Use shutdown_simulator or 'pkill -f xmsim' first."
+        )
+
+    # S-3: Clean stale ready file
+    ready_file = f"/tmp/mcp_bridge_ready_{port}"
+    await ssh_run(f"rm -f {ready_file}", timeout=5)
+
+    # S-4: Start via run script with env vars
+    log_file = f"/tmp/sim_start_{port}.log"
+    cmd = (
+        f"nohup env "
+        f"MCP_INPUT_TCL={bridge_tcl} "
+        f"MCP_SETUP_TCL={setup_tcl} "
+        f"bash {sim_dir}/{script} {test_name} "
+        f"{_build_redirect(log_file)} &"
+    )
+    await ssh_run(cmd, timeout=10)
+
+    # S-5: Poll for bridge ready
+    for i in range(timeout // 2):
+        await asyncio.sleep(2)
+        r = await ssh_run(f"test -f {ready_file} && echo READY || echo WAITING", timeout=5)
+        if "READY" in r:
+            return (
+                f"Simulation started (bridge mode, {sim_mode}).\n"
+                f"  test: {test_name}\n"
+                f"  setup_tcl: {setup_tcl}\n"
+                f"  port: {port}\n"
+                f"  log: {log_file}\n\n"
+                f"Ready. Use connect_simulator(port={port}) to connect."
+            )
+
+    # Timeout — return log tail
+    log_tail = await ssh_run(f"tail -20 {log_file} 2>/dev/null", timeout=5)
+    return f"ERROR: bridge not ready after {timeout}s.\nLog tail:\n{log_tail}"
+
+
+async def _start_batch(
+    sim_dir: str,
+    config: dict,
+    test_name: str,
+    setup_tcl: str,
+    run_duration: str,
+) -> str:
+    """Start simulation in batch mode. Delegates to existing _run_batch_single()."""
+    runner = config.get("runner", {})
+    return await _run_batch_single(
+        sim_dir=sim_dir,
+        test_name=test_name,
+        runner=runner,
+        run_duration=run_duration,
+        timeout=600,
+    )

@@ -20,10 +20,12 @@ from xcelium_mcp.sim_runner import (
     _run_batch_regression,
     _run_batch_single,
     _update_registry_from_config,
+    config_action,
     load_registry,
     load_sim_config,
     run_full_discovery,
     ssh_run,
+    start_simulation,
 )
 
 # ---------------------------------------------------------------------------
@@ -70,6 +72,54 @@ async def sim_discover(
         return await run_full_discovery(sim_dir, force)
     except UserInputRequired as e:
         return f"USER INPUT REQUIRED:\n{e.prompt}"
+
+
+@mcp.tool()
+async def mcp_config(
+    action: str = "show",
+    file: str = "config",
+    key: str = "",
+    value: str = "",
+) -> str:
+    """View or modify xcelium-mcp registry/config via dot-notation keys.
+
+    Args:
+        action: "show" (full dump), "get" (read key), "set" (write key), "delete" (remove key).
+        file:   "config" (.mcp_sim_config.json of default sim_dir) or "registry" (mcp_registry.json).
+        key:    Dot-notation path (e.g. "runner.default_mode", "bridge.port").
+        value:  Value for 'set' action. Auto-parsed: "9876" to int, "true" to bool.
+    """
+    try:
+        return await config_action(action, file, key, value)
+    except RuntimeError as e:
+        return f"ERROR: {e}"
+
+
+@mcp.tool()
+async def sim_start(
+    test_name: str,
+    sim_dir: str = "",
+    mode: str = "bridge",
+    sim_mode: str = "",
+    run_duration: str = "",
+    timeout: int = 120,
+) -> str:
+    """Start simulation using registry configuration.
+
+    Args:
+        test_name:    Required — test to run (applied at compile time).
+        sim_dir:      Simulation dir. Empty = registry default.
+        mode:         "bridge" (interactive, waits for connect_simulator) or "batch" (run to end).
+        sim_mode:     "rtl"|"gate"|"ams_rtl"|"ams_gate". Empty = default_mode from config.
+        run_duration: Batch mode only — limit sim time (e.g. "10ms").
+        timeout:      Bridge mode — max seconds to wait for bridge ready.
+    """
+    try:
+        return await start_simulation(test_name, sim_dir, mode, sim_mode, run_duration, timeout)
+    except UserInputRequired as e:
+        return f"USER INPUT REQUIRED:\n{e.prompt}"
+    except RuntimeError as e:
+        return f"ERROR: {e}"
 
 
 # ===================================================================
