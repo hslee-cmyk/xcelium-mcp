@@ -87,6 +87,20 @@ async def ssh_run(cmd: str, timeout: float = 60.0, log_file: str = "") -> str:
     return (stdout + stderr).decode("utf-8", errors="replace").strip()
 
 
+def _login_shell_cmd(login_shell: str, cmd: str) -> str:
+    """Build a command that runs in login shell environment.
+
+    tcsh 6.18 (CentOS 7) does not support '-l -c' combination.
+    Workaround: source ~/.tcshrc (or ~/.cshrc) explicitly before the command.
+    For bash: '-l -c' works fine.
+    """
+    if "tcsh" in login_shell or "csh" in login_shell:
+        # tcsh/csh: source rc file explicitly
+        return f"{login_shell} -c 'source ~/.tcshrc >& /dev/null; {cmd}'"
+    # bash/sh/zsh: -l -c works
+    return f"{login_shell} -l -c '{cmd}'"
+
+
 # ---------------------------------------------------------------------------
 # Registry and config file I/O
 # ---------------------------------------------------------------------------
@@ -212,7 +226,7 @@ def _resolve_exec_cmd(runner: dict, regression: bool = False) -> ExecInfo:
         env_shell = runner.get("env_shell", runner["login_shell"])
         cmd = f"{env_shell} -c '{sources} && {script_run}'"
     else:
-        cmd = f"{runner['login_shell']} -lc '{script_run}'"
+        cmd = _login_shell_cmd(runner["login_shell"], script_run)
 
     return ExecInfo(cmd=cmd, needs_test_name=needs_test_name)
 
@@ -271,7 +285,7 @@ async def _detect_eda_env(sim_dir: str, project_root: str, login_shell: str) -> 
     Returns: dict with env_files, env_shell, source_separately.
     """
     # Step 1: login shell direct test
-    r = await ssh_run(f"{login_shell} -lc 'which xrun 2>/dev/null'")
+    r = await ssh_run(_login_shell_cmd(login_shell, "which xrun"), timeout=10)
     if r.strip():
         return {"env_files": [], "env_shell": login_shell, "source_separately": False}
 
@@ -919,7 +933,7 @@ async def _resolve_eda_tools(shell_env: dict) -> dict[str, str]:
     else:
         login_shell = shell_env.get("login_shell", "/bin/sh")
         which_cmd = " && ".join(f"which {t}" for t in tools)
-        r = await ssh_run(f"{login_shell} -l -c '{which_cmd}' 2>/dev/null", timeout=15)
+        r = await ssh_run(_login_shell_cmd(login_shell, which_cmd), timeout=15)
 
     result: dict[str, str] = {}
     lines = [l.strip() for l in r.strip().splitlines() if l.strip() and "/" in l]
