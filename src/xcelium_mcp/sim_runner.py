@@ -1370,13 +1370,18 @@ async def _start_bridge(
     # S-4: Start via run script with env vars
     # Use script_shell from registry (csh/tcsh for legacy scripts, bash for shell scripts)
     script_shell = runner.get("script_shell", runner.get("env_shell", "/bin/sh"))
+    # runner.args_format: how test_name is passed to the script
+    # Default: "-test {test_name} --" (common ncsim convention)
+    # Override via: mcp_config set runner.args_format "{test_name}"
+    args_format = runner.get("args_format", "-test {test_name} --")
+    test_args = args_format.format(test_name=test_name)
     log_file = f"/tmp/sim_start_{port}.log"
     cmd = (
         f"cd {sim_dir} && "
         f"nohup env "
         f"MCP_INPUT_TCL={bridge_tcl} "
         f"MCP_SETUP_TCL={setup_tcl} "
-        f"{script_shell} ./{script} {test_name} "
+        f"{script_shell} ./{script} {test_args} "
         f"{_build_redirect(log_file)} &"
     )
     await ssh_run(cmd, timeout=10)
