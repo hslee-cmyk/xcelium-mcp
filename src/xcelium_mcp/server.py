@@ -362,7 +362,7 @@ async def run_debugger_mode() -> list:
     # 2. Signal values in current scope (up to 50)
     sections.append("\n## Signal Values (current scope)")
     try:
-        sig_list = await bridge.execute("scope -describe *")
+        sig_list = await bridge.execute("describe *")
         lines = sig_list.strip().splitlines()[:50]
         if lines:
             for line in lines:
