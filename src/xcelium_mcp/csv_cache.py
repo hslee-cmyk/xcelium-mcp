@@ -17,6 +17,50 @@ from xcelium_mcp.sim_runner import ssh_run
 
 
 # ---------------------------------------------------------------------------
+# simvisdbutil path resolution — MCP server runs in bash without EDA PATH
+# ---------------------------------------------------------------------------
+
+_simvisdbutil_path: str | None = None
+
+
+async def _resolve_simvisdbutil() -> str:
+    """Find the absolute path of simvisdbutil, caching the result.
+
+    Search order:
+      1. Already cached
+      2. Direct 'which simvisdbutil' (works if PATH already includes EDA)
+      3. Login shell: 'tcsh -l -c "which simvisdbutil"' (cloud0 tcshrc has EDA PATH)
+      4. Common Xcelium install locations via glob
+    """
+    global _simvisdbutil_path
+    if _simvisdbutil_path:
+        return _simvisdbutil_path
+
+    # Try direct
+    r = (await ssh_run("which simvisdbutil 2>/dev/null", timeout=5)).strip()
+    if r and "/" in r:
+        _simvisdbutil_path = r
+        return r
+
+    # Try login shell (tcsh on cloud0)
+    r = (await ssh_run("tcsh -l -c 'which simvisdbutil' 2>/dev/null", timeout=10)).strip()
+    if r and "/" in r:
+        _simvisdbutil_path = r
+        return r
+
+    # Glob common locations
+    r = (await ssh_run("ls /apps/eda/cdns/*/tools/bin/simvisdbutil 2>/dev/null | tail -1", timeout=5)).strip()
+    if r and "/" in r:
+        _simvisdbutil_path = r
+        return r
+
+    raise RuntimeError(
+        "simvisdbutil not found. Ensure Xcelium EDA tools are installed and "
+        "accessible via login shell (tcsh) or set PATH manually."
+    )
+
+
+# ---------------------------------------------------------------------------
 # In-memory cache: (shm_path, frozenset(signals), start_ns, end_ns) → CSV path
 # ---------------------------------------------------------------------------
 
@@ -75,7 +119,8 @@ async def extract(
         output_path = _default_output_path(shm_path, signals, start_ns, end_ns)
 
     # --- Build simvisdbutil command ---
-    parts = ["simvisdbutil", shm_path, "-csv", "-output", output_path, "-overwrite"]
+    svdb = await _resolve_simvisdbutil()
+    parts = [svdb, shm_path, "-csv", "-output", output_path, "-overwrite"]
 
     if start_ns or end_ns:
         parts += ["-range", f"{start_ns}:{end_ns}ns"]
