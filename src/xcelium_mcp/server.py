@@ -254,12 +254,30 @@ async def sim_status() -> str:
 async def set_breakpoint(condition: str, name: str = "") -> str:
     """Set a conditional breakpoint in the simulation.
 
+    For signal-based conditions, uses xmsim's [value] syntax:
+      signal="top.hw.r_rst", condition="== 1'b1"
+      → stop -create -condition {[value top.hw.r_rst] == "1'b1"}
+
+    For raw Tcl expressions, wraps in braces:
+      condition="{$time > 5000000}"
+
     Args:
-        condition: Tcl expression (e.g. "{/tb/dut/state == 3}").
+        condition: Signal condition "signal op value" (e.g. "top.hw.r_rst == 1'b1")
+                   or raw Tcl expression in braces.
         name: Optional breakpoint name.
     """
     bridge = _get_bridge()
-    cmd = f"stop -condition {condition}"
+
+    # Parse "signal op value" format for hierarchical signal paths
+    import re
+    m = re.match(r'^(\S+)\s*(==|!=|>|<|>=|<=)\s*(.+)$', condition.strip())
+    if m and '.' in m.group(1):
+        sig, op, val = m.group(1), m.group(2), m.group(3).strip()
+        tcl_cond = '{[value ' + sig + '] ' + op + ' "' + val + '"}'
+        cmd = f"stop -create -condition {tcl_cond}"
+    else:
+        cmd = f"stop -create -condition {condition}"
+
     if name:
         cmd += f" -name {name}"
     result = await bridge.execute(cmd)
@@ -810,11 +828,13 @@ async def bisect_restore_and_debug(
     # 3. Run (with or without watchpoint)
     bridge = _get_bridge()
     if watch_signal_path and watch_value:
+        # Use __WATCH__ meta command (same as watch_signal tool)
+        # xmsim stop -create doesn't support -signal option
         await bridge.execute(
-            f"stop -create -signal {watch_signal_path} -op {watch_op} -value {watch_value}",
+            f"__WATCH__ {watch_signal_path} {watch_op} {watch_value}",
             timeout=10.0,
         )
-        run_result = await bridge.execute("run", timeout=600.0)
+        run_result = await bridge.execute(f"run {run_duration}", timeout=600.0)
     else:
         run_result = await bridge.execute(f"run {run_duration}", timeout=120.0)
 
