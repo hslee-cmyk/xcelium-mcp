@@ -145,7 +145,11 @@ async def connect_simulator(
         await _bridge.disconnect()
 
     _bridge = TclBridge(host=host, port=port, timeout=timeout)
-    ping = await _bridge.connect()
+    try:
+        ping = await _bridge.connect()
+    except Exception as e:
+        _bridge = None
+        return f"ERROR: Connection failed: {type(e).__name__}: {e}"
 
     # Get current simulation context
     try:
