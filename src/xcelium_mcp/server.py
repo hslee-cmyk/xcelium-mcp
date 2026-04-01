@@ -19,6 +19,8 @@ from xcelium_mcp.sim_runner import (
     _get_default_sim_dir,
     _load_or_detect_runner,
     _login_shell_cmd,
+    _parse_shm_path,
+    _parse_time_ns,
     _resolve_exec_cmd,
     _resolve_test_name,
     _run_batch_regression,
@@ -99,8 +101,8 @@ async def database_open(shm_path: str, name: str = "") -> str:
         try:
             result = await bridge.execute(f"database open {shm_path}{name_opt}")
             return f"Database opened (SimVision): {result}"
-        except TclError:
-            pass
+        except TclError as e:
+            return f"ERROR: SimVision database open failed: {e}"
 
     # xmsim fallback
     try:
@@ -336,6 +338,8 @@ async def simvision_live(
     results = []
 
     # 1. Get xmsim SHM info + sim time
+    shm_info = ""
+    sim_time = ""
     try:
         shm_info = await xmsim.execute("database -list")
         sim_time = await xmsim.execute("where")
@@ -343,10 +347,14 @@ async def simvision_live(
     except TclError as e:
         results.append(f"xmsim info: {e}")
 
-    # 2. Open SHM in SimVision (try to parse path from database -list)
+    # 2. Open SHM in SimVision using _parse_shm_path helper
     if shm_info.strip():
-        # database -list returns paths — try first entry
-        shm_path = shm_info.strip().splitlines()[0].strip()
+        shm_path = _parse_shm_path(shm_info)
+        if not shm_path:
+            return (
+                f"ERROR: Could not parse SHM path from xmsim database list:\n{shm_info}\n"
+                "Open SHM manually: database_open(shm_path='...')"
+            )
         try:
             await sv.execute(f"database open {shm_path}")
             results.append(f"SimVision opened: {shm_path}")
@@ -358,13 +366,16 @@ async def simvision_live(
         add_result = await waveform_add_signals(signals=signals)
         results.append(add_result)
 
-    # 4. Zoom
-    if zoom_start and zoom_end:
-        try:
-            await sv.execute(f"waveform xview limits {zoom_start} {zoom_end}")
-            results.append(f"Zoomed to {zoom_start} – {zoom_end}")
-        except TclError:
-            pass
+    # 4. Zoom — auto-compute from sim time if zoom_start/zoom_end not given
+    if not zoom_start or not zoom_end:
+        cur_ns = _parse_time_ns(sim_time)
+        zoom_start = f"{max(0, cur_ns - 1_000_000)}ns"
+        zoom_end = f"{cur_ns}ns"
+    try:
+        await sv.execute(f"waveform xview limits {zoom_start} {zoom_end}")
+        results.append(f"Zoomed to {zoom_start} – {zoom_end}")
+    except TclError:
+        pass
 
     # 5. Auto-reload
     if auto_reload:

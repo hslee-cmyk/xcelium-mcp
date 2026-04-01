@@ -1765,3 +1765,51 @@ async def _detect_vnc_display() -> str:
         return r.strip()
 
     return ""
+
+
+# ---------------------------------------------------------------------------
+# SimVision live helpers (§4.6)
+# ---------------------------------------------------------------------------
+
+def _parse_shm_path(db_list_output: str) -> str:
+    """Parse SHM path from xmsim 'database -list' output.
+
+    Typical output:
+      '../dump/ci_top.shm'  or  'dump/ci_top.shm'
+    May include multiple lines; return the first .shm path found.
+    Handles single/double quotes around the path.
+    """
+    for line in db_list_output.strip().splitlines():
+        line = line.strip()
+        # Remove leading/trailing quotes
+        line = line.strip("'\"")
+        if ".shm" in line:
+            # Extract path up to and including .shm suffix
+            idx = line.index(".shm") + 4
+            return line[:idx]
+    return ""
+
+
+def _parse_time_ns(where_output: str) -> int:
+    """Parse simulation time from xmsim 'where' output into nanoseconds.
+
+    Handles formats:
+      '5 MS + 0'    -> 5_000_000
+      '100 NS + 500' -> 100_500
+      '0 FS + 0'    -> 0  (sub-ns: return 0)
+      '5000000'     (raw number) -> 5_000_000
+    """
+    import re
+    # "X MS + Y"  (milliseconds)
+    m = re.search(r'(\d+)\s+MS\s*\+\s*(\d+)', where_output, re.IGNORECASE)
+    if m:
+        return int(m.group(1)) * 1_000_000 + int(m.group(2))
+    # "X NS + Y"  (nanoseconds + sub-ns delta)
+    m = re.search(r'(\d+)\s+NS\s*\+\s*(\d+)', where_output, re.IGNORECASE)
+    if m:
+        return int(m.group(1)) + int(m.group(2))
+    # Standalone integer (raw ns fallback)
+    m = re.search(r'(\d+)', where_output)
+    if m:
+        return int(m.group(1))
+    return 0
