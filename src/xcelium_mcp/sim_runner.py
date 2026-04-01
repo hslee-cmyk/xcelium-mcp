@@ -1704,7 +1704,8 @@ async def _detect_run_dir(sim_dir: str, runner_info: dict) -> dict:
         parts = line.strip().split()
         if len(parts) >= 2 and '$' not in parts[1]:
             cd_target = parts[1].strip("'\"").rstrip("/")
-            if cd_target:
+            # Skip navigation-only targets (cd .., cd /, cd ~)
+            if cd_target and cd_target not in ("..", "/", "~"):
                 cd_targets.append(cd_target)
                 if cd_target not in candidates:
                     candidates.append(cd_target)
