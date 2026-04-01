@@ -353,8 +353,16 @@ async def simvision_live(
     except (TclError, ConnectionError, TimeoutError) as e:
         results.append(f"xmsim info: {e}")
 
-    # 2. Open SHM in SimVision using _parse_shm_path helper
-    if shm_info.strip():
+    # 2. Open SHM in SimVision — skip if already open
+    sv_db = ""
+    try:
+        sv_db = await sv.execute("database find")
+    except (TclError, ConnectionError, TimeoutError):
+        pass
+
+    if sv_db.strip():
+        results.append(f"SimVision database already open: {sv_db.strip()}")
+    elif shm_info.strip():
         shm_path = _parse_shm_path(shm_info)
         if not shm_path:
             return (
