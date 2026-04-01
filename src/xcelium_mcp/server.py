@@ -915,7 +915,7 @@ async def waveform_add_signals(
     else:
         result = await bridge.execute(f"waveform add -signals {{{sig_str}}}")
 
-    results.append(f"Added {len(new_signals)}, skipped {skipped} (duplicate). {result}")
+    results.append(f"Added {len(resolved_signals)}, skipped {skipped} (duplicate). {result}")
     return "\n".join(results)
 
 
