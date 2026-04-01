@@ -881,8 +881,14 @@ proc ::mcp_bridge::do_waveform_add_group {channel group_name sig_list} {
 # instead of entering interactive mode. vwait keeps the process alive
 # and processes fileevent (socket) callbacks.
 # Note: vwait in stopped state does NOT advance simulation.
+# SimVision has its own GUI event loop that processes fileevent callbacks,
+# so vwait would BLOCK it — only use vwait for xmsim.
 puts "MCP Bridge: ready (waiting for client)"
 if {![info exists ::mcp_bridge::_shutdown_flag]} {
     set ::mcp_bridge::_shutdown_flag 0
 }
-vwait ::mcp_bridge::_shutdown_flag
+if {$::mcp_bridge::bridge_type eq "xmsim"} {
+    vwait ::mcp_bridge::_shutdown_flag
+} else {
+    puts "MCP Bridge: SimVision mode — using GUI event loop (no vwait)"
+}
