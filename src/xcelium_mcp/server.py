@@ -101,7 +101,15 @@ async def database_open(shm_path: str, name: str = "") -> str:
         try:
             existing = await bridge.execute("database find")
             if existing.strip():
-                return f"Database already open (SimVision): {existing.strip()}"
+                # Same DB? → skip.  Different DB? → close old, open new.
+                # Compare: shm_path may contain full path, existing is just db name
+                if existing.strip() in shm_path or shm_path in existing.strip():
+                    return f"Database already open (SimVision): {existing.strip()}"
+                # Different DB — close existing first
+                try:
+                    await bridge.execute(f"database close {existing.strip()}")
+                except (TclError, ConnectionError, TimeoutError):
+                    pass
         except (TclError, ConnectionError, TimeoutError):
             pass
         name_opt = f" -name {name}" if name else ""
