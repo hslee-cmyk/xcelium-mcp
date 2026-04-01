@@ -97,11 +97,18 @@ async def database_open(shm_path: str, name: str = "") -> str:
     # SimVision bridge first
     if _simvision_bridge and _simvision_bridge.connected:
         bridge = _simvision_bridge
+        # Check if already open (database open on already-opened SHM hangs SimVision)
+        try:
+            existing = await bridge.execute("database find")
+            if existing.strip():
+                return f"Database already open (SimVision): {existing.strip()}"
+        except (TclError, ConnectionError, TimeoutError):
+            pass
         name_opt = f" -name {name}" if name else ""
         try:
             result = await bridge.execute(f"database open {shm_path}{name_opt}")
             return f"Database opened (SimVision): {result}"
-        except TclError as e:
+        except (TclError, ConnectionError, TimeoutError) as e:
             return f"ERROR: SimVision database open failed: {e}"
 
     # xmsim fallback
@@ -109,7 +116,7 @@ async def database_open(shm_path: str, name: str = "") -> str:
         bridge = _get_xmsim_bridge()
         result = await bridge.execute(f"database -open {shm_path} -shm")
         return f"Database opened (xmsim): {result}"
-    except (ConnectionError, TclError) as e:
+    except (ConnectionError, TclError, TimeoutError) as e:
         return f"ERROR: Could not open database: {e}"
 
 
