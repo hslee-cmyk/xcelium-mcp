@@ -676,16 +676,12 @@ async def _run_batch_single(
     params = _resolve_sim_params(runner, sim_mode, extra_args, timeout)
     effective_timeout = params["timeout"]
 
-    # v4.1: use args_format from _resolve_sim_params instead of _resolve_exec_cmd's {test_name}
+    # v4.1: use args_format from _resolve_sim_params
     info = _resolve_exec_cmd(runner, regression=False)
-    # Replace generic {test_name} with mode-specific args_format
+    # Format {test_name} placeholder with mode-specific args
+    # e.g. {test_name} → "-test VENEZIA_TOP015 --" instead of bare "VENEZIA_TOP015"
     test_args = params["test_args_format"].format(test_name=test_name)
-    if info.needs_test_name:
-        # _resolve_exec_cmd puts " {test_name}" at end — replace with proper args
-        base_cmd = info.cmd.split("{test_name}")[0].rstrip()
-        cmd = f"{base_cmd} {test_args}"
-    else:
-        cmd = info.cmd
+    cmd = info.cmd.format(test_name=test_args) if info.needs_test_name else info.cmd
     if params["extra_args"]:
         cmd = f"{cmd} {params['extra_args']}"
 
