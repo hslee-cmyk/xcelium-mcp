@@ -333,8 +333,14 @@ async def simvision_live(
     Requires both xmsim and SimVision bridges connected.
     Opens xmsim's SHM in SimVision, adds signals, enables auto-reload.
     """
-    xmsim = _get_xmsim_bridge()
-    sv = _get_simvision_bridge()
+    try:
+        xmsim = _get_xmsim_bridge()
+    except ConnectionError as e:
+        return f"ERROR: xmsim bridge not connected — {e}"
+    try:
+        sv = _get_simvision_bridge()
+    except ConnectionError as e:
+        return f"ERROR: SimVision bridge not connected — {e}"
     results = []
 
     # 1. Get xmsim SHM info + sim time
@@ -344,7 +350,7 @@ async def simvision_live(
         shm_info = await xmsim.execute("database -show")
         sim_time = await xmsim.execute("where")
         results.append(f"xmsim at {sim_time.strip()}, SHM: {shm_info.strip()}")
-    except TclError as e:
+    except (TclError, ConnectionError, TimeoutError) as e:
         results.append(f"xmsim info: {e}")
 
     # 2. Open SHM in SimVision using _parse_shm_path helper
@@ -358,13 +364,16 @@ async def simvision_live(
         try:
             await sv.execute(f"database open {shm_path}")
             results.append(f"SimVision opened: {shm_path}")
-        except TclError as e:
+        except (TclError, ConnectionError, TimeoutError) as e:
             results.append(f"SHM open failed: {e}")
 
     # 3. Add signals (reuses waveform_add_signals — window auto-create + dedup)
     if signals:
-        add_result = await waveform_add_signals(signals=signals)
-        results.append(add_result)
+        try:
+            add_result = await waveform_add_signals(signals=signals)
+            results.append(add_result)
+        except (ConnectionError, TimeoutError) as e:
+            results.append(f"Add signals failed: {e}")
 
     # 4. Zoom — auto-compute from sim time if zoom_start/zoom_end not given
     if not zoom_start or not zoom_end:
@@ -374,7 +383,7 @@ async def simvision_live(
     try:
         await sv.execute(f"waveform xview limits {zoom_start} {zoom_end}")
         results.append(f"Zoomed to {zoom_start} – {zoom_end}")
-    except TclError:
+    except (TclError, ConnectionError, TimeoutError):
         pass
 
     # 5. Auto-reload
@@ -388,7 +397,7 @@ async def simvision_live(
                 "after 2000 _mcp_auto_reload"
             )
             results.append("Auto-reload enabled (2s interval)")
-        except TclError as e:
+        except (TclError, ConnectionError, TimeoutError) as e:
             results.append(f"Auto-reload failed: {e}")
 
     return "\n".join(results)
