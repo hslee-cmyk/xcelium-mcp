@@ -281,7 +281,7 @@ async def sim_run(duration: str = "", timeout: float = 600.0) -> str:
         duration: Simulation time to run (e.g. "100ns", "1us"). Empty = run until breakpoint or end.
         timeout: MCP response timeout in seconds (default 600s for gate-level sim support).
     """
-    bridge = _get_bridge()
+    bridge = _get_xmsim_bridge()
     cmd = f"run {duration}" if duration else "run"
     await bridge.execute(cmd, timeout=timeout)
     try:
@@ -294,7 +294,7 @@ async def sim_run(duration: str = "", timeout: float = 600.0) -> str:
 @mcp.tool()
 async def sim_stop() -> str:
     """Stop a running simulation."""
-    bridge = _get_bridge()
+    bridge = _get_xmsim_bridge()
     await bridge.execute("stop")
     try:
         where = await bridge.execute("where")
@@ -310,7 +310,7 @@ async def sim_restart() -> str:
     Tries run -clean first, then snapshot restore, then plain restart.
     Returns method used: run-clean | snapshot | plain.
     """
-    bridge = _get_bridge()
+    bridge = _get_xmsim_bridge()
     result = await bridge.execute("__RESTART__")
     return f"Simulation restarted to time 0. ({result})"
 
@@ -368,7 +368,7 @@ async def set_breakpoint(condition: str, name: str = "") -> str:
                    or raw Tcl expression in braces.
         name: Optional breakpoint name.
     """
-    bridge = _get_bridge()
+    bridge = _get_xmsim_bridge()
 
     # Parse "signal op value" format for hierarchical signal paths
     import re
@@ -397,7 +397,7 @@ async def get_signal_value(signals: list[str]) -> str:
     Args:
         signals: List of signal paths (e.g. ["/tb/dut/clk", "/tb/dut/data[7:0]"]).
     """
-    bridge = _get_bridge()
+    bridge = _get_xmsim_bridge()
     results: list[str] = []
     for sig in signals:
         try:
@@ -415,7 +415,7 @@ async def describe_signal(signal: str) -> str:
     Args:
         signal: Full hierarchical signal path.
     """
-    bridge = _get_bridge()
+    bridge = _get_xmsim_bridge()
     result = await bridge.execute(f"describe {signal}")
     return result
 
@@ -427,7 +427,7 @@ async def find_drivers(signal: str) -> str:
     Args:
         signal: Full hierarchical signal path.
     """
-    bridge = _get_bridge()
+    bridge = _get_xmsim_bridge()
     result = await bridge.execute(f"drivers {signal}")
     return result
 
@@ -456,7 +456,7 @@ async def deposit_value(signal: str, value: str) -> str:
         signal: Full hierarchical signal path.
         value: Value to deposit (e.g. "1'b1", "8'hFF", "0").
     """
-    bridge = _get_bridge()
+    bridge = _get_xmsim_bridge()
     await bridge.execute(f"deposit {signal} {value}")
     # Verify
     readback = await bridge.execute(f"value {signal}")
@@ -470,7 +470,7 @@ async def release_signal(signal: str) -> str:
     Args:
         signal: Full hierarchical signal path.
     """
-    bridge = _get_bridge()
+    bridge = _get_xmsim_bridge()
     await bridge.execute(f"release {signal}")
     readback = await bridge.execute(f"value {signal}")
     return f"Released {signal}. Current value: {readback}"
@@ -491,7 +491,7 @@ async def waveform_add_signals(
         signals: List of signal paths to add.
         group_name: Optional group name for organizing signals.
     """
-    bridge = _get_bridge()
+    bridge = _get_simvision_bridge()
     sig_str = " ".join(signals)
     cmd = f"waveform add -signals {{{sig_str}}}"
     if group_name:
@@ -508,7 +508,7 @@ async def waveform_zoom(start_time: str, end_time: str) -> str:
         start_time: Start time (e.g. "0ns").
         end_time: End time (e.g. "100ns").
     """
-    bridge = _get_bridge()
+    bridge = _get_simvision_bridge()
     result = await bridge.execute(
         f"waveform xview limits {start_time} {end_time}"
     )
@@ -523,7 +523,7 @@ async def cursor_set(time: str, cursor_name: str = "TimeA") -> str:
         time: Simulation time (e.g. "50ns").
         cursor_name: Cursor name (default "TimeA").
     """
-    bridge = _get_bridge()
+    bridge = _get_simvision_bridge()
     result = await bridge.execute(
         f"cursor set -using {cursor_name} -time {time}"
     )
@@ -540,7 +540,7 @@ async def take_waveform_screenshot() -> Image:
 
     Returns the screenshot as a PNG image that Claude can analyze.
     """
-    bridge = _get_bridge()
+    bridge = _get_simvision_bridge()
     ps_path = await bridge.screenshot()
     png_bytes = await ps_to_png(ps_path)
     return Image(data=png_bytes, format="png")
@@ -637,7 +637,7 @@ async def shutdown_simulator() -> str:
     WARNING: exit or pkill will lose SHM data. This is the only safe way.
     """
     global _bridge
-    bridge = _get_bridge()
+    bridge = _get_xmsim_bridge()
     try:
         resp = await bridge.execute_safe("__SHUTDOWN__")
         return f"Simulator shutdown: {resp.body}"
@@ -659,7 +659,7 @@ async def watch_signal(signal: str, op: str = "==", value: str = "") -> str:
         op: Comparison operator ("==", "!=", ">", "<", ">=", "<=").
         value: Target value in Verilog format (e.g. "8'h10", "4'b1010").
     """
-    bridge = _get_bridge()
+    bridge = _get_xmsim_bridge()
     result = await bridge.execute(f"__WATCH__ {signal} {op} {value}")
     return f"Watchpoint set: {result}"
 
@@ -671,7 +671,7 @@ async def watch_clear(watch_id: str = "all") -> str:
     Args:
         watch_id: Watchpoint ID to clear, or "all" for all watchpoints.
     """
-    bridge = _get_bridge()
+    bridge = _get_xmsim_bridge()
     result = await bridge.execute(f"__WATCH_CLEAR__ {watch_id}")
     return result
 
@@ -687,7 +687,7 @@ async def probe_control(mode: str, scope: str = "") -> str:
         mode: "enable" to start recording, "disable" to pause, "status" to check.
         scope: Hierarchical scope to target (e.g. "top.hw.u_ext"). Empty = all probes.
     """
-    bridge = _get_bridge()
+    bridge = _get_xmsim_bridge()
     cmd = f"__PROBE_CONTROL__ {mode} {scope}" if scope else f"__PROBE_CONTROL__ {mode}"
     result = await bridge.execute(cmd)
     return result
@@ -711,7 +711,7 @@ async def save_checkpoint(
         sim_dir:       Simulation directory (auto-detected if empty).
         saved_time_ns: Current simulation time in ns for nearest-checkpoint lookup.
     """
-    bridge = _get_bridge()
+    bridge = _get_xmsim_bridge()
 
     resolved_dir = sim_dir if sim_dir else await _get_default_sim_dir()
     import os
@@ -769,7 +769,7 @@ async def restore_checkpoint(
             )
             return msg
 
-    bridge = _get_bridge()
+    bridge = _get_xmsim_bridge()
     cmd = f"__RESTORE__ {name} {chk_base}" if name else f"__RESTORE__  {chk_base}"
     result = await bridge.execute(cmd, timeout=120.0)
     return result
@@ -818,7 +818,7 @@ async def bisect_signal(
         )
 
     # Mode B: bridge-based binary search (legacy)
-    bridge = _get_bridge()
+    bridge = _get_xmsim_bridge()
     cmd = f"__BISECT__ {signal} {op} {value} {start_ns} {end_ns} {precision_ns}"
     result = await bridge.execute(cmd, timeout=600.0)
     return result
@@ -918,7 +918,7 @@ async def bisect_restore_and_debug(
 
     # 2. Add probe signals
     if probe_signals:
-        bridge = _get_bridge()
+        bridge = _get_xmsim_bridge()
         sig_str = " ".join(probe_signals)
         try:
             await bridge.execute(
@@ -928,7 +928,7 @@ async def bisect_restore_and_debug(
             return f"Restore succeeded but probe_add_signals failed: {e}\nRestore result: {restore_result}"
 
     # 3. Run (with or without watchpoint)
-    bridge = _get_bridge()
+    bridge = _get_xmsim_bridge()
     if watch_signal_path and watch_value:
         # Use __WATCH__ meta command (same as watch_signal tool)
         # xmsim stop -create doesn't support -signal option
@@ -1068,7 +1068,7 @@ async def sim_batch_run(
             return f"ERROR in [A'] restore: {restore_result}"
         if probe_signals:
             try:
-                bridge = _get_bridge()
+                bridge = _get_xmsim_bridge()
                 sig_str = " ".join(probe_signals)
                 await bridge.execute(
                     f"probe -create {{{sig_str}}} -shm -depth all", timeout=30.0
@@ -1296,7 +1296,7 @@ async def probe_add_signals(
         shm_path: SHM file to write probe data to. Empty = current session SHM.
         depth:    Probe depth ("all", "1", "2", ...).
     """
-    bridge = _get_bridge()
+    bridge = _get_xmsim_bridge()
     sig_str = " ".join(signals)
     if shm_path:
         cmd = f"probe -create {{{sig_str}}} -shm {shm_path} -depth {depth}"
@@ -1630,7 +1630,7 @@ async def open_debug_view(
 
     # 4. Connect
     await connect_simulator(host="localhost", port=9876)
-    bridge = _get_bridge()
+    bridge = _get_simvision_bridge()
 
     # 5. Add signals to AI_Debug group (duplicate skip via P5-2)
     if signals:
@@ -1744,7 +1744,7 @@ async def compare_waveforms(
 
         # 4. Connect bridge
         await connect_simulator(host="localhost", port=9876)
-        bridge = _get_bridge()
+        bridge = _get_simvision_bridge()
 
         # 5. Open shm_after as second database
         try:

@@ -1129,12 +1129,19 @@ async def run_full_discovery(sim_dir: str = "", force: bool = False) -> str:
     # D-10: legacy run script bridge patch
     patch_result = await _patch_legacy_run_script(sim_dir, runner_info)
 
-    # Assemble config v2
+    # D-12 (v4.1): run_dir + script_has_cd detection
+    run_info = await _detect_run_dir(sim_dir, runner_info)
+    run_dir = run_info["run_dir"]
+    script_has_cd = run_info["script_has_cd"]
+
+    # Assemble config v2.1
     config = {
         "version": 2,
         "runner": {
             "type": runner_info.get("runner", "shell"),
             "script": script_name,
+            "run_dir": run_dir,
+            "script_has_cd": script_has_cd,
             **shell_env,
             "setup_tcls": setup_tcls,
             "default_mode": _pick_default_mode(setup_tcls),
@@ -1430,19 +1437,38 @@ async def _start_bridge(
     )
     await ssh_run(cmd, timeout=15)
 
-    # S-5: Poll for bridge ready
+    # S-5 v4.1: Poll for bridge ready + AUTO-CONNECT to _xmsim_bridge
+    import xcelium_mcp.server as _srv
+    from xcelium_mcp.tcl_bridge import TclBridge as _TB
+
+    # Disconnect existing xmsim bridge (max 1 constraint)
+    if _srv._xmsim_bridge and _srv._xmsim_bridge.connected:
+        await _srv._xmsim_bridge.disconnect()
+        _srv._xmsim_bridge = None
+
     for i in range(timeout // 2):
         await asyncio.sleep(2)
-        r = await ssh_run(f"test -f {ready_file} && echo READY || echo WAITING", timeout=5)
-        if "READY" in r:
-            return (
-                f"Simulation started (bridge mode, {sim_mode}).\n"
-                f"  test: {test_name}\n"
-                f"  setup_tcl: {setup_tcl}\n"
-                f"  port: {port}\n"
-                f"  log: {log_file}\n\n"
-                f"Ready. Use connect_simulator(port={port}) to connect."
-            )
+        # Scan ready files for xmsim type (auto port support)
+        r = await ssh_run("cat /tmp/mcp_bridge_ready_* 2>/dev/null")
+        for line in r.strip().splitlines():
+            parts = line.strip().split()
+            if len(parts) >= 2 and parts[1] == "xmsim":
+                actual_port = int(parts[0])
+                bridge = _TB(host="localhost", port=actual_port)
+                try:
+                    ping = await bridge.connect()
+                    _srv._xmsim_bridge = bridge
+                    return (
+                        f"Simulation started and connected (bridge mode, {sim_mode}).\n"
+                        f"  test: {test_name}\n"
+                        f"  setup_tcl: {setup_tcl}\n"
+                        f"  port: {actual_port}\n"
+                        f"  ping: {ping}\n"
+                        f"  log: {log_file}\n\n"
+                        f"Ready. sim_run, get_signal_value etc. available immediately."
+                    )
+                except Exception:
+                    continue
 
     # Timeout — return log tail
     log_tail = await ssh_run(f"tail -20 {log_file} 2>/dev/null", timeout=5)
@@ -1465,3 +1491,101 @@ async def _start_batch(
         run_duration=run_duration,
         timeout=600,
     )
+
+
+# ===========================================================================
+# v4.1: Run directory + VNC display detection
+# ===========================================================================
+
+
+async def _detect_run_dir(sim_dir: str, runner_info: dict) -> dict:
+    """Detect simulation run directory and whether runner script has internal cd.
+
+    Returns: {"run_dir": str, "script_has_cd": bool}
+    """
+    candidates: list[str] = []
+    script_has_cd = False
+
+    # 1. run*/ directories with cds.lib or hdl.var
+    r = await ssh_run(
+        f"find {sim_dir} -maxdepth 1 -type d -name 'run*' 2>/dev/null"
+    )
+    for d in r.strip().splitlines():
+        if not d.strip():
+            continue
+        has_cds = await ssh_run(
+            f"test -f {d}/cds.lib -o -L {d}/cds.lib -o -f {d}/hdl.var && echo YES || echo NO"
+        )
+        if "YES" in has_cds:
+            candidates.append(d.split("/")[-1])
+
+    # 2. Parse 'cd' from runner script → detect script_has_cd
+    script_name = _extract_script_name(runner_info.get("exec_cmd", ""))
+    script_path = f"{sim_dir}/{script_name}"
+    cd_targets: list[str] = []
+    r = await ssh_run(f"grep -E '^[[:space:]]*cd[[:space:]]+' {script_path} 2>/dev/null | head -3")
+    for line in r.strip().splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 2 and '$' not in parts[1]:
+            cd_target = parts[1].strip("'\"").rstrip("/")
+            if cd_target:
+                cd_targets.append(cd_target)
+                if cd_target not in candidates:
+                    candidates.append(cd_target)
+
+    script_has_cd = len(cd_targets) > 0
+
+    # 3. sim_dir itself
+    has_cds = await ssh_run(
+        f"test -f {sim_dir}/cds.lib -o -L {sim_dir}/cds.lib && echo YES || echo NO"
+    )
+    if "YES" in has_cds and "." not in candidates:
+        candidates.append(".")
+
+    # 4. Single candidate
+    if len(candidates) == 1:
+        return {"run_dir": candidates[0], "script_has_cd": script_has_cd}
+
+    # 5. Multiple → ask user
+    if len(candidates) > 1:
+        raise UserInputRequired(
+            f"Multiple run directories found. Select one:\n"
+            + "\n".join(f"  {i+1}. {c}" for i, c in enumerate(candidates))
+        )
+
+    # 6. None → ask user
+    raise UserInputRequired(
+        "Could not detect run directory.\n"
+        "Enter the directory where xmsim/simvision should run:\n"
+        f"  (relative to {sim_dir})\n"
+        "  Example: run\n"
+        "  Example: ."
+    )
+
+
+async def _detect_vnc_display() -> str:
+    """Detect current user's VNC display.
+
+    Search order:
+      1. vncserver -list → parse display number
+      2. ps -u $USER | grep Xvnc → extract :N
+      3. $DISPLAY env var (skip :0 = physical)
+    Returns: ":N" or "" if not found.
+    """
+    # 1. vncserver -list
+    r = await ssh_run("vncserver -list 2>/dev/null | grep -E '^:'")
+    if r.strip():
+        display = r.strip().splitlines()[0].split()[0]
+        return display
+
+    # 2. Xvnc process
+    r = await ssh_run("ps -u $(whoami) -o args 2>/dev/null | grep Xvnc | grep -v grep | grep -oE ':[0-9]+'")
+    if r.strip():
+        return r.strip().splitlines()[0]
+
+    # 3. $DISPLAY fallback (skip :0)
+    r = await ssh_run("echo $DISPLAY")
+    if r.strip() and r.strip() != ":0":
+        return r.strip()
+
+    return ""
