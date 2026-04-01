@@ -29,21 +29,44 @@ from xcelium_mcp.sim_runner import (
 )
 
 # ---------------------------------------------------------------------------
-# Server & global bridge instance
+# Server & global bridge instances (v4.1: dual slot)
 # ---------------------------------------------------------------------------
 mcp = FastMCP(
     "xcelium-mcp",
     instructions="MCP server for Cadence Xcelium/SimVision simulator control",
 )
 
-_bridge: TclBridge | None = None
+# v4.1: Independent bridge slots (max 1 each)
+_xmsim_bridge: TclBridge | None = None
+_simvision_bridge: TclBridge | None = None
+
+
+def _get_xmsim_bridge() -> TclBridge:
+    """Return the xmsim bridge or raise."""
+    if _xmsim_bridge is None or not _xmsim_bridge.connected:
+        raise ConnectionError(
+            "Not connected to xmsim. Call sim_start or connect_simulator(target='xmsim') first."
+        )
+    return _xmsim_bridge
+
+
+def _get_simvision_bridge() -> TclBridge:
+    """Return the SimVision bridge or raise."""
+    if _simvision_bridge is None or not _simvision_bridge.connected:
+        raise ConnectionError(
+            "Not connected to SimVision. Call simvision_start or connect_simulator(target='simvision') first."
+        )
+    return _simvision_bridge
 
 
 def _get_bridge() -> TclBridge:
-    """Return the active bridge or raise."""
-    if _bridge is None or not _bridge.connected:
-        raise ConnectionError(
-            "Not connected to SimVision. Call connect_simulator first."
+    """Backward compat: return any connected bridge (xmsim priority)."""
+    if _xmsim_bridge and _xmsim_bridge.connected:
+        return _xmsim_bridge
+    if _simvision_bridge and _simvision_bridge.connected:
+        return _simvision_bridge
+    raise ConnectionError(
+        "Not connected. Call sim_start or connect_simulator first."
         )
     return _bridge
 
@@ -129,46 +152,125 @@ async def sim_start(
 @mcp.tool()
 async def connect_simulator(
     host: str = "localhost",
-    port: int = 9876,
+    port: int = 0,
+    target: str = "auto",
     timeout: float = 30.0,
 ) -> str:
-    """Connect to a SimVision instance running mcp_bridge.tcl.
+    """Connect to simulator bridge(s).
+
+    v4.1: Multi-bridge support. Reads ready file for port + type auto-detection.
 
     Args:
-        host: SimVision host (use localhost with SSH tunnel for remote).
-        port: TCP port of the Tcl bridge (default 9876).
+        host:    Bridge host (default localhost).
+        port:    Bridge port. 0 = auto-detect from ready files.
+        target:  "xmsim" | "simvision" | "auto". auto = ready file type.
+                 port=0 + target=auto → scan all ready files, connect each to slot.
         timeout: Connection timeout in seconds.
     """
-    global _bridge
+    global _xmsim_bridge, _simvision_bridge
 
-    if _bridge and _bridge.connected:
-        await _bridge.disconnect()
+    if port == 0 and target == "auto":
+        return await _auto_connect_all(host, timeout)
 
-    _bridge = TclBridge(host=host, port=port, timeout=timeout)
+    if port == 0:
+        port, detected_type = await _find_ready_file(target)
+        if port == 0:
+            return f"ERROR: No {target} bridge found in ready files."
+        target = detected_type
+
+    if target == "auto":
+        target = await _read_bridge_type(port)
+
+    bridge = TclBridge(host=host, port=port, timeout=timeout)
     try:
-        ping = await _bridge.connect()
+        ping = await bridge.connect()
     except Exception as e:
-        _bridge = None
         return f"ERROR: Connection failed: {type(e).__name__}: {e}"
 
-    # Get current simulation context
-    try:
-        where = await _bridge.execute("where")
-    except TclError:
-        where = "(unknown — simulation may not be loaded)"
+    if target == "simvision":
+        _simvision_bridge = bridge
+    else:
+        _xmsim_bridge = bridge
 
-    # v4: No auto-registration here. Use sim_discover for environment detection.
-    return f"Connected to SimVision at {host}:{port} (ping={ping})\nCurrent position: {where}"
+    try:
+        where = await bridge.execute("where")
+    except TclError:
+        where = "(unknown)"
+
+    return f"Connected to {target} at {host}:{port} (ping={ping})\nCurrent position: {where}"
+
+
+async def _auto_connect_all(host: str, timeout: float) -> str:
+    """Scan all ready files, connect to each, assign to appropriate slot."""
+    global _xmsim_bridge, _simvision_bridge
+    results = []
+
+    r = await ssh_run("cat /tmp/mcp_bridge_ready_* 2>/dev/null")
+    if not r.strip():
+        return "No bridges found. Run sim_start or simvision_start first."
+
+    for line in r.strip().splitlines():
+        parts = line.strip().split()
+        if len(parts) < 2:
+            continue
+        p, btype = int(parts[0]), parts[1]
+
+        bridge = TclBridge(host=host, port=p, timeout=timeout)
+        try:
+            ping = await bridge.connect()
+            if btype == "simvision":
+                _simvision_bridge = bridge
+            else:
+                _xmsim_bridge = bridge
+            results.append(f"  {btype}:{p} (ping={ping})")
+        except Exception as e:
+            results.append(f"  {btype}:{p} FAILED ({e})")
+
+    if not results:
+        return "No bridges found."
+    return "Connected:\n" + "\n".join(results)
+
+
+async def _find_ready_file(target: str) -> tuple[int, str]:
+    """Find ready file matching target type."""
+    r = await ssh_run("cat /tmp/mcp_bridge_ready_* 2>/dev/null")
+    for line in r.strip().splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 2 and parts[1] == target:
+            return int(parts[0]), parts[1]
+    return 0, target
+
+
+async def _read_bridge_type(port: int) -> str:
+    """Read bridge type from ready file for given port."""
+    r = await ssh_run(f"cat /tmp/mcp_bridge_ready_{port} 2>/dev/null")
+    parts = r.strip().split()
+    if len(parts) >= 2:
+        return parts[1]
+    return "xmsim"
 
 
 @mcp.tool()
-async def disconnect_simulator() -> str:
-    """Disconnect from the SimVision bridge."""
-    global _bridge
-    if _bridge:
-        await _bridge.disconnect()
-        _bridge = None
-    return "Disconnected from SimVision."
+async def disconnect_simulator(target: str = "all") -> str:
+    """Disconnect from bridge(s).
+
+    Args:
+        target: "xmsim" | "simvision" | "all" (default: all)
+    """
+    global _xmsim_bridge, _simvision_bridge
+    results = []
+
+    if target in ("xmsim", "all") and _xmsim_bridge and _xmsim_bridge.connected:
+        await _xmsim_bridge.disconnect()
+        _xmsim_bridge = None
+        results.append("xmsim: disconnected")
+
+    if target in ("simvision", "all") and _simvision_bridge and _simvision_bridge.connected:
+        await _simvision_bridge.disconnect()
+        _simvision_bridge = None
+        results.append("simvision: disconnected")
+
+    return "\n".join(results) if results else f"No {target} bridge connected."
 
 
 @mcp.tool()
