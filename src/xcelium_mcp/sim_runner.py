@@ -719,8 +719,8 @@ async def _run_batch_single(
     ts = int(_time.time())
     log_file = f"/tmp/mcp_batch_{ts}.log"
 
-    # cd outside nohup — subshell cd + nohup combo breaks
-    run_cmd = f"{env_prefix}stdbuf -oL {cmd}"
+    # env VAR=val nohup ... — nohup treats first arg as command, so use env
+    run_cmd = f"env {env_prefix}stdbuf -oL {cmd}"
     await ssh_run(
         f"cd {sim_dir} && (nohup {run_cmd} {_build_redirect(log_file)} < /dev/null &)",
         timeout=15.0,
@@ -865,7 +865,7 @@ async def _run_batch_regression(
             })
             await ssh_run(f"echo '{job_info}' > {job_file}", timeout=5)
 
-            run_cmd = f"{env_prefix}stdbuf -oL {cmd}"
+            run_cmd = f"env {env_prefix}stdbuf -oL {cmd}"
             await ssh_run(
                 f"cd {sim_dir} && (nohup {run_cmd} {_build_redirect(test_log)} < /dev/null &)",
                 timeout=15.0,
