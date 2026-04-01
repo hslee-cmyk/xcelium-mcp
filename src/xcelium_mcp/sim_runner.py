@@ -654,9 +654,9 @@ async def _run_batch_single(
 ) -> str:
     """Execute a single simulation test and return combined log output.
 
-    Strategy (P2-8 SSH screen hybrid):
+    Strategy:
       timeout <= 120 → direct ssh_run (synchronous, result returned immediately)
-      timeout  > 120 → screen session + log polling
+      timeout  > 120 → nohup + stdbuf -oL + log polling (immediate flush, no screen)
 
     SHM overwrite prevention:
       Method 6-A (default): injects TEST_NAME env var so setup tcl uses
@@ -707,26 +707,18 @@ async def _run_batch_single(
         )
         return prefix + result
 
-    # --- Screen session + log polling ---
+    # --- nohup + stdbuf (replaces screen — immediate log flush, no buffer delay) ---
     ts = int(_time.time())
-    session = f"mcp_single_{ts}"
-    log_file = f"/tmp/screen_{session}.log"
-    login_shell = runner.get("login_shell", "/bin/sh")
+    log_file = f"/tmp/mcp_batch_{ts}.log"
 
-    # Start screen session with log capture
+    full_cmd = f"cd {sim_dir} && {env_prefix}stdbuf -oL {cmd}"
     await ssh_run(
-        f"screen -dmS {session} -L -Logfile {log_file} {login_shell} -l",
+        f"(nohup {full_cmd} {_build_redirect(log_file)} < /dev/null &)",
         timeout=15.0,
     )
-    await ssh_run(f"screen -S {session} -X stuff 'cd {sim_dir}\\n'", timeout=10.0)
-    await ssh_run(
-        f"screen -S {session} -X stuff 'setenv TEST_NAME {test_name}\\n'",
-        timeout=10.0,
-    )
-    await ssh_run(f"screen -S {session} -X stuff '{cmd}\\n'", timeout=10.0)
 
-    # Poll for completion
-    deadline = _time.time() + timeout
+    # Poll for completion (stdbuf ensures line-buffered → immediate flush)
+    deadline = _time.time() + effective_timeout
     while _time.time() < deadline:
         log = await ssh_run(f"tail -5 {log_file} 2>/dev/null")
         if any(kw in log for kw in ("$finish", "COMPLETE", "PASS", "FAIL", "Errors:")):
@@ -735,15 +727,14 @@ async def _run_batch_single(
 
     # Method 6-B fallback
     if rename_dump:
-        await ssh_run(
-            f"screen -S {session} -X stuff "
-            f"'if [ -d {sim_dir}/dump/ci_top.shm ]; then "
-            f"mv {sim_dir}/dump/ci_top.shm {sim_dir}/dump/ci_top_{test_name}.shm; fi\\n'",
-            timeout=10.0,
+        mv_cmd = (
+            f"cd {sim_dir} && "
+            f"if [ -d dump/ci_top.shm ]; then "
+            f"mv dump/ci_top.shm dump/ci_top_{test_name}.shm; fi"
         )
+        await ssh_run(mv_cmd, timeout=30.0)
 
-    # Cleanup + collect results
-    await ssh_run(f"screen -X -S {session} quit 2>/dev/null", timeout=10.0)
+    # Collect results
     result = await ssh_run(
         f"grep -E 'PASS|FAIL|Errors:|\\$finish|COMPLETE' {log_file} 2>/dev/null | tail -30"
     )
@@ -759,35 +750,17 @@ async def _run_batch_regression(
     sim_mode: str = "",
     extra_args: str = "",
 ) -> str:
-    """Execute regression tests via screen session with per-test polling.
+    """Execute regression tests via nohup + stdbuf (replaces screen).
 
-    Always uses screen (P2-8: regression always detaches).
+    nohup + stdbuf -oL: immediate log flush, no screen buffer delay.
 
     needs_test_name=False → regression_script handles all tests → 1 cmd, poll REGRESSION_COMPLETE
-    needs_test_name=True  → iterate test_list, per-test poll, method 6-A/B for SHM naming
+    needs_test_name=True  → iterate test_list, per-test nohup + poll
     """
     import time as _time
 
     ts = int(_time.time())
-    session = f"mcp_regression_{ts}"
-    log_file = f"/tmp/screen_{session}.log"
-    login_shell = runner.get("login_shell", "/bin/sh")
-
-    # Check for existing mcp_regression screen sessions
-    existing = await ssh_run("screen -ls 2>/dev/null | grep mcp_regression || echo ''")
-    if existing.strip():
-        # Kill stale sessions
-        await ssh_run(
-            "screen -ls 2>/dev/null | grep mcp_regression "
-            "| awk '{print $1}' | xargs -I{} screen -X -S {} quit 2>/dev/null || true"
-        )
-
-    # Start screen session with log capture
-    await ssh_run(
-        f"screen -dmS {session} -L -Logfile {log_file} {login_shell} -l",
-        timeout=15.0,
-    )
-    await ssh_run(f"screen -S {session} -X stuff 'cd {sim_dir}\\n'", timeout=10.0)
+    log_file = f"/tmp/mcp_regression_{ts}.log"
 
     # v4.1: resolve sim_mode/extra_args for regression
     effective_sim_mode = sim_mode or runner.get("default_mode", "rtl")
@@ -802,8 +775,10 @@ async def _run_batch_regression(
             if params["extra_args"]
             else info.cmd
         )
+        full_cmd = f"cd {sim_dir} && stdbuf -oL {cmd_with_extra}"
         await ssh_run(
-            f"screen -S {session} -X stuff '{cmd_with_extra}\\n'", timeout=10.0
+            f"(nohup {full_cmd} {_build_redirect(log_file)} < /dev/null &)",
+            timeout=15.0,
         )
         # Poll for overall completion
         for _ in range(360):  # max ~1 hour
@@ -813,39 +788,45 @@ async def _run_batch_regression(
             await asyncio.sleep(10)
 
     else:
-        # Per-test loop — needs {test_name} substitution
+        # Per-test loop — sequential nohup for each test
         for test_name in test_list:
-            # Method 6-A: set TEST_NAME env var for SHM file naming
-            await ssh_run(
-                f"screen -S {session} -X stuff 'setenv TEST_NAME {test_name}\\n'",
-                timeout=10.0,
-            )
-            cmd = info.cmd.format(test_name=test_name)
+            test_log = f"/tmp/mcp_regression_{ts}_{test_name}.log"
+            env_prefix = f"TEST_NAME={test_name} "
+
+            # v4.1: mode-specific args_format
+            test_args = params["test_args_format"].format(test_name=test_name)
+            cmd = info.cmd.format(test_name=test_args) if info.needs_test_name else info.cmd
             if params["extra_args"]:
                 cmd = f"{cmd} {params['extra_args']}"
+
+            full_cmd = f"cd {sim_dir} && {env_prefix}stdbuf -oL {cmd}"
             await ssh_run(
-                f"screen -S {session} -X stuff '{cmd}\\n'", timeout=10.0
+                f"(nohup {full_cmd} {_build_redirect(test_log)} < /dev/null &)",
+                timeout=15.0,
             )
 
             # Per-test completion poll (max 10 min each)
             for _ in range(60):
-                log = await ssh_run(f"tail -3 {log_file} 2>/dev/null")
+                log = await ssh_run(f"tail -3 {test_log} 2>/dev/null")
                 if any(kw in log for kw in ("$finish", "COMPLETE", "PASS", "FAIL")):
                     break
                 await asyncio.sleep(10)
 
             # Method 6-B fallback
             if rename_dump:
-                await ssh_run(
-                    f"screen -S {session} -X stuff "
-                    f"'if [ -d {sim_dir}/dump/ci_top.shm ]; then "
-                    f"mv {sim_dir}/dump/ci_top.shm "
-                    f"{sim_dir}/dump/ci_top_{test_name}.shm; fi\\n'",
-                    timeout=10.0,
+                mv_cmd = (
+                    f"cd {sim_dir} && "
+                    f"if [ -d dump/ci_top.shm ]; then "
+                    f"mv dump/ci_top.shm dump/ci_top_{test_name}.shm; fi"
                 )
+                await ssh_run(mv_cmd, timeout=30.0)
 
-    # Cleanup screen session
-    await ssh_run(f"screen -X -S {session} quit 2>/dev/null", timeout=10.0)
+            # Append per-test result to main log
+            await ssh_run(
+                f"echo '=== {test_name} ===' >> {log_file} && "
+                f"grep -E 'PASS|FAIL|Errors:' {test_log} 2>/dev/null >> {log_file}",
+                timeout=10.0,
+            )
 
     # Parse final results
     raw = await ssh_run(
