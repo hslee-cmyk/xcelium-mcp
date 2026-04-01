@@ -394,15 +394,17 @@ async def simvision_live(
     except (TclError, ConnectionError, TimeoutError):
         pass
 
-    # 5. Auto-reload
+    # 5. Auto-reload (with database name for SimVision)
     if auto_reload:
         try:
+            db_name = sv_db.strip() if sv_db.strip() else ""
+            reload_cmd = f"database reload {db_name}" if db_name else "database reload"
             await sv.execute(
-                "proc _mcp_auto_reload {} { "
-                "  catch {database reload}; "
-                "  after 2000 _mcp_auto_reload "
-                "}; "
-                "after 2000 _mcp_auto_reload"
+                f"proc _mcp_auto_reload {{}} {{ "
+                f"  catch {{{reload_cmd}}}; "
+                f"  after 2000 _mcp_auto_reload "
+                f"}}; "
+                f"after 2000 _mcp_auto_reload"
             )
             results.append("Auto-reload enabled (2s interval)")
         except (TclError, ConnectionError, TimeoutError) as e:
@@ -875,25 +877,39 @@ async def waveform_add_signals(
             wname = await bridge.execute("waveform new")
             results.append(f"Waveform window created: {wname}")
 
-    # 2. Dedup: query existing signals
+    # 2. Resolve database prefix for SimVision (db_name::signal_path)
+    db_prefix = ""
     try:
-        existing = await bridge.execute("waveform signals -format list")
-        existing_set = set(existing.strip().splitlines())
-    except TclError:
+        db_name = await bridge.execute("database find")
+        if db_name.strip():
+            db_prefix = db_name.strip() + "::"
+    except (TclError, ConnectionError, TimeoutError):
+        pass
+
+    # 3. Dedup: query existing signals
+    try:
+        existing = await bridge.execute("waveform signals -format fullpath")
+        existing_set = set(existing.strip().split())
+    except (TclError, ConnectionError, TimeoutError):
         existing_set = set()
 
-    new_signals = [s for s in signals if s not in existing_set]
-    skipped = len(signals) - len(new_signals)
+    # Normalize: add db_prefix to input signals if not present
+    resolved_signals = []
+    for s in signals:
+        full = s if "::" in s else f"{db_prefix}{s}"
+        if full not in existing_set:
+            resolved_signals.append(full)
+    skipped = len(signals) - len(resolved_signals)
 
-    if not new_signals:
+    if not resolved_signals:
         return f"All {len(signals)} signal(s) already in waveform (skipped)."
 
-    # 3. Add signals
-    sig_str = " ".join(new_signals)
+    # 4. Add signals
+    sig_str = " ".join(resolved_signals)
     if group_name:
         try:
             await bridge.execute(f"waveform add -groups {{{group_name}}}")
-        except TclError:
+        except (TclError, ConnectionError, TimeoutError):
             pass
         result = await bridge.execute(f"waveform add -using {group_name} -signals {{{sig_str}}}")
     else:
