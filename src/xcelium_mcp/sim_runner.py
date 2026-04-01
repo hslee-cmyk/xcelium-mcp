@@ -1712,12 +1712,13 @@ async def _detect_run_dir(sim_dir: str, runner_info: dict) -> dict:
 
     script_has_cd = len(cd_targets) > 0
 
-    # 3. sim_dir itself
-    has_cds = await ssh_run(
-        f"test -f {sim_dir}/cds.lib -o -L {sim_dir}/cds.lib && echo YES || echo NO"
-    )
-    if "YES" in has_cds and "." not in candidates:
-        candidates.append(".")
+    # 3. sim_dir itself — only if no cd targets found (script doesn't cd to subdirectory)
+    if not script_has_cd:
+        has_cds = await ssh_run(
+            f"test -f {sim_dir}/cds.lib -o -L {sim_dir}/cds.lib && echo YES || echo NO"
+        )
+        if "YES" in has_cds and "." not in candidates:
+            candidates.append(".")
 
     # 4. Single candidate
     if len(candidates) == 1:
