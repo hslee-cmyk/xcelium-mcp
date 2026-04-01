@@ -32,6 +32,8 @@ namespace eval ::mcp_bridge {
     variable server_socket ""
     variable client_channel ""
     variable port 9876
+    variable port_range 10
+    variable bridge_type "xmsim"
     variable cmd_buffer ""
     variable async_running 0
     variable async_done 0
@@ -40,6 +42,7 @@ namespace eval ::mcp_bridge {
     variable _checkpoint_dir ""
     variable _checkpoint_name ""
     variable _init_snapshot_dir ""
+    variable _shutdown_flag 0
 }
 
 # ---------------------------------------------------------------------------
@@ -47,7 +50,17 @@ namespace eval ::mcp_bridge {
 # ---------------------------------------------------------------------------
 proc ::mcp_bridge::init {} {
     variable port
+    variable port_range
+    variable bridge_type
     variable server_socket
+
+    # P1-1: Detect bridge type (xmsim vs SimVision)
+    if {[info commands waveform] ne ""} {
+        set bridge_type "simvision"
+    } else {
+        set bridge_type "xmsim"
+    }
+    puts "MCP Bridge: type=$bridge_type"
 
     # Allow port override via environment variable
     if {[info exists ::env(MCP_BRIDGE_PORT)]} {
@@ -57,16 +70,31 @@ proc ::mcp_bridge::init {} {
     # Close existing server if re-sourced
     if {$server_socket ne ""} {
         catch {close $server_socket}
+        set server_socket ""
     }
 
-    set server_socket [socket -server ::mcp_bridge::accept $port]
-    puts "MCP Bridge: listening on port $port"
+    # P1-2: Auto port — try port_range ports starting from base
+    set found 0
+    for {set p $port} {$p < $port + $port_range} {incr p} {
+        if {![catch {socket -server ::mcp_bridge::accept $p} sock]} {
+            set server_socket $sock
+            set port $p
+            set found 1
+            puts "MCP Bridge: listening on port $p"
+            break
+        }
+        puts "MCP Bridge: port $p busy, trying next..."
+    }
+    if {!$found} {
+        puts "MCP Bridge: ERROR — all ports $port-[expr {$port + $port_range - 1}] busy"
+        return
+    }
 
-    # Signal readiness via file (avoids TCP client slot contention with ping loops)
+    # P1-3: Ready file — "port type timestamp" format
     set ready_file "/tmp/mcp_bridge_ready_$port"
     if {[catch {
         set f [open $ready_file w]
-        puts $f [clock seconds]
+        puts $f "$port $bridge_type [clock seconds]"
         close $f
     } err]} {
         puts "MCP Bridge: WARNING: could not create ready file: $err"
@@ -398,11 +426,16 @@ proc ::mcp_bridge::do_shutdown {channel} {
         catch {database -close ../dump/ci_top.shm}
     }
 
-    # 2. Notify client before termination
+    # 2. Cleanup ready file
+    variable port
+    catch {file delete "/tmp/mcp_bridge_ready_$port"}
+
+    # 3. Notify client before termination
     ::mcp_bridge::send_ok $channel "shutdown:ok"
 
-    # 3. Schedule finish after returning to event loop
-    #    (gives time for the OK response to be flushed)
+    # 4. Set shutdown flag (unblocks vwait) + schedule finish
+    variable _shutdown_flag
+    set _shutdown_flag 1
     after 100 {finish}
 }
 
