@@ -707,7 +707,30 @@ async def _run_batch_single(
         )
         return prefix + result
 
-    # --- nohup + stdbuf (replaces screen — immediate log flush, no buffer delay) ---
+    # --- nohup + stdbuf + job resume ---
+    job_file = "/tmp/mcp_batch_job.json"
+
+    # Check for existing job (reconnection scenario)
+    existing_job = await ssh_run(f"cat {job_file} 2>/dev/null")
+    if existing_job.strip():
+        try:
+            job = json.loads(existing_job)
+            pid = job.get("pid", 0)
+            pid_alive = await ssh_run(f"kill -0 {pid} 2>/dev/null && echo ALIVE || echo DEAD")
+            if "ALIVE" in pid_alive:
+                # Previous batch still running → resume polling
+                result = await _poll_batch_log(
+                    job["log_file"], effective_timeout,
+                    f"(Resumed monitoring existing batch PID {pid})\n"
+                )
+                await ssh_run(f"rm -f {job_file}", timeout=5)
+                return result
+            # PID dead → stale job file, remove and start fresh
+            await ssh_run(f"rm -f {job_file}", timeout=5)
+        except (json.JSONDecodeError, KeyError):
+            await ssh_run(f"rm -f {job_file}", timeout=5)
+
+    # Start new batch job
     ts = int(_time.time())
     log_file = f"/tmp/mcp_batch_{ts}.log"
 
@@ -717,13 +740,28 @@ async def _run_batch_single(
         timeout=15.0,
     )
 
-    # Poll for completion (stdbuf ensures line-buffered → immediate flush)
-    deadline = _time.time() + effective_timeout
-    while _time.time() < deadline:
-        log = await ssh_run(f"tail -5 {log_file} 2>/dev/null")
-        if any(kw in log for kw in ("$finish", "COMPLETE", "PASS", "FAIL", "Errors:")):
-            break
-        await asyncio.sleep(10)
+    # Get PID of nohup process + save job file
+    pid_str = await ssh_run("echo $!", timeout=5)
+    # $! may not work after subshell — use pgrep fallback
+    if not pid_str.strip().isdigit():
+        pid_str = await ssh_run(f"pgrep -f 'stdbuf.*{test_name}' 2>/dev/null | tail -1")
+    pid = int(pid_str.strip()) if pid_str.strip().isdigit() else 0
+
+    if pid:
+        from datetime import datetime
+        job_info = json.dumps({
+            "pid": pid,
+            "log_file": log_file,
+            "test_name": test_name,
+            "started_at": datetime.now().isoformat(),
+        })
+        await ssh_run(f"echo '{job_info}' > {job_file}", timeout=5)
+
+    # Poll for completion
+    result = await _poll_batch_log(log_file, effective_timeout)
+
+    # Cleanup job file
+    await ssh_run(f"rm -f {job_file}", timeout=5)
 
     # Method 6-B fallback
     if rename_dump:
@@ -734,10 +772,6 @@ async def _run_batch_single(
         )
         await ssh_run(mv_cmd, timeout=30.0)
 
-    # Collect results
-    result = await ssh_run(
-        f"grep -E 'PASS|FAIL|Errors:|\\$finish|COMPLETE' {log_file} 2>/dev/null | tail -30"
-    )
     return result
 
 
@@ -1560,6 +1594,22 @@ async def _start_batch(
         run_duration=run_duration,
         timeout=600,
     )
+
+
+async def _poll_batch_log(log_file: str, timeout: float, prefix: str = "") -> str:
+    """Poll a batch log file until completion keywords found or timeout."""
+    import time as _time
+    deadline = _time.time() + timeout
+    while _time.time() < deadline:
+        log = await ssh_run(f"tail -5 {log_file} 2>/dev/null")
+        if any(kw in log for kw in ("$finish", "COMPLETE", "PASS", "FAIL", "Errors:")):
+            break
+        await asyncio.sleep(10)
+
+    result = await ssh_run(
+        f"grep -E 'PASS|FAIL|Errors:|\\$finish|COMPLETE' {log_file} 2>/dev/null | tail -30"
+    )
+    return prefix + result
 
 
 # ===========================================================================
