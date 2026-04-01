@@ -784,54 +784,97 @@ async def _run_batch_regression(
     sim_mode: str = "",
     extra_args: str = "",
 ) -> str:
-    """Execute regression tests via nohup + stdbuf (replaces screen).
+    """Execute regression tests via nohup + stdbuf with job resume.
 
-    nohup + stdbuf -oL: immediate log flush, no screen buffer delay.
+    nohup + stdbuf -oL: immediate log flush, no buffer delay.
+    Job resume: on reconnection, resumes from last completed test.
 
-    needs_test_name=False → regression_script handles all tests → 1 cmd, poll REGRESSION_COMPLETE
+    needs_test_name=False → regression_script handles all tests → 1 cmd
     needs_test_name=True  → iterate test_list, per-test nohup + poll
     """
     import time as _time
 
+    job_file = "/tmp/mcp_regression_job.json"
     ts = int(_time.time())
     log_file = f"/tmp/mcp_regression_{ts}.log"
 
     # v4.1: resolve sim_mode/extra_args for regression
     effective_sim_mode = sim_mode or runner.get("default_mode", "rtl")
     params = _resolve_sim_params(runner, effective_sim_mode, extra_args=extra_args)
-
     info = _resolve_exec_cmd(runner, regression=True)
+
+    # Check for existing regression job (reconnection scenario)
+    completed_tests: list[str] = []
+    existing_job = await ssh_run(f"cat {job_file} 2>/dev/null")
+    if existing_job.strip():
+        try:
+            job = json.loads(existing_job)
+            if job.get("type") == "regression":
+                pid = job.get("pid", 0)
+                pid_alive = await ssh_run(
+                    f"kill -0 {pid} 2>/dev/null && echo ALIVE || echo DEAD"
+                )
+                if "ALIVE" in pid_alive:
+                    # Current test still running → resume polling
+                    current = job.get("current", "")
+                    completed_tests = job.get("completed", [])
+                    log_file = job.get("log_file", log_file)
+                    current_log = job.get("current_log", "")
+                    if current_log:
+                        await _poll_batch_log(current_log, 600)
+                        completed_tests.append(current)
+                else:
+                    # PID dead — check what was completed
+                    completed_tests = job.get("completed", [])
+                    log_file = job.get("log_file", log_file)
+        except (json.JSONDecodeError, KeyError):
+            pass
+        await ssh_run(f"rm -f {job_file}", timeout=5)
 
     if not info.needs_test_name:
         # regression_script handles all tests internally → 1 cmd
-        cmd_with_extra = (
-            f"{info.cmd} {params['extra_args']}".strip()
-            if params["extra_args"]
-            else info.cmd
-        )
-        full_cmd = f"cd {sim_dir} && stdbuf -oL {cmd_with_extra}"
-        await ssh_run(
-            f"(nohup {full_cmd} {_build_redirect(log_file)} < /dev/null &)",
-            timeout=15.0,
-        )
-        # Poll for overall completion
-        for _ in range(360):  # max ~1 hour
+        if not completed_tests:  # only start if not resuming
+            cmd_with_extra = (
+                f"{info.cmd} {params['extra_args']}".strip()
+                if params["extra_args"]
+                else info.cmd
+            )
+            full_cmd = f"cd {sim_dir} && stdbuf -oL {cmd_with_extra}"
+            await ssh_run(
+                f"(nohup {full_cmd} {_build_redirect(log_file)} < /dev/null &)",
+                timeout=15.0,
+            )
+        for _ in range(360):
             log = await ssh_run(f"tail -5 {log_file} 2>/dev/null")
             if "REGRESSION_COMPLETE" in log or "All tests done" in log:
                 break
             await asyncio.sleep(10)
 
     else:
-        # Per-test loop — sequential nohup for each test
-        for test_name in test_list:
+        # Per-test loop — skip completed tests (resume support)
+        remaining = [t for t in test_list if t not in completed_tests]
+
+        for test_name in remaining:
             test_log = f"/tmp/mcp_regression_{ts}_{test_name}.log"
             env_prefix = f"TEST_NAME={test_name} "
 
-            # v4.1: mode-specific args_format
             test_args = params["test_args_format"].format(test_name=test_name)
             cmd = info.cmd.format(test_name=test_args) if info.needs_test_name else info.cmd
             if params["extra_args"]:
                 cmd = f"{cmd} {params['extra_args']}"
+
+            # Save job state (for resume on reconnection)
+            from datetime import datetime
+            job_info = json.dumps({
+                "type": "regression",
+                "pid": 0,  # updated after nohup
+                "log_file": log_file,
+                "current": test_name,
+                "current_log": test_log,
+                "completed": completed_tests,
+                "started_at": datetime.now().isoformat(),
+            })
+            await ssh_run(f"echo '{job_info}' > {job_file}", timeout=5)
 
             full_cmd = f"cd {sim_dir} && {env_prefix}stdbuf -oL {cmd}"
             await ssh_run(
@@ -839,12 +882,22 @@ async def _run_batch_regression(
                 timeout=15.0,
             )
 
-            # Per-test completion poll (max 10 min each)
-            for _ in range(60):
-                log = await ssh_run(f"tail -3 {test_log} 2>/dev/null")
-                if any(kw in log for kw in ("$finish", "COMPLETE", "PASS", "FAIL")):
-                    break
-                await asyncio.sleep(10)
+            # Update PID in job file
+            pid_str = await ssh_run(
+                f"pgrep -f 'stdbuf.*{test_name}' 2>/dev/null | tail -1"
+            )
+            if pid_str.strip().isdigit():
+                job_update = json.dumps({
+                    "type": "regression", "pid": int(pid_str.strip()),
+                    "log_file": log_file, "current": test_name,
+                    "current_log": test_log, "completed": completed_tests,
+                })
+                await ssh_run(f"echo '{job_update}' > {job_file}", timeout=5)
+
+            # Per-test poll
+            await _poll_batch_log(test_log, 600)
+
+            completed_tests.append(test_name)
 
             # Method 6-B fallback
             if rename_dump:
@@ -861,6 +914,9 @@ async def _run_batch_regression(
                 f"grep -E 'PASS|FAIL|Errors:' {test_log} 2>/dev/null >> {log_file}",
                 timeout=10.0,
             )
+
+    # Cleanup job file
+    await ssh_run(f"rm -f {job_file}", timeout=5)
 
     # Parse final results
     raw = await ssh_run(
