@@ -14,9 +14,13 @@ import xcelium_mcp.debug_tools as debug_tools
 import xcelium_mcp.checkpoint_manager as checkpoint_manager
 from xcelium_mcp.sim_runner import (
     UserInputRequired,
+    _build_redirect,
+    _detect_vnc_display,
     _get_default_sim_dir,
     _load_or_detect_runner,
+    _login_shell_cmd,
     _resolve_exec_cmd,
+    _resolve_test_name,
     _run_batch_regression,
     _run_batch_single,
     _update_registry_from_config,
@@ -73,6 +77,321 @@ def _get_bridge(target: str = "auto") -> TclBridge:
     raise ConnectionError(
         "Not connected. Call sim_start or connect_simulator first."
     )
+
+
+# ===================================================================
+# v4.1 Phase 2 — SimVision GUI + list_tests + live waveform
+# ===================================================================
+
+
+@mcp.tool()
+async def database_open(shm_path: str, name: str = "") -> str:
+    """Open SHM database. Uses correct syntax based on bridge type.
+
+    SimVision: 'database open path'
+    xmsim:     'database -open path -shm'
+    Routes to SimVision bridge first, falls back to xmsim.
+    """
+    # SimVision bridge first
+    if _simvision_bridge and _simvision_bridge.connected:
+        bridge = _simvision_bridge
+        name_opt = f" -name {name}" if name else ""
+        try:
+            result = await bridge.execute(f"database open {shm_path}{name_opt}")
+            return f"Database opened (SimVision): {result}"
+        except TclError:
+            pass
+
+    # xmsim fallback
+    try:
+        bridge = _get_xmsim_bridge()
+        result = await bridge.execute(f"database -open {shm_path} -shm")
+        return f"Database opened (xmsim): {result}"
+    except (ConnectionError, TclError) as e:
+        return f"ERROR: Could not open database: {e}"
+
+
+@mcp.tool()
+async def simvision_setup(
+    shm_path: str = "",
+    signals: list[str] = [],
+    zoom_start: str = "",
+    zoom_end: str = "",
+) -> str:
+    """One-shot SimVision setup: open SHM + create waveform + add signals + zoom.
+
+    Args:
+        shm_path:   SHM database path. Empty = skip database open.
+        signals:    Signal paths to add to waveform.
+        zoom_start: Zoom start time. Empty = full range.
+        zoom_end:   Zoom end time. Empty = full range.
+    """
+    bridge = _get_simvision_bridge()
+    results = []
+
+    if shm_path:
+        db_result = await database_open(shm_path)
+        results.append(db_result)
+
+    # waveform_add_signals handles window creation + dedup
+    if signals:
+        add_result = await waveform_add_signals(signals=signals)
+        results.append(add_result)
+
+    if zoom_start and zoom_end:
+        try:
+            await bridge.execute(f"waveform xview limits {zoom_start} {zoom_end}")
+            results.append(f"Zoomed to {zoom_start} – {zoom_end}")
+        except TclError as e:
+            results.append(f"Zoom failed: {e}")
+
+    return "\n".join(results) if results else "No actions performed."
+
+
+@mcp.tool()
+async def list_tests(sim_dir: str = "", pattern: str = "") -> str:
+    """List available test names using test_discovery.command from registry.
+
+    Args:
+        sim_dir: Simulation directory. Empty = registry default.
+        pattern: Filter pattern. Empty = all tests.
+    """
+    resolved_dir = sim_dir if sim_dir else await _get_default_sim_dir()
+    if not resolved_dir:
+        try:
+            await run_full_discovery(sim_dir)
+            resolved_dir = await _get_default_sim_dir()
+        except UserInputRequired as e:
+            return f"USER INPUT REQUIRED:\n{e.prompt}"
+
+    config = await load_sim_config(resolved_dir)
+    if not config:
+        return "ERROR: No config. Run sim_discover first."
+
+    discovery = config.get("test_discovery", {})
+    cached = discovery.get("cached_tests", [])
+
+    if not cached:
+        cmd = discovery.get("command", "")
+        if not cmd:
+            return "ERROR: test_discovery.command not configured.\nSet via: mcp_config set test_discovery.command '<command>'"
+        r = await ssh_run(f"cd {resolved_dir} && {cmd}", timeout=30)
+        cached = [t.strip() for t in r.strip().splitlines() if t.strip()]
+        if cached:
+            # Cache via config_action (write centralization)
+            from datetime import datetime
+            await config_action("set", "config", "test_discovery.cached_tests",
+                                __import__("json").dumps(cached))
+            await config_action("set", "config", "test_discovery.cached_at",
+                                datetime.now().isoformat())
+
+    if pattern:
+        cached = [t for t in cached if pattern in t]
+
+    if not cached:
+        return f"No tests found{f' (pattern={pattern})' if pattern else ''}."
+
+    return f"Tests ({len(cached)} found):\n" + "\n".join(f"  {t}" for t in sorted(cached))
+
+
+@mcp.tool()
+async def simvision_start(
+    test_name: str = "",
+    shm_path: str = "",
+    display: str = "",
+    sim_dir: str = "",
+) -> str:
+    """Start SimVision or connect to already running instance.
+
+    Args:
+        test_name: Test name for SHM lookup. Empty = latest SHM.
+        shm_path:  Explicit SHM path (overrides test_name).
+        display:   X11 DISPLAY. Empty = auto-detect user's VNC session.
+        sim_dir:   Simulation directory. Empty = registry default.
+    """
+    global _simvision_bridge
+
+    # 0. Disconnect existing (max 1 constraint)
+    if _simvision_bridge and _simvision_bridge.connected:
+        await _simvision_bridge.disconnect()
+        _simvision_bridge = None
+
+    # 1. Check existing SimVision bridge → auto-connect
+    r = await ssh_run("cat /tmp/mcp_bridge_ready_* 2>/dev/null")
+    for line in r.strip().splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 2 and parts[1] == "simvision":
+            port = int(parts[0])
+            bridge = TclBridge(host="localhost", port=port)
+            try:
+                ping = await bridge.connect()
+                _simvision_bridge = bridge
+                return f"SimVision already running — connected to port {port} (ping={ping})"
+            except Exception:
+                pass
+
+    # 2. Resolve sim_dir + config
+    resolved_dir = sim_dir if sim_dir else await _get_default_sim_dir()
+    if not resolved_dir:
+        return "ERROR: No sim_dir. Run sim_discover first."
+    config = await load_sim_config(resolved_dir)
+    runner = config.get("runner", {}) if config else {}
+
+    # 3. Resolve SHM (glob)
+    if not shm_path:
+        if test_name:
+            test_name = await _resolve_test_name(test_name, resolved_dir)
+        dump_dir = f"{resolved_dir}/dump"
+        if test_name:
+            r2 = await ssh_run(f"ls -td {dump_dir}/*{test_name}*.shm 2>/dev/null | head -1")
+            if not r2.strip():
+                r2 = await ssh_run(f"ls -td {dump_dir}/*.shm 2>/dev/null | head -1")
+        else:
+            r2 = await ssh_run(f"ls -td {dump_dir}/*.shm 2>/dev/null | head -1")
+        shm_path = r2.strip() if r2.strip() else ""
+
+    # 4. Display
+    if not display:
+        display = await _detect_vnc_display()
+    if not display:
+        return (
+            "ERROR: No VNC display found.\n"
+            "Start VNC: 'vncserver'\nOr specify: simvision_start(display=':1')"
+        )
+    display_check = await ssh_run(f"xdpyinfo -display {display} 2>/dev/null | head -1")
+    if not display_check.strip():
+        return f"ERROR: Display {display} not accessible.\nCheck VNC: 'vncserver -list'"
+
+    # 5. Get run_dir
+    run_dir = runner.get("run_dir", "run")
+    run_dir_path = f"{resolved_dir}/{run_dir}"
+    exists = await ssh_run(f"test -d {run_dir_path} && echo YES || echo NO")
+    if "YES" not in exists:
+        return f"ERROR: run_dir not found: {run_dir_path}. Set via: mcp_config set runner.run_dir <path>"
+
+    # 6. Build + launch
+    env_files = runner.get("env_files", [])
+    env_shell = runner.get("env_shell", runner.get("login_shell", "/bin/csh"))
+    login_shell = runner.get("login_shell", "/bin/sh")
+
+    shm_arg = f" {shm_path}" if shm_path else ""
+    inner_parts = [f"setenv DISPLAY {display}"]
+    if runner.get("source_separately") and env_files:
+        for ef in env_files:
+            inner_parts.append(f"source {ef}")
+    inner_parts.append(f"cd {run_dir_path}")
+    inner_parts.append(f"simvision{shm_arg}")
+    inner_cmd = "; ".join(inner_parts)
+
+    if runner.get("source_separately") and env_files:
+        shell_cmd = f"{env_shell} -c '{inner_cmd}'"
+    else:
+        shell_cmd = _login_shell_cmd(login_shell, inner_cmd)
+
+    log_file = "/tmp/simvision_start.log"
+    cmd = f"(nohup {shell_cmd} {_build_redirect(log_file)} < /dev/null &)"
+    await ssh_run(cmd, timeout=15)
+
+    # 7. Wait for bridge ready + auto-connect
+    for i in range(30):
+        await __import__("asyncio").sleep(2)
+        r = await ssh_run("cat /tmp/mcp_bridge_ready_* 2>/dev/null")
+        for line in r.strip().splitlines():
+            parts = line.strip().split()
+            if len(parts) >= 2 and parts[1] == "simvision":
+                port = int(parts[0])
+                bridge = TclBridge(host="localhost", port=port)
+                try:
+                    ping = await bridge.connect()
+                    _simvision_bridge = bridge
+                    return (
+                        f"SimVision started and connected.\n"
+                        f"  display: {display}\n"
+                        f"  port: {port}\n"
+                        f"  run_dir: {run_dir_path}\n"
+                        f"  shm: {shm_path or '(none)'}\n"
+                        f"  log: {log_file}"
+                    )
+                except Exception:
+                    continue
+
+    log_tail = await ssh_run(f"tail -10 {log_file} 2>/dev/null")
+    return f"ERROR: SimVision bridge not ready after 60s.\nLog:\n{log_tail}"
+
+
+@mcp.tool()
+async def simvision_live(
+    signals: list[str] = [],
+    zoom_start: str = "",
+    zoom_end: str = "",
+    auto_reload: bool = True,
+) -> str:
+    """Connect SimVision to running xmsim for live waveform viewing.
+
+    Requires both xmsim and SimVision bridges connected.
+    Opens xmsim's SHM in SimVision, adds signals, enables auto-reload.
+    """
+    xmsim = _get_xmsim_bridge()
+    sv = _get_simvision_bridge()
+    results = []
+
+    # 1. Get xmsim SHM info + sim time
+    try:
+        shm_info = await xmsim.execute("database -list")
+        sim_time = await xmsim.execute("where")
+        results.append(f"xmsim at {sim_time.strip()}, SHM: {shm_info.strip()}")
+    except TclError as e:
+        results.append(f"xmsim info: {e}")
+
+    # 2. Open SHM in SimVision (try to parse path from database -list)
+    if shm_info.strip():
+        # database -list returns paths — try first entry
+        shm_path = shm_info.strip().splitlines()[0].strip()
+        try:
+            await sv.execute(f"database open {shm_path}")
+            results.append(f"SimVision opened: {shm_path}")
+        except TclError as e:
+            results.append(f"SHM open failed: {e}")
+
+    # 3. Add signals (reuses waveform_add_signals — window auto-create + dedup)
+    if signals:
+        add_result = await waveform_add_signals(signals=signals)
+        results.append(add_result)
+
+    # 4. Zoom
+    if zoom_start and zoom_end:
+        try:
+            await sv.execute(f"waveform xview limits {zoom_start} {zoom_end}")
+            results.append(f"Zoomed to {zoom_start} – {zoom_end}")
+        except TclError:
+            pass
+
+    # 5. Auto-reload
+    if auto_reload:
+        try:
+            await sv.execute(
+                "proc _mcp_auto_reload {} { "
+                "  catch {database reload}; "
+                "  after 2000 _mcp_auto_reload "
+                "}; "
+                "after 2000 _mcp_auto_reload"
+            )
+            results.append("Auto-reload enabled (2s interval)")
+        except TclError as e:
+            results.append(f"Auto-reload failed: {e}")
+
+    return "\n".join(results)
+
+
+@mcp.tool()
+async def simvision_live_stop() -> str:
+    """Stop SimVision live waveform auto-reload."""
+    sv = _get_simvision_bridge()
+    try:
+        await sv.execute("foreach id [after info] { after cancel $id }")
+        return "Auto-reload stopped."
+    except TclError as e:
+        return f"ERROR: {e}"
 
 
 # ===================================================================
@@ -500,20 +819,69 @@ async def release_signal(signal: str) -> str:
 async def waveform_add_signals(
     signals: list[str],
     group_name: str = "",
+    window_name: str = "",
 ) -> str:
-    """Add signals to the SimVision waveform viewer.
+    """Add signals to SimVision waveform. Auto-creates window, skips duplicates.
 
     Args:
-        signals: List of signal paths to add.
-        group_name: Optional group name for organizing signals.
+        signals:     Signal paths to add.
+        group_name:  Group within window. Empty = no group.
+        window_name: Target waveform window. Empty = current (or auto-create).
     """
     bridge = _get_simvision_bridge()
-    sig_str = " ".join(signals)
-    cmd = f"waveform add -signals {{{sig_str}}}"
+    results = []
+
+    # 1. Window: specified → switch, unspecified → current or auto-create
+    if window_name:
+        try:
+            await bridge.execute(f"waveform using {window_name}")
+        except TclError:
+            avail = await _list_waveform_windows(bridge)
+            return f"ERROR: Window '{window_name}' not found. Available: {avail}"
+    else:
+        try:
+            current = await bridge.execute("waveform using")
+            if not current.strip():
+                raise TclError("empty")
+        except TclError:
+            wname = await bridge.execute("waveform new")
+            results.append(f"Waveform window created: {wname}")
+
+    # 2. Dedup: query existing signals
+    try:
+        existing = await bridge.execute("waveform signals -format list")
+        existing_set = set(existing.strip().splitlines())
+    except TclError:
+        existing_set = set()
+
+    new_signals = [s for s in signals if s not in existing_set]
+    skipped = len(signals) - len(new_signals)
+
+    if not new_signals:
+        return f"All {len(signals)} signal(s) already in waveform (skipped)."
+
+    # 3. Add signals
+    sig_str = " ".join(new_signals)
     if group_name:
-        cmd = f"waveform add -using {group_name} -signals {{{sig_str}}}"
-    result = await bridge.execute(cmd)
-    return f"Added {len(signals)} signal(s) to waveform. {result}"
+        try:
+            await bridge.execute(f"waveform add -groups {{{group_name}}}")
+        except TclError:
+            pass
+        result = await bridge.execute(f"waveform add -using {group_name} -signals {{{sig_str}}}")
+    else:
+        result = await bridge.execute(f"waveform add -signals {{{sig_str}}}")
+
+    results.append(f"Added {len(new_signals)}, skipped {skipped} (duplicate). {result}")
+    return "\n".join(results)
+
+
+async def _list_waveform_windows(bridge) -> str:
+    """List available waveform windows."""
+    try:
+        r = await bridge.execute("waveform get -name")
+        return r.strip() if r.strip() else "(none)"
+    except TclError:
+        return "(error)"
 
 
 @mcp.tool()
