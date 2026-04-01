@@ -688,24 +688,9 @@ async def _run_batch_single(
     # Method 6-A: inject TEST_NAME for SHM file naming
     env_prefix = f"TEST_NAME={test_name} "
 
-    if effective_timeout <= 120:
-        # --- Direct ssh_run ---
-        full_cmd = f"cd {sim_dir} && {env_prefix}{cmd}"
-        result = await ssh_run(full_cmd, timeout=float(timeout))
-
-        if rename_dump:
-            # Method 6-B fallback
-            mv_cmd = (
-                f"cd {sim_dir} && "
-                f"if [ -d dump/ci_top.shm ]; then "
-                f"mv dump/ci_top.shm dump/ci_top_{test_name}.shm; fi"
-            )
-            await ssh_run(mv_cmd, timeout=30.0)
-
-        prefix = (
-            f"[Stale checkpoints removed: {stale_removed}]\n" if stale_removed else ""
-        )
-        return prefix + result
+    # Always use nohup + stdbuf + polling (no direct ssh_run for batch)
+    # Direct ssh_run returns entire compile+sim log (1MB+) — unusable.
+    # nohup + polling returns grep summary only.
 
     # --- nohup + stdbuf + job resume ---
     job_file = "/tmp/mcp_batch_job.json"
@@ -772,7 +757,10 @@ async def _run_batch_single(
         )
         await ssh_run(mv_cmd, timeout=30.0)
 
-    return result
+    prefix = (
+        f"[Stale checkpoints removed: {stale_removed}]\n" if stale_removed else ""
+    )
+    return prefix + result
 
 
 async def _run_batch_regression(
