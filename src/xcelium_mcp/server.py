@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import json
+import os
+import re
 import textwrap
+import time
+from datetime import datetime
+from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP, Image
 
@@ -131,7 +138,7 @@ async def database_open(shm_path: str, name: str = "") -> str:
 @mcp.tool()
 async def simvision_setup(
     shm_path: str = "",
-    signals: list[str] = [],
+    signals: list[str] | None = None,
     zoom_start: str = "",
     zoom_end: str = "",
 ) -> str:
@@ -143,6 +150,8 @@ async def simvision_setup(
         zoom_start: Zoom start time. Empty = full range.
         zoom_end:   Zoom end time. Empty = full range.
     """
+    if signals is None:
+        signals = []
     bridge = _get_simvision_bridge()
     results = []
 
@@ -196,9 +205,8 @@ async def list_tests(sim_dir: str = "", pattern: str = "") -> str:
         cached = [t.strip() for t in r.strip().splitlines() if t.strip()]
         if cached:
             # Cache via config_action (write centralization)
-            from datetime import datetime
             await config_action("set", "config", "test_discovery.cached_tests",
-                                __import__("json").dumps(cached))
+                                json.dumps(cached))
             await config_action("set", "config", "test_discovery.cached_at",
                                 datetime.now().isoformat())
 
@@ -311,7 +319,7 @@ async def simvision_start(
 
     # 7. Wait for bridge ready + auto-connect
     for i in range(30):
-        await __import__("asyncio").sleep(2)
+        await asyncio.sleep(2)
         r = await ssh_run("cat /tmp/mcp_bridge_ready_* 2>/dev/null")
         for line in r.strip().splitlines():
             parts = line.strip().split()
@@ -338,7 +346,7 @@ async def simvision_start(
 
 @mcp.tool()
 async def simvision_live(
-    signals: list[str] = [],
+    signals: list[str] | None = None,
     zoom_start: str = "",
     zoom_end: str = "",
     auto_reload: bool = True,
@@ -348,6 +356,8 @@ async def simvision_live(
     Requires both xmsim and SimVision bridges connected.
     Opens xmsim's SHM in SimVision, adds signals, enables auto-reload.
     """
+    if signals is None:
+        signals = []
     try:
         xmsim = _get_xmsim_bridge()
     except ConnectionError as e:
@@ -750,7 +760,6 @@ async def set_breakpoint(condition: str, name: str = "") -> str:
     bridge = _get_xmsim_bridge()
 
     # Parse "signal op value" format for hierarchical signal paths
-    import re
     m = re.match(r'^(\S+)\s*(==|!=|>|<|>=|<=)\s*(.+)$', condition.strip())
     if m and '.' in m.group(1):
         sig, op, val = m.group(1), m.group(2), m.group(3).strip()
@@ -934,7 +943,7 @@ async def waveform_add_signals(
     return "\n".join(results)
 
 
-async def _list_waveform_windows(bridge) -> str:
+async def _list_waveform_windows(bridge: TclBridge) -> str:
     """List available waveform windows."""
     try:
         r = await bridge.execute("waveform get -name")
@@ -1181,7 +1190,6 @@ async def save_checkpoint(
     bridge = _get_xmsim_bridge()
 
     resolved_dir = sim_dir if sim_dir else await _get_default_sim_dir()
-    import os
     chk_base = os.path.join(resolved_dir, "checkpoints") if resolved_dir else "/tmp/mcp_checkpoints"
 
     cmd = f"__SAVE__ {name} {chk_base}" if name else f"__SAVE__  {chk_base}"
@@ -1218,8 +1226,6 @@ async def restore_checkpoint(
         sim_dir: Simulation directory (auto-detected if empty).
     """
     resolved_dir = sim_dir if sim_dir else await _get_default_sim_dir()
-
-    import os
     chk_base = os.path.join(resolved_dir, "checkpoints") if resolved_dir else "/tmp/mcp_checkpoints"
 
     # compile_hash verification
@@ -1481,11 +1487,11 @@ async def sim_batch_run(
     test_name: str,
     sim_dir: str = "",
     from_checkpoint: str = "",
-    probe_signals: list[str] = [],
+    probe_signals: list[str] | None = None,
     shm_path: str = "",
     run_duration: str = "",
     rename_dump: bool = False,
-    dump_signals: list[str] = [],
+    dump_signals: list[str] | None = None,
     timeout: int = 600,
     sim_mode: str = "",
     extra_args: str = "",
@@ -1512,6 +1518,10 @@ async def sim_batch_run(
         dump_signals: Additional signals to dump (prepare_dump_scope).
         timeout: SSH wait timeout in seconds.
     """
+    if probe_signals is None:
+        probe_signals = []
+    if dump_signals is None:
+        dump_signals = []
     # Resolve sim_dir
     try:
         resolved_sim_dir = sim_dir if sim_dir else await _get_default_sim_dir()
@@ -1589,7 +1599,7 @@ async def sim_batch_regression(
     test_list: list[str],
     sim_dir: str = "",
     from_checkpoint: str = "",
-    dump_signals: list[str] = [],
+    dump_signals: list[str] | None = None,
     rename_dump: bool = False,
     parallel: bool = False,
     sim_mode: str = "",
@@ -1613,6 +1623,8 @@ async def sim_batch_regression(
         rename_dump: Enable Method 6-B SHM rename fallback.
         parallel: Parallel screen execution (reserved for future phase).
     """
+    if dump_signals is None:
+        dump_signals = []
 
     if parallel:
         return "ERROR: parallel=True is reserved for a future phase. Use parallel=False."
@@ -1703,7 +1715,6 @@ async def _prepare_dump_scope_internal(
     Detects original Tcl from sim_dir if input_tcl is empty.
     Returns path to the extended Tcl file (written as setup_rtl_debug.tcl).
     """
-    from pathlib import Path
 
     # Auto-detect input Tcl if not provided
     if not input_tcl:
@@ -1805,7 +1816,7 @@ async def bisect_signal_dump(
     value: str,
     start_ns: int = 0,
     end_ns: int = 0,
-    context_signals: list[str] = [],
+    context_signals: list[str] | None = None,
 ) -> str:
     """Binary search in SHM dump CSV for first occurrence of a signal condition.
 
@@ -1823,6 +1834,8 @@ async def bisect_signal_dump(
         end_ns:          Search end time in nanoseconds (0 = to end).
         context_signals: Additional signals to include in CSV extract for context.
     """
+    if context_signals is None:
+        context_signals = []
     all_signals = list({signal} | set(context_signals))
 
     try:
@@ -1887,7 +1900,7 @@ async def request_additional_signals(
     missing_signals: list[str],
     shm_path: str,
     bug_time_ns: int = 0,
-    available_checkpoints: list[str] = [],
+    available_checkpoints: list[str] | None = None,
 ) -> str:
     """Signal absence handler — presents capture mode options when signals are missing from SHM.
 
@@ -1903,6 +1916,8 @@ async def request_additional_signals(
         bug_time_ns:           Approximate bug time (used for checkpoint selection in [A']).
         available_checkpoints: Known checkpoint names (auto-queried from registry if empty).
     """
+    if available_checkpoints is None:
+        available_checkpoints = []
     # Auto-query nearest checkpoints from checkpoint_manager when not provided
     resolved_checkpoints = list(available_checkpoints)
     if not resolved_checkpoints and bug_time_ns:
@@ -1960,7 +1975,7 @@ async def generate_debug_tcl(
     signals: list[str],
     center_time_ns: int,
     zoom_range_ns: int = 10000,
-    markers: list[dict] = [],
+    markers: list[dict] | None = None,
     context_note: str = "",
     output_path: str = "",
 ) -> str:
@@ -1982,11 +1997,11 @@ async def generate_debug_tcl(
         context_note:   AI analysis summary printed to SimVision console.
         output_path:    Output .tcl path. Auto-generated in SHM parent dir if empty.
     """
-    import time as _time
-    from pathlib import Path
+    if markers is None:
+        markers = []
 
     if not output_path:
-        ts = int(_time.time())
+        ts = int(time.time())
         output_path = str(Path(shm_path).parent / f"debug_{ts}.tcl")
 
     content = debug_tools.generate_debug_tcl_content(
@@ -2040,7 +2055,7 @@ async def open_debug_view(
     center_time_ns: int,
     zoom_range_ns: int = 10000,
     cursor_time_ns: int = 0,
-    markers: list[dict] = [],
+    markers: list[dict] | None = None,
     group_name: str = "AI_Debug",
     context_note: str = "",
     display: str = ":1",
@@ -2066,6 +2081,8 @@ async def open_debug_view(
         context_note:   AI analysis summary printed to SimVision console.
         display:        VNC DISPLAY variable (default ":1").
     """
+    if markers is None:
+        markers = []
     # 1. VNC check
     vnc_check = await ssh_run(
         f"vncserver -list 2>/dev/null | grep '{display}' || echo NONE",
@@ -2095,7 +2112,7 @@ async def open_debug_view(
     # 3. Wait for SimVision bridge ready file (30s)
     bridge_ready = False
     for _i in range(15):
-        await __import__("asyncio").sleep(2)
+        await asyncio.sleep(2)
         r = await ssh_run("cat /tmp/mcp_bridge_ready_* 2>/dev/null")
         for line in r.strip().splitlines():
             parts = line.strip().split()
@@ -2164,7 +2181,7 @@ async def compare_waveforms(
     shm_before: str,
     shm_after: str,
     signals: list[str],
-    time_range_ns: list[int] = [],
+    time_range_ns: list[int] | None = None,
     output_mode: str = "csv_diff",
     display: str = ":1",
 ) -> str:
@@ -2191,7 +2208,8 @@ async def compare_waveforms(
         output_mode:   "csv_diff" (text diff) or "simvision" (GUI side-by-side).
         display:       VNC DISPLAY for simvision mode (default ":1").
     """
-    import csv as _csv
+    if time_range_ns is None:
+        time_range_ns = []
 
     # ------------------------------------------------------------------ #
     # simvision mode: open both SHMs in SimVision for side-by-side view   #
@@ -2218,7 +2236,7 @@ async def compare_waveforms(
         # 3. Wait for SimVision bridge ready file (30s)
         bridge_ready = False
         for _i in range(15):
-            await __import__("asyncio").sleep(2)
+            await asyncio.sleep(2)
             r = await ssh_run("cat /tmp/mcp_bridge_ready_* 2>/dev/null")
             for line in r.strip().splitlines():
                 parts = line.strip().split()
@@ -2297,7 +2315,7 @@ async def compare_waveforms(
     def _load_rows(path: str) -> dict[int, dict]:
         rows: dict[int, dict] = {}
         with open(path, newline="", encoding="utf-8") as f:
-            for row in _csv.DictReader(f):
+            for row in csv.DictReader(f):
                 rows[int(row.get("time", 0))] = row
         return rows
 
@@ -2374,10 +2392,8 @@ async def export_debug_context(
         suggested_fix:    Optional fix suggestion.
         output_path:      Output file path. Default: /tmp/debug_{test_name}.md
     """
-    import time as _time
-
     if not output_path:
-        output_path = f"/tmp/debug_{test_name}_{int(_time.time())}.md"
+        output_path = f"/tmp/debug_{test_name}_{int(time.time())}.md"
 
     content = debug_tools.generate_debug_context_md(
         test_name=test_name,
@@ -2389,10 +2405,9 @@ async def export_debug_context(
         suggested_fix=suggested_fix,
     )
 
-    from pathlib import Path as _Path
-    _Path(output_path).write_text(content, encoding="utf-8")
+    Path(output_path).write_text(content, encoding="utf-8")
 
-    if not _Path(output_path).exists():
+    if not Path(output_path).exists():
         return f"ERROR: Failed to write debug context to {output_path}"
 
     return f"Debug context exported to: {output_path}"

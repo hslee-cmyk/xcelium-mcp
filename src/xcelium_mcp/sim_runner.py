@@ -18,8 +18,30 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re as _re
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
+
+
+def _sq(s: str) -> str:
+    """Shell-quote a user-supplied string to prevent injection."""
+    return shlex.quote(s)
+
+
+def _validate_extra_args(s: str) -> str:
+    """Validate extra_args: reject dangerous shell metacharacters.
+
+    extra_args intentionally contains multiple shell tokens (e.g. "--flag val"),
+    so we cannot quote it as a whole.  Instead we reject metacharacters that
+    could chain/inject commands.
+    """
+    if _re.search(r'[;|&$`]', s):
+        raise ValueError(
+            f"extra_args contains forbidden shell metacharacter: {s!r}  "
+            "Only flags and values are allowed (no ;|&$` characters)."
+        )
+    return s
 
 
 # ---------------------------------------------------------------------------
@@ -150,18 +172,20 @@ def _write_json(path, data: dict) -> None:
     Path(str(path)).write_text(json.dumps(data, indent=2))
 
 
-def _update_registry_from_config(sim_dir: str, tb_type: str, config: dict) -> None:
+async def _update_registry_from_config(sim_dir: str, tb_type: str, config: dict) -> None:
     """Register sim environment in mcp_registry.json.
 
     This is the ONLY function that writes to mcp_registry.json
     (besides mcp_config tool). Replaces v3's _update_registry_env().
     """
-    import subprocess
-    r = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        capture_output=True, text=True, cwd=sim_dir
+    proc = await asyncio.create_subprocess_exec(
+        "git", "rev-parse", "--show-toplevel",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=sim_dir,
     )
-    project_root = r.stdout.strip() if r.returncode == 0 else str(Path.home())
+    stdout, _ = await proc.communicate()
+    project_root = stdout.decode().strip() if proc.returncode == 0 else str(Path.home())
 
     registry = load_registry()
     projects = registry.setdefault("projects", {})
@@ -248,7 +272,7 @@ async def _detect_env_shell(env_file: str, login_shell: str) -> str:
     Priority: shebang → file extension → content patterns → login_shell fallback.
     """
     # 1. shebang
-    shebang = await ssh_run(f"head -1 {env_file} 2>/dev/null")
+    shebang = await ssh_run(f"head -1 {_sq(env_file)} 2>/dev/null")
     if shebang.startswith("#!"):
         return shebang[2:].strip().split()[0]
 
@@ -266,7 +290,7 @@ async def _detect_env_shell(env_file: str, login_shell: str) -> str:
             return shell
 
     # 3. content patterns
-    content = await ssh_run(f"head -30 {env_file} 2>/dev/null")
+    content = await ssh_run(f"head -30 {_sq(env_file)} 2>/dev/null")
     if "foreach" in content or "breaksw" in content:
         return "/bin/tcsh"
     if "setenv" in content:
@@ -311,11 +335,11 @@ async def _detect_eda_env(sim_dir: str, project_root: str, login_shell: str) -> 
     candidates: list[str] = []
 
     for search_dir, pat in search_specs:
-        r = await ssh_run(f"find {search_dir} -maxdepth 1 \\( -type f -o -type l \\) {pat} 2>/dev/null")
+        r = await ssh_run(f"find {_sq(search_dir)} -maxdepth 1 \\( -type f -o -type l \\) {pat} 2>/dev/null")
         for f in r.strip().splitlines():
             if not f:
                 continue
-            r2 = await ssh_run(f"grep -lE '{kw_grep}' {f} 2>/dev/null")
+            r2 = await ssh_run(f"grep -lE '{kw_grep}' {_sq(f)} 2>/dev/null")
             if r2.strip():
                 candidates.append(f)
 
@@ -323,7 +347,7 @@ async def _detect_eda_env(sim_dir: str, project_root: str, login_shell: str) -> 
     for candidate in candidates:
         env_shell = await _detect_env_shell(candidate, login_shell)
         # No '2>/dev/null' inside csh/tcsh -c — causes Ambiguous redirect error
-        r = await ssh_run(f"{env_shell} -c 'source {candidate} && which xrun'")
+        r = await ssh_run(f"{env_shell} -c 'source {_sq(candidate)} && which xrun'")
         if r.strip() and "/" in r.strip():
             return {
                 "env_files": [candidate],
@@ -350,7 +374,7 @@ async def _detect_shell_and_env(sim_dir: str, script: str, project_root: str) ->
 
     # script_shell from shebang
     script_path = f"{sim_dir}/{script}"
-    shebang = await ssh_run(f"head -1 {script_path} 2>/dev/null")
+    shebang = await ssh_run(f"head -1 {_sq(script_path)} 2>/dev/null")
     script_shell: str | None = None
     if shebang.strip().startswith("#!"):
         script_shell = shebang.strip()[2:].split()[0]
@@ -378,10 +402,10 @@ async def _auto_detect_runner(sim_dir: str) -> dict:
     candidates: list[dict] = []
 
     # 1. Makefile with sim/test/run target
-    r = await ssh_run(f"grep -lE 'sim:|test:|run:' {sim_dir}/Makefile 2>/dev/null")
+    r = await ssh_run(f"grep -lE 'sim:|test:|run:' {_sq(sim_dir + '/Makefile')} 2>/dev/null")
     if r.strip():
         targets = await ssh_run(
-            f"grep -oE '^(sim|test|run|simulate|regression)[^:]*:' {sim_dir}/Makefile "
+            f"grep -oE '^(sim|test|run|simulate|regression)[^:]*:' {_sq(sim_dir + '/Makefile')} "
             f"| tr -d ':'"
         )
         best_target = targets.strip().splitlines()[0] if targets.strip() else "sim"
@@ -393,13 +417,13 @@ async def _auto_detect_runner(sim_dir: str) -> dict:
 
     # 2. Executable shell scripts with recognized names
     r = await ssh_run(
-        f"find {sim_dir} -maxdepth 1 -perm /111 "
+        f"find {_sq(sim_dir)} -maxdepth 1 -perm /111 "
         r"\( -name 'run_sim*' -o -name 'run_test*' -o -name '*.sh' \) 2>/dev/null"
     )
     for script in r.strip().splitlines():
         if not script:
             continue
-        shebang = await ssh_run(f"head -1 {script} 2>/dev/null")
+        shebang = await ssh_run(f"head -1 {_sq(script)} 2>/dev/null")
         if shebang.strip().startswith("#!"):
             candidates.append({
                 "runner": "shell",
@@ -408,7 +432,7 @@ async def _auto_detect_runner(sim_dir: str) -> dict:
             })
 
     # 3. *.f filelist + xrun/irun available
-    r = await ssh_run(f"ls {sim_dir}/*.f 2>/dev/null | head -1")
+    r = await ssh_run(f"ls {_sq(sim_dir)}/*.f 2>/dev/null | head -1")
     if r.strip():
         tool = await ssh_run("which xrun 2>/dev/null || which irun 2>/dev/null | head -1")
         if tool.strip():
@@ -420,7 +444,7 @@ async def _auto_detect_runner(sim_dir: str) -> dict:
             })
 
     # 4. Python runner
-    r = await ssh_run(f"ls {sim_dir}/run_sim.py {sim_dir}/sim.py 2>/dev/null | head -1")
+    r = await ssh_run(f"ls {_sq(sim_dir + '/run_sim.py')} {_sq(sim_dir + '/sim.py')} 2>/dev/null | head -1")
     if r.strip():
         py = await ssh_run("which python3 2>/dev/null || which python 2>/dev/null | head -1")
         py_cmd = py.strip().split("/")[-1] if py.strip() else "python3"
@@ -473,14 +497,15 @@ async def _analyze_tb_type(sim_dir: str) -> str:
     Returns: "uvm" | "ncsim_legacy" | "sv_directed" | "mixed" | "unknown"
     """
     # UVM markers
+    _sd = _sq(sim_dir)
     r_uvm = await ssh_run(
-        f"grep -rl 'uvm_component\\|uvm_test\\|UVM_TEST' {sim_dir} "
+        f"grep -rl 'uvm_component\\|uvm_test\\|UVM_TEST' {_sd} "
         f"--include='*.sv' --include='*.svh' 2>/dev/null | head -1"
     )
     has_uvm = bool(r_uvm.strip())
 
     # ncsim_legacy markers: run_sim script + *.f filelist
-    r_legacy = await ssh_run(f"ls {sim_dir}/run_sim {sim_dir}/*.f 2>/dev/null")
+    r_legacy = await ssh_run(f"ls {_sq(sim_dir + '/run_sim')} {_sq(sim_dir)}/*.f 2>/dev/null")
     has_legacy = bool(r_legacy.strip())
 
     if has_uvm and has_legacy:
@@ -492,7 +517,7 @@ async def _analyze_tb_type(sim_dir: str) -> str:
 
     # sv_directed: non-UVM SystemVerilog with interface/program
     r = await ssh_run(
-        f"grep -rl 'interface\\|program ' {sim_dir} --include='*.sv' 2>/dev/null | head -1"
+        f"grep -rl 'interface\\|program ' {_sq(sim_dir)} --include='*.sv' 2>/dev/null | head -1"
     )
     if r.strip():
         return "sv_directed"
@@ -527,7 +552,7 @@ async def _discover_sim_dir(hint: str = "") -> list[dict]:
         r"-o -name 'verif*' -o -name 'bench*' -o -name 'dv'"
     )
     r = await ssh_run(
-        f"find {project_root} -maxdepth 3 -mindepth 1 -type d \\( {patterns} \\) 2>/dev/null | sort"
+        f"find {_sq(project_root)} -maxdepth 3 -mindepth 1 -type d \\( {patterns} \\) 2>/dev/null | sort"
     )
     raw = r.strip().splitlines()
 
@@ -541,7 +566,7 @@ async def _discover_sim_dir(hint: str = "") -> list[dict]:
     # 4. analyze each candidate
     envs: list[dict] = []
     for sim_root in deduped:
-        r = await ssh_run(f"find {sim_root} -maxdepth 1 -mindepth 1 -type d 2>/dev/null")
+        r = await ssh_run(f"find {_sq(sim_root)} -maxdepth 1 -mindepth 1 -type d 2>/dev/null")
         subdirs = [s for s in r.strip().splitlines() if s]
         found_in_sub = False
         for sub in subdirs:
@@ -673,6 +698,7 @@ async def _run_batch_single(
     )
 
     # v4.1: _resolve_sim_params for mode-aware params
+    _validate_extra_args(extra_args)
     params = _resolve_sim_params(runner, sim_mode, extra_args, timeout)
     effective_timeout = params["timeout"]
 
@@ -680,13 +706,13 @@ async def _run_batch_single(
     info = _resolve_exec_cmd(runner, regression=False)
     # Format {test_name} placeholder with mode-specific args
     # e.g. {test_name} → "-test VENEZIA_TOP015 --" instead of bare "VENEZIA_TOP015"
-    test_args = params["test_args_format"].format(test_name=test_name)
+    test_args = params["test_args_format"].format(test_name=_sq(test_name))
     cmd = info.cmd.format(test_name=test_args) if info.needs_test_name else info.cmd
     if params["extra_args"]:
         cmd = f"{cmd} {params['extra_args']}"
 
     # Method 6-A: inject TEST_NAME for SHM file naming
-    env_prefix = f"TEST_NAME={test_name} "
+    env_prefix = f"TEST_NAME={_sq(test_name)} "
 
     # Always use nohup + stdbuf + polling (no direct ssh_run for batch)
     # Direct ssh_run returns entire compile+sim log (1MB+) — unusable.
@@ -721,16 +747,17 @@ async def _run_batch_single(
 
     # env VAR=val nohup ... — nohup treats first arg as command, so use env
     run_cmd = f"env {env_prefix}stdbuf -oL {cmd}"
-    await ssh_run(
-        f"cd {sim_dir} && (nohup {run_cmd} {_build_redirect(log_file)} < /dev/null &)",
+    # Combine nohup + PID capture in single shell to reliably get $!
+    pid_output = await ssh_run(
+        f"cd {_sq(sim_dir)} && nohup {run_cmd} {_build_redirect(log_file)} < /dev/null & echo $!",
         timeout=15.0,
     )
 
-    # Get PID of nohup process + save job file
-    pid_str = await ssh_run("echo $!", timeout=5)
-    # $! may not work after subshell — use pgrep fallback
+    # Parse PID from output (last line should be the PID from echo $!)
+    pid_str = pid_output.strip().splitlines()[-1] if pid_output.strip() else ""
+    # $! fallback — use pgrep if echo $! didn't yield a number
     if not pid_str.strip().isdigit():
-        pid_str = await ssh_run(f"pgrep -f 'stdbuf.*{test_name}' 2>/dev/null | tail -1")
+        pid_str = await ssh_run(f"pgrep -f {_sq('stdbuf.*' + test_name)} 2>/dev/null | tail -1")
     pid = int(pid_str.strip()) if pid_str.strip().isdigit() else 0
 
     if pid:
@@ -741,7 +768,7 @@ async def _run_batch_single(
             "test_name": test_name,
             "started_at": datetime.now().isoformat(),
         })
-        await ssh_run(f"echo '{job_info}' > {job_file}", timeout=5)
+        await ssh_run(f"cat > {job_file} << 'MCPEOF'\n{job_info}\nMCPEOF", timeout=5)
 
     # Poll for completion
     result = await _poll_batch_log(log_file, effective_timeout)
@@ -752,9 +779,9 @@ async def _run_batch_single(
     # Method 6-B fallback
     if rename_dump:
         mv_cmd = (
-            f"cd {sim_dir} && "
+            f"cd {_sq(sim_dir)} && "
             f"if [ -d dump/ci_top.shm ]; then "
-            f"mv dump/ci_top.shm dump/ci_top_{test_name}.shm; fi"
+            f"mv dump/ci_top.shm dump/ci_top_{_sq(test_name)}.shm; fi"
         )
         await ssh_run(mv_cmd, timeout=30.0)
 
@@ -788,6 +815,7 @@ async def _run_batch_regression(
     log_file = f"/tmp/mcp_regression_{ts}.log"
 
     # v4.1: resolve sim_mode/extra_args for regression
+    _validate_extra_args(extra_args)
     effective_sim_mode = sim_mode or runner.get("default_mode", "rtl")
     params = _resolve_sim_params(runner, effective_sim_mode, extra_args=extra_args)
     info = _resolve_exec_cmd(runner, regression=True)
@@ -830,7 +858,7 @@ async def _run_batch_regression(
             )
             run_cmd = f"stdbuf -oL {cmd_with_extra}"
             await ssh_run(
-                f"cd {sim_dir} && (nohup {run_cmd} {_build_redirect(log_file)} < /dev/null &)",
+                f"cd {_sq(sim_dir)} && (nohup {run_cmd} {_build_redirect(log_file)} < /dev/null &)",
                 timeout=15.0,
             )
         for _ in range(360):
@@ -844,10 +872,10 @@ async def _run_batch_regression(
         remaining = [t for t in test_list if t not in completed_tests]
 
         for test_name in remaining:
-            test_log = f"/tmp/mcp_regression_{ts}_{test_name}.log"
-            env_prefix = f"TEST_NAME={test_name} "
+            test_log = f"/tmp/mcp_regression_{ts}_{_sq(test_name)}.log"
+            env_prefix = f"TEST_NAME={_sq(test_name)} "
 
-            test_args = params["test_args_format"].format(test_name=test_name)
+            test_args = params["test_args_format"].format(test_name=_sq(test_name))
             cmd = info.cmd.format(test_name=test_args) if info.needs_test_name else info.cmd
             if params["extra_args"]:
                 cmd = f"{cmd} {params['extra_args']}"
@@ -863,17 +891,17 @@ async def _run_batch_regression(
                 "completed": completed_tests,
                 "started_at": datetime.now().isoformat(),
             })
-            await ssh_run(f"echo '{job_info}' > {job_file}", timeout=5)
+            await ssh_run(f"cat > {job_file} << 'MCPEOF'\n{job_info}\nMCPEOF", timeout=5)
 
             run_cmd = f"env {env_prefix}stdbuf -oL {cmd}"
             await ssh_run(
-                f"cd {sim_dir} && (nohup {run_cmd} {_build_redirect(test_log)} < /dev/null &)",
+                f"cd {_sq(sim_dir)} && (nohup {run_cmd} {_build_redirect(test_log)} < /dev/null &)",
                 timeout=15.0,
             )
 
             # Update PID in job file
             pid_str = await ssh_run(
-                f"pgrep -f 'stdbuf.*{test_name}' 2>/dev/null | tail -1"
+                f"pgrep -f {_sq('stdbuf.*' + test_name)} 2>/dev/null | tail -1"
             )
             if pid_str.strip().isdigit():
                 job_update = json.dumps({
@@ -881,7 +909,7 @@ async def _run_batch_regression(
                     "log_file": log_file, "current": test_name,
                     "current_log": test_log, "completed": completed_tests,
                 })
-                await ssh_run(f"echo '{job_update}' > {job_file}", timeout=5)
+                await ssh_run(f"cat > {job_file} << 'MCPEOF'\n{job_update}\nMCPEOF", timeout=5)
 
             # Per-test poll
             await _poll_batch_log(test_log, 600)
@@ -891,15 +919,15 @@ async def _run_batch_regression(
             # Method 6-B fallback
             if rename_dump:
                 mv_cmd = (
-                    f"cd {sim_dir} && "
+                    f"cd {_sq(sim_dir)} && "
                     f"if [ -d dump/ci_top.shm ]; then "
-                    f"mv dump/ci_top.shm dump/ci_top_{test_name}.shm; fi"
+                    f"mv dump/ci_top.shm dump/ci_top_{_sq(test_name)}.shm; fi"
                 )
                 await ssh_run(mv_cmd, timeout=30.0)
 
             # Append per-test result to main log
             await ssh_run(
-                f"echo '=== {test_name} ===' >> {log_file} && "
+                f"echo {_sq('=== ' + test_name + ' ===')} >> {log_file} && "
                 f"grep -E 'PASS|FAIL|Errors:' {test_log} 2>/dev/null >> {log_file}",
                 timeout=10.0,
             )
@@ -976,7 +1004,7 @@ async def _detect_setup_tcls(sim_dir: str) -> dict[str, str]:
     Returns: {"rtl": "scripts/setup_rtl.tcl", "gate": "scripts/setup_gate.tcl", ...}
     """
     r = await ssh_run(
-        f"find {sim_dir}/scripts -maxdepth 1 -name 'setup*.tcl' 2>/dev/null | sort"
+        f"find {_sq(sim_dir + '/scripts')} -maxdepth 1 -name 'setup*.tcl' 2>/dev/null | sort"
     )
     setup_tcls: dict[str, str] = {}
     for line in r.strip().splitlines():
@@ -1074,19 +1102,20 @@ async def _patch_legacy_run_script(sim_dir: str, runner_info: dict) -> str:
 
     script_name = _extract_script_name(runner_info.get("exec_cmd", ""))
     script_path = f"{sim_dir}/{script_name}"
+    _sp = _sq(script_path)
 
     # Check if file exists
-    exists = await ssh_run(f"test -f {script_path} && echo YES || echo NO", timeout=5)
+    exists = await ssh_run(f"test -f {_sp} && echo YES || echo NO", timeout=5)
     if "YES" not in exists:
         return "run script not found"
 
     # Check if already patched
-    r = await ssh_run(f"grep -c 'MCP_INPUT_TCL' {script_path} 2>/dev/null")
+    r = await ssh_run(f"grep -c 'MCP_INPUT_TCL' {_sp} 2>/dev/null")
     if r.strip() and r.strip() != "0":
         return "already patched"
 
     # Find xmsim -input line
-    r = await ssh_run(f"grep -n 'xmsim.*-input' {script_path} 2>/dev/null")
+    r = await ssh_run(f"grep -n 'xmsim.*-input' {_sp} 2>/dev/null")
     if not r.strip():
         return "no xmsim -input found — manual patch needed"
 
@@ -1100,11 +1129,11 @@ async def _patch_legacy_run_script(sim_dir: str, runner_info: dict) -> str:
     replacement = f'${{MCP_INPUT_TCL:-{original_tcl}}}'
 
     # Apply sed patch
-    sed_cmd = f"sed -i 's|-input {escaped_original}|-input {replacement}|' {script_path}"
+    sed_cmd = f"sed -i 's|-input {escaped_original}|-input {replacement}|' {_sp}"
     await ssh_run(sed_cmd, timeout=10)
 
     # Verify
-    r = await ssh_run(f"grep -c 'MCP_INPUT_TCL' {script_path} 2>/dev/null")
+    r = await ssh_run(f"grep -c 'MCP_INPUT_TCL' {_sp} 2>/dev/null")
     if r.strip() and r.strip() != "0":
         return f"patched: -input {original_tcl} -> -input {replacement}"
     return "patch failed — manual edit needed"
@@ -1241,23 +1270,24 @@ async def run_full_discovery(sim_dir: str = "", force: bool = False) -> str:
         mode_defaults["ams_gate"] = {"timeout": 3600, "probe_strategy": "selective"}
 
     # test_discovery: tb_type 기반 command 생성
+    _sd = _sq(sim_dir)
     if tb_type == "uvm":
         test_cmd = (
-            f"grep -rh 'extends uvm_test' {sim_dir} --include='*.sv' --include='*.svh' 2>/dev/null "
+            f"grep -rh 'extends uvm_test' {_sd} --include='*.sv' --include='*.svh' 2>/dev/null "
             f"| grep -oE 'class \\w+' | sed 's/class //' | sort -u"
         )
     elif tb_type == "sv_directed":
         test_cmd = (
-            f"grep -rh '^\\s*program ' {sim_dir} --include='*.sv' 2>/dev/null "
+            f"grep -rh '^\\s*program ' {_sd} --include='*.sv' 2>/dev/null "
             f"| grep -oE 'program \\w+' | sed 's/program //' | sort -u"
         )
     else:  # ncsim_legacy, mixed
-        test_cmd = f"ls {sim_dir}/tb_tests/*.v 2>/dev/null | xargs -I{{}} basename {{}} .v"
+        test_cmd = f"ls {_sd}/tb_tests/*.v 2>/dev/null | xargs -I{{}} basename {{}} .v"
 
     # Run test_discovery command + cache results
     cached_tests = []
     try:
-        r = await ssh_run(f"cd {sim_dir} && {test_cmd}", timeout=30)
+        r = await ssh_run(f"cd {_sd} && {test_cmd}", timeout=30)
         cached_tests = [t.strip() for t in r.strip().splitlines() if t.strip()]
     except Exception:
         pass
@@ -1293,7 +1323,7 @@ async def run_full_discovery(sim_dir: str = "", force: bool = False) -> str:
     await save_sim_config(sim_dir, config)
 
     # Registry registration
-    _update_registry_from_config(sim_dir, tb_type, config)
+    await _update_registry_from_config(sim_dir, tb_type, config)
 
     # P1-9: .simvisionrc update
     simvisionrc_result = await _update_simvisionrc(bridge_tcl)
@@ -1453,6 +1483,7 @@ async def start_simulation(
     extra_args: str = "",
 ) -> str:
     """Start simulation. Registry없으면 sim_discover 자동 호출."""
+    _validate_extra_args(extra_args)
 
     # S-1: registry 로드 (없으면 sim_discover 자동 호출)
     resolved_dir = sim_dir if sim_dir else await _get_default_sim_dir()
@@ -1526,7 +1557,7 @@ async def _start_bridge(
     script_shell = runner.get("script_shell", runner.get("env_shell", "/bin/sh"))
     # v4.1: _resolve_sim_params — single point of change for schema params
     params = _resolve_sim_params(runner, sim_mode, extra_args=extra_args, timeout=timeout)
-    test_args = params["test_args_format"].format(test_name=test_name)
+    test_args = params["test_args_format"].format(test_name=_sq(test_name))
     if params["extra_args"]:
         test_args = f"{test_args} {params['extra_args']}"
     effective_timeout = params["timeout"]
@@ -1579,7 +1610,7 @@ async def _start_bridge(
 
     # Wrap in subshell + < /dev/null to fully detach from asyncio PIPE
     cmd = (
-        f"cd {cwd} && "
+        f"cd {_sq(cwd)} && "
         f"(nohup {shell_cmd} "
         f"{_build_redirect(log_file)} < /dev/null &)"
     )
@@ -1719,7 +1750,7 @@ async def _resolve_test_name(short_name: str, sim_dir: str = "") -> str:
             discovery = cfg.get("test_discovery", {})
             cmd = discovery.get("command", "")
             if cmd:
-                r = await ssh_run(f"cd {resolved_dir} && {cmd}", timeout=30)
+                r = await ssh_run(f"cd {_sq(resolved_dir)} && {cmd}", timeout=30)
                 cached = [t.strip() for t in r.strip().splitlines() if t.strip()]
                 if cached:
                     # Cache via config_action (write centralization)
@@ -1761,16 +1792,17 @@ async def _detect_run_dir(sim_dir: str, runner_info: dict) -> dict:
     """
     candidates: list[str] = []
     script_has_cd = False
+    _sd = _sq(sim_dir)
 
     # 1. run*/ directories with cds.lib or hdl.var
     r = await ssh_run(
-        f"find {sim_dir} -maxdepth 1 -type d -name 'run*' 2>/dev/null"
+        f"find {_sd} -maxdepth 1 -type d -name 'run*' 2>/dev/null"
     )
     for d in r.strip().splitlines():
         if not d.strip():
             continue
         has_cds = await ssh_run(
-            f"test -f {d}/cds.lib -o -L {d}/cds.lib -o -f {d}/hdl.var && echo YES || echo NO"
+            f"test -f {_sq(d + '/cds.lib')} -o -L {_sq(d + '/cds.lib')} -o -f {_sq(d + '/hdl.var')} && echo YES || echo NO"
         )
         if "YES" in has_cds:
             candidates.append(d.split("/")[-1])
@@ -1779,7 +1811,7 @@ async def _detect_run_dir(sim_dir: str, runner_info: dict) -> dict:
     script_name = _extract_script_name(runner_info.get("exec_cmd", ""))
     script_path = f"{sim_dir}/{script_name}"
     cd_targets: list[str] = []
-    r = await ssh_run(f"grep -E '^[[:space:]]*cd[[:space:]]+' {script_path} 2>/dev/null | head -3")
+    r = await ssh_run(f"grep -E '^[[:space:]]*cd[[:space:]]+' {_sq(script_path)} 2>/dev/null | head -3")
     for line in r.strip().splitlines():
         parts = line.strip().split()
         if len(parts) >= 2 and '$' not in parts[1]:
@@ -1795,7 +1827,7 @@ async def _detect_run_dir(sim_dir: str, runner_info: dict) -> dict:
     # 3. sim_dir itself — only if no cd targets found (script doesn't cd to subdirectory)
     if not script_has_cd:
         has_cds = await ssh_run(
-            f"test -f {sim_dir}/cds.lib -o -L {sim_dir}/cds.lib && echo YES || echo NO"
+            f"test -f {_sq(sim_dir + '/cds.lib')} -o -L {_sq(sim_dir + '/cds.lib')} && echo YES || echo NO"
         )
         if "YES" in has_cds and "." not in candidates:
             candidates.append(".")
@@ -1877,6 +1909,7 @@ def _parse_time_ns(where_output: str) -> int:
 
     Handles formats:
       '5 MS + 0'    -> 5_000_000
+      '3 US + 500'  -> 3_500
       '100 NS + 500' -> 100_500
       '0 FS + 0'    -> 0  (sub-ns: return 0)
       '5000000'     (raw number) -> 5_000_000
@@ -1886,6 +1919,10 @@ def _parse_time_ns(where_output: str) -> int:
     m = re.search(r'(\d+)\s+MS\s*\+\s*(\d+)', where_output, re.IGNORECASE)
     if m:
         return int(m.group(1)) * 1_000_000 + int(m.group(2))
+    # "X US + Y"  (microseconds)
+    m = re.search(r'(\d+)\s+US\s*\+\s*(\d+)', where_output, re.IGNORECASE)
+    if m:
+        return int(m.group(1)) * 1000 + int(m.group(2))
     # "X NS + Y"  (nanoseconds + sub-ns delta)
     m = re.search(r'(\d+)\s+NS\s*\+\s*(\d+)', where_output, re.IGNORECASE)
     if m:
