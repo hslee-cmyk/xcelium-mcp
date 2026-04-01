@@ -128,7 +128,6 @@ proc ::mcp_bridge::init {} {
 # ---------------------------------------------------------------------------
 proc ::mcp_bridge::accept {channel addr port} {
     variable client_channel
-    variable bridge_type
 
     # Only allow one client at a time
     if {$client_channel ne ""} {
@@ -138,30 +137,9 @@ proc ::mcp_bridge::accept {channel addr port} {
     }
 
     set client_channel $channel
-    fconfigure $channel -buffering line -translation lf -encoding utf-8 -blocking 0
-
-    if {$bridge_type eq "simvision"} {
-        # SimVision GUI event loop may not process fileevent reliably.
-        # Use after-based polling instead.
-        ::mcp_bridge::poll_readable $channel
-    } else {
-        fileevent $channel readable [list ::mcp_bridge::on_readable $channel]
-    }
+    fconfigure $channel -buffering line -translation lf -encoding utf-8
+    fileevent $channel readable [list ::mcp_bridge::on_readable $channel]
     puts "MCP Bridge: client connected from $addr:$port"
-}
-
-proc ::mcp_bridge::poll_readable {channel} {
-    # after-based polling for SimVision mode (100ms interval)
-    if {[catch {eof $channel} is_eof] || $is_eof} {
-        ::mcp_bridge::disconnect $channel
-        return
-    }
-    # Read all available lines
-    while {[gets $channel line] >= 0} {
-        ::mcp_bridge::process_line $channel $line
-    }
-    # Schedule next poll
-    after 100 [list ::mcp_bridge::poll_readable $channel]
 }
 
 proc ::mcp_bridge::on_readable {channel} {
@@ -176,12 +154,6 @@ proc ::mcp_bridge::on_readable {channel} {
     if {[gets $channel line] < 0} {
         return
     }
-
-    ::mcp_bridge::process_line $channel $line
-}
-
-proc ::mcp_bridge::process_line {channel line} {
-    variable cmd_buffer
 
     # Accumulate into buffer (support multi-line commands ending with <<<EXEC>>>)
     if {$line eq "<<<EXEC>>>"} {
@@ -918,5 +890,15 @@ if {![info exists ::mcp_bridge::_shutdown_flag]} {
 if {$::mcp_bridge::bridge_type eq "xmsim"} {
     vwait ::mcp_bridge::_shutdown_flag
 } else {
-    puts "MCP Bridge: SimVision mode — using GUI event loop (no vwait)"
+    # SimVision's GUI event loop does not process Tcl socket events.
+    # Use periodic 'update' to force-process pending fileevent/after callbacks.
+    proc ::mcp_bridge::sv_event_pump {} {
+        if {[info exists ::mcp_bridge::_shutdown_flag] && $::mcp_bridge::_shutdown_flag} {
+            return
+        }
+        update
+        after 50 ::mcp_bridge::sv_event_pump
+    }
+    puts "MCP Bridge: SimVision mode — starting event pump (50ms)"
+    after 50 ::mcp_bridge::sv_event_pump
 }
