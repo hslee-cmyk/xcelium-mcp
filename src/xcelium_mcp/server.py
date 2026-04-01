@@ -1080,15 +1080,20 @@ async def shutdown_simulator(target: str = "xmsim") -> str:
     global _xmsim_bridge, _simvision_bridge
     if target == "simvision":
         bridge = _get_simvision_bridge()
+        port = bridge.port if hasattr(bridge, 'port') else 0
         try:
-            resp = await bridge.execute_safe("exit")
+            resp = await bridge.execute_safe("__SHUTDOWN__")
             return f"SimVision shutdown: {resp.body}"
         except (ConnectionError, asyncio.TimeoutError):
             return "SimVision shutdown completed (connection closed)."
         finally:
             _simvision_bridge = None
+            # Fallback: cleanup ready file from Python side
+            if port:
+                await ssh_run(f"rm -f /tmp/mcp_bridge_ready_{port}")
     else:
         bridge = _get_xmsim_bridge()
+        port = bridge.port if hasattr(bridge, 'port') else 0
         try:
             resp = await bridge.execute_safe("__SHUTDOWN__")
             return f"Simulator shutdown: {resp.body}"
@@ -1096,6 +1101,9 @@ async def shutdown_simulator(target: str = "xmsim") -> str:
             return "Simulator shutdown completed (connection closed)."
         finally:
             _xmsim_bridge = None
+            # Fallback: cleanup ready file from Python side
+            if port:
+                await ssh_run(f"rm -f /tmp/mcp_bridge_ready_{port}")
 
 
 @mcp.tool()
