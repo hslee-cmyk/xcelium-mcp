@@ -649,6 +649,8 @@ async def _run_batch_single(
     rename_dump: bool = False,
     run_duration: str = "",
     timeout: int = 600,
+    sim_mode: str = "rtl",
+    extra_args: str = "",
 ) -> str:
     """Execute a single simulation test and return combined log output.
 
@@ -670,13 +672,19 @@ async def _run_batch_single(
         sim_dir, reason=f"pre-run recompile check for {test_name}"
     )
 
+    # v4.1: _resolve_sim_params for mode-aware params
+    params = _resolve_sim_params(runner, sim_mode, extra_args, timeout)
+    effective_timeout = params["timeout"]
+
     info = _resolve_exec_cmd(runner, regression=False)
     cmd = info.cmd.format(test_name=test_name) if info.needs_test_name else info.cmd
+    if params["extra_args"]:
+        cmd = f"{cmd} {params['extra_args']}"
 
     # Method 6-A: inject TEST_NAME for SHM file naming
     env_prefix = f"TEST_NAME={test_name} "
 
-    if timeout <= 120:
+    if effective_timeout <= 120:
         # --- Direct ssh_run ---
         full_cmd = f"cd {sim_dir} && {env_prefix}{cmd}"
         result = await ssh_run(full_cmd, timeout=float(timeout))
@@ -1134,6 +1142,56 @@ async def run_full_discovery(sim_dir: str = "", force: bool = False) -> str:
     run_dir = run_info["run_dir"]
     script_has_cd = run_info["script_has_cd"]
 
+    # D-14 (v4.1): Generate args_format dict + mode_defaults + test_discovery
+    default_mode = _pick_default_mode(setup_tcls)
+    # args_format: mode별 dict (기본 template — 환경에 따라 mcp_config로 override)
+    args_format = {default_mode: "-test {test_name} --"}
+    if "gate" in setup_tcls:
+        args_format["gate"] = "-test {test_name} -gate post --"
+    if "ams_rtl" in setup_tcls:
+        args_format["ams_rtl"] = "-test {test_name} -ams --"
+    if "ams_gate" in setup_tcls:
+        args_format["ams_gate"] = "-test {test_name} -amsf -gate post --"
+
+    mode_defaults = {
+        "common": {"timeout": 120, "probe_strategy": "all", "extra_args": ""},
+    }
+    if "gate" in setup_tcls:
+        mode_defaults["gate"] = {"timeout": 1800, "probe_strategy": "selective"}
+    if "ams_rtl" in setup_tcls:
+        mode_defaults["ams_rtl"] = {"timeout": 3600, "probe_strategy": "selective"}
+    if "ams_gate" in setup_tcls:
+        mode_defaults["ams_gate"] = {"timeout": 3600, "probe_strategy": "selective"}
+
+    # test_discovery: tb_type 기반 command 생성
+    if tb_type == "uvm":
+        test_cmd = (
+            f"grep -rh 'extends uvm_test' {sim_dir} --include='*.sv' --include='*.svh' 2>/dev/null "
+            f"| grep -oE 'class \\w+' | sed 's/class //' | sort -u"
+        )
+    elif tb_type == "sv_directed":
+        test_cmd = (
+            f"grep -rh '^\\s*program ' {sim_dir} --include='*.sv' 2>/dev/null "
+            f"| grep -oE 'program \\w+' | sed 's/program //' | sort -u"
+        )
+    else:  # ncsim_legacy, mixed
+        test_cmd = f"ls {sim_dir}/tb_tests/*.v 2>/dev/null | xargs -I{{}} basename {{}} .v"
+
+    # Run test_discovery command + cache results
+    cached_tests = []
+    try:
+        r = await ssh_run(f"cd {sim_dir} && {test_cmd}", timeout=30)
+        cached_tests = [t.strip() for t in r.strip().splitlines() if t.strip()]
+    except Exception:
+        pass
+
+    from datetime import datetime
+    test_discovery = {
+        "command": test_cmd,
+        "cached_tests": cached_tests,
+        "cached_at": datetime.now().isoformat(),
+    }
+
     # Assemble config v2.1
     config = {
         "version": 2,
@@ -1143,14 +1201,17 @@ async def run_full_discovery(sim_dir: str = "", force: bool = False) -> str:
             "run_dir": run_dir,
             "script_has_cd": script_has_cd,
             **shell_env,
+            "args_format": args_format,
+            "mode_defaults": mode_defaults,
             "setup_tcls": setup_tcls,
-            "default_mode": _pick_default_mode(setup_tcls),
+            "default_mode": default_mode,
         },
         "bridge": {
             "tcl_path": bridge_tcl,
             "port": bridge_port,
         },
         "eda_tools": eda_tools,
+        "test_discovery": test_discovery,
     }
     await save_sim_config(sim_dir, config)
 
@@ -1312,6 +1373,7 @@ async def start_simulation(
     sim_mode: str = "",
     run_duration: str = "",
     timeout: int = 120,
+    extra_args: str = "",
 ) -> str:
     """Start simulation. Registry없으면 sim_discover 자동 호출."""
 
@@ -1344,7 +1406,8 @@ async def start_simulation(
 
     if mode == "bridge":
         return await _start_bridge(
-            resolved_dir, config, test_name, setup_tcl, effective_mode, timeout
+            resolved_dir, config, test_name, setup_tcl, effective_mode, timeout,
+            extra_args=extra_args,
         )
     elif mode == "batch":
         return await _start_batch(
@@ -1361,6 +1424,7 @@ async def _start_bridge(
     setup_tcl: str,
     sim_mode: str,
     timeout: int,
+    extra_args: str = "",
 ) -> str:
     """Start simulation in bridge mode via legacy run script + env vars."""
     runner = config["runner"]
@@ -1382,13 +1446,14 @@ async def _start_bridge(
     await ssh_run(f"rm -f {ready_file}", timeout=5)
 
     # S-4: Start via run script with env vars
-    # Use script_shell from registry (csh/tcsh for legacy scripts, bash for shell scripts)
+    # Use script_shell from registry
     script_shell = runner.get("script_shell", runner.get("env_shell", "/bin/sh"))
-    # runner.args_format: how test_name is passed to the script
-    # Default: "-test {test_name} --" (common ncsim convention)
-    # Override via: mcp_config set runner.args_format "{test_name}"
-    args_format = runner.get("args_format", "-test {test_name} --")
-    test_args = args_format.format(test_name=test_name)
+    # v4.1: _resolve_sim_params — single point of change for schema params
+    params = _resolve_sim_params(runner, sim_mode, extra_args=extra_args, timeout=timeout)
+    test_args = params["test_args_format"].format(test_name=test_name)
+    if params["extra_args"]:
+        test_args = f"{test_args} {params['extra_args']}"
+    effective_timeout = params["timeout"]
     log_file = f"/tmp/sim_start_{port}.log"
 
     # Pre-filter setup TCL: remove run/exit/finish/database-close for bridge mode
@@ -1446,7 +1511,7 @@ async def _start_bridge(
         await _srv._xmsim_bridge.disconnect()
         _srv._xmsim_bridge = None
 
-    for i in range(timeout // 2):
+    for i in range(effective_timeout // 2):
         await asyncio.sleep(2)
         # Scan ready files for xmsim type (auto port support)
         r = await ssh_run("cat /tmp/mcp_bridge_ready_* 2>/dev/null")
@@ -1491,6 +1556,98 @@ async def _start_batch(
         run_duration=run_duration,
         timeout=600,
     )
+
+
+# ===========================================================================
+# v4.1 Phase 1b: _resolve_sim_params + _resolve_test_name
+# ===========================================================================
+
+
+def _resolve_sim_params(
+    runner: dict,
+    sim_mode: str = "rtl",
+    extra_args: str = "",
+    timeout: int = 600,
+) -> dict:
+    """Resolve simulation parameters from registry schema — Single Point of Change.
+
+    All tools (sim_start, sim_batch_run, sim_batch_regression) call this.
+    Schema changes → modify here only → all tools updated.
+
+    Returns:
+        {"test_args_format": str, "timeout": int,
+         "probe_strategy": str, "extra_args": str}
+    """
+    # 1. args_format: dict → mode선택, string → 전 mode 동일
+    args_raw = runner.get("args_format", "-test {test_name} --")
+    if isinstance(args_raw, dict):
+        test_args_format = args_raw.get(sim_mode, args_raw.get("rtl", "-test {test_name} --"))
+    else:
+        test_args_format = args_raw
+
+    # 2. mode_defaults: common + mode merge
+    mode_defaults = runner.get("mode_defaults", {})
+    common_cfg = mode_defaults.get("common", {})
+    mode_cfg = mode_defaults.get(sim_mode, {})
+    effective = {**common_cfg, **mode_cfg}
+
+    # 3. extra_args: config + 1회성 합침
+    cfg_extra = effective.get("extra_args", "")
+    all_extra = f"{cfg_extra} {extra_args}".strip()
+
+    return {
+        "test_args_format": test_args_format,
+        "timeout": effective.get("timeout", timeout),
+        "probe_strategy": effective.get("probe_strategy", "all"),
+        "extra_args": all_extra,
+    }
+
+
+async def _resolve_test_name(short_name: str, sim_dir: str = "") -> str:
+    """Short name → full test name via cached_tests.
+
+    "TOP015" → "VENEZIA_TOP015_i2c_8bit_offset_test"
+    Exact match → return. 1 substring match → return. 0 → error. 2+ → candidates.
+    Cache miss → triggers list_tests (mcp_config 경유 캐시 저장).
+    """
+    resolved_dir = sim_dir if sim_dir else await _get_default_sim_dir()
+    cfg = await load_sim_config(resolved_dir) if resolved_dir else None
+    cached = cfg.get("test_discovery", {}).get("cached_tests", []) if cfg else []
+
+    if not cached:
+        # Cache miss — run test_discovery.command + cache via mcp_config
+        if cfg:
+            discovery = cfg.get("test_discovery", {})
+            cmd = discovery.get("command", "")
+            if cmd:
+                r = await ssh_run(f"cd {resolved_dir} && {cmd}", timeout=30)
+                cached = [t.strip() for t in r.strip().splitlines() if t.strip()]
+                if cached:
+                    # Cache via config_action (write centralization)
+                    from datetime import datetime
+                    cfg.setdefault("test_discovery", {})["cached_tests"] = cached
+                    cfg["test_discovery"]["cached_at"] = datetime.now().isoformat()
+                    await save_sim_config(resolved_dir, cfg)
+
+    if not cached:
+        return short_name  # No cache, no command → pass through
+
+    # Exact match
+    if short_name in cached:
+        return short_name
+
+    # Substring match
+    matches = [t for t in cached if short_name in t]
+    if len(matches) == 1:
+        return matches[0]
+    elif len(matches) == 0:
+        raise ValueError(f"No test matching '{short_name}'. Run list_tests() to see available.")
+    else:
+        raise ValueError(
+            f"Multiple tests match '{short_name}':\n"
+            + "\n".join(f"  {m}" for m in matches)
+            + "\nSpecify more precisely."
+        )
 
 
 # ===========================================================================

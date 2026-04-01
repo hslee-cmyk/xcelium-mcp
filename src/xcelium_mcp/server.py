@@ -126,18 +126,23 @@ async def sim_start(
     sim_mode: str = "",
     run_duration: str = "",
     timeout: int = 120,
+    extra_args: str = "",
 ) -> str:
     """Start simulation using registry configuration.
 
     Args:
-        test_name:    Required — test to run (applied at compile time).
+        test_name:    Required — test to run. Short name OK (e.g. "TOP015").
         sim_dir:      Simulation dir. Empty = registry default.
-        mode:         "bridge" (interactive, waits for connect_simulator) or "batch" (run to end).
-        sim_mode:     "rtl"|"gate"|"ams_rtl"|"ams_gate". Empty = default_mode from config.
-        run_duration: Batch mode only — limit sim time (e.g. "10ms").
+        mode:         "bridge" (interactive) or "batch" (run to end).
+        sim_mode:     "rtl"|"gate"|"ams_rtl"|"ams_gate". Empty = default_mode.
+        run_duration: Batch mode only — limit sim time.
         timeout:      Bridge mode — max seconds to wait for bridge ready.
+        extra_args:   1-shot extra simulation arguments (not saved to registry).
     """
     try:
+        # v4.1: resolve short test name → full name
+        from xcelium_mcp.sim_runner import _resolve_test_name
+        test_name = await _resolve_test_name(test_name, sim_dir)
         return await start_simulation(test_name, sim_dir, mode, sim_mode, run_duration, timeout)
     except UserInputRequired as e:
         return f"USER INPUT REQUIRED:\n{e.prompt}"
@@ -1020,6 +1025,8 @@ async def sim_batch_run(
     rename_dump: bool = False,
     dump_signals: list[str] = [],
     timeout: int = 600,
+    sim_mode: str = "",
+    extra_args: str = "",
 ) -> str:
     """Run simulation for a single test.
 
@@ -1090,6 +1097,8 @@ async def sim_batch_run(
 
     # Execute simulation
     try:
+        # v4.1: sim_mode + extra_args
+        effective_mode = sim_mode or runner.get("default_mode", "rtl")
         log = await _run_batch_single(
             sim_dir=resolved_sim_dir,
             test_name=test_name,
@@ -1097,6 +1106,8 @@ async def sim_batch_run(
             rename_dump=rename_dump,
             run_duration=run_duration,
             timeout=timeout,
+            sim_mode=effective_mode,
+            extra_args=extra_args,
         )
     except Exception as e:
         return f"ERROR running simulation: {e}"
@@ -1112,6 +1123,8 @@ async def sim_batch_regression(
     dump_signals: list[str] = [],
     rename_dump: bool = False,
     parallel: bool = False,
+    sim_mode: str = "",
+    extra_args: str = "",
 ) -> str:
     """Run regression over a list of tests.
 
