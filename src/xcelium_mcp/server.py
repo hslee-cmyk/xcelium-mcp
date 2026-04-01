@@ -341,7 +341,7 @@ async def simvision_live(
     shm_info = ""
     sim_time = ""
     try:
-        shm_info = await xmsim.execute("database -list")
+        shm_info = await xmsim.execute("database -show")
         sim_time = await xmsim.execute("where")
         results.append(f"xmsim at {sim_time.strip()}, SHM: {shm_info.strip()}")
     except TclError as e:
