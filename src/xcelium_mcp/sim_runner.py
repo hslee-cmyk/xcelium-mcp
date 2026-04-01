@@ -719,9 +719,10 @@ async def _run_batch_single(
     ts = int(_time.time())
     log_file = f"/tmp/mcp_batch_{ts}.log"
 
-    full_cmd = f"cd {sim_dir} && {env_prefix}stdbuf -oL {cmd}"
+    # cd outside nohup — subshell cd + nohup combo breaks
+    run_cmd = f"{env_prefix}stdbuf -oL {cmd}"
     await ssh_run(
-        f"(nohup {full_cmd} {_build_redirect(log_file)} < /dev/null &)",
+        f"cd {sim_dir} && (nohup {run_cmd} {_build_redirect(log_file)} < /dev/null &)",
         timeout=15.0,
     )
 
@@ -827,9 +828,9 @@ async def _run_batch_regression(
                 if params["extra_args"]
                 else info.cmd
             )
-            full_cmd = f"cd {sim_dir} && stdbuf -oL {cmd_with_extra}"
+            run_cmd = f"stdbuf -oL {cmd_with_extra}"
             await ssh_run(
-                f"(nohup {full_cmd} {_build_redirect(log_file)} < /dev/null &)",
+                f"cd {sim_dir} && (nohup {run_cmd} {_build_redirect(log_file)} < /dev/null &)",
                 timeout=15.0,
             )
         for _ in range(360):
@@ -864,9 +865,9 @@ async def _run_batch_regression(
             })
             await ssh_run(f"echo '{job_info}' > {job_file}", timeout=5)
 
-            full_cmd = f"cd {sim_dir} && {env_prefix}stdbuf -oL {cmd}"
+            run_cmd = f"{env_prefix}stdbuf -oL {cmd}"
             await ssh_run(
-                f"(nohup {full_cmd} {_build_redirect(test_log)} < /dev/null &)",
+                f"cd {sim_dir} && (nohup {run_cmd} {_build_redirect(test_log)} < /dev/null &)",
                 timeout=15.0,
             )
 
