@@ -415,28 +415,43 @@ proc ::mcp_bridge::do_execute_tcl {channel cmd_str} {
 # F1: __SHUTDOWN__ — safe shutdown (database close + finish)
 # ---------------------------------------------------------------------------
 proc ::mcp_bridge::do_shutdown {channel} {
+    variable bridge_type
+    variable port
+    variable _shutdown_flag
+
     # 1. Close all SHM databases to flush data
-    if {[catch {
-        set dbs [database -list]
-        foreach db $dbs {
-            catch {database -close $db}
+    if {$bridge_type eq "simvision"} {
+        # SimVision uses "database close" (not "database -close")
+        catch {
+            set dbs [database find]
+            foreach db $dbs {
+                catch {database close $db}
+            }
         }
-    } err]} {
-        # database -list may not be available; try known default
-        catch {database -close ../dump/ci_top.shm}
+    } else {
+        if {[catch {
+            set dbs [database -list]
+            foreach db $dbs {
+                catch {database -close $db}
+            }
+        } err]} {
+            catch {database -close ../dump/ci_top.shm}
+        }
     }
 
     # 2. Cleanup ready file
-    variable port
     catch {file delete "/tmp/mcp_bridge_ready_$port"}
 
     # 3. Notify client before termination
     ::mcp_bridge::send_ok $channel "shutdown:ok"
 
-    # 4. Set shutdown flag (unblocks vwait) + schedule finish
-    variable _shutdown_flag
+    # 4. Set shutdown flag (unblocks vwait/event pump) + schedule exit
     set _shutdown_flag 1
-    after 100 {finish}
+    if {$bridge_type eq "simvision"} {
+        after 100 {exit}
+    } else {
+        after 100 {finish}
+    }
 }
 
 # ---------------------------------------------------------------------------
