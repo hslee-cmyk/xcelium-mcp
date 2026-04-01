@@ -59,16 +59,20 @@ def _get_simvision_bridge() -> TclBridge:
     return _simvision_bridge
 
 
-def _get_bridge() -> TclBridge:
-    """Backward compat: return any connected bridge (xmsim priority)."""
+def _get_bridge(target: str = "auto") -> TclBridge:
+    """Return bridge by target. target='auto' → xmsim priority."""
+    if target == "xmsim":
+        return _get_xmsim_bridge()
+    if target == "simvision":
+        return _get_simvision_bridge()
+    # auto: xmsim priority
     if _xmsim_bridge and _xmsim_bridge.connected:
         return _xmsim_bridge
     if _simvision_bridge and _simvision_bridge.connected:
         return _simvision_bridge
     raise ConnectionError(
         "Not connected. Call sim_start or connect_simulator first."
-        )
-    return _bridge
+    )
 
 
 # ===================================================================
@@ -143,7 +147,7 @@ async def sim_start(
         # v4.1: resolve short test name → full name
         from xcelium_mcp.sim_runner import _resolve_test_name
         test_name = await _resolve_test_name(test_name, sim_dir)
-        return await start_simulation(test_name, sim_dir, mode, sim_mode, run_duration, timeout)
+        return await start_simulation(test_name, sim_dir, mode, sim_mode, run_duration, timeout, extra_args=extra_args)
     except UserInputRequired as e:
         return f"USER INPUT REQUIRED:\n{e.prompt}"
     except RuntimeError as e:
@@ -324,6 +328,7 @@ async def sim_restart() -> str:
 async def execute_tcl(
     tcl_cmd: str,
     timeout: int = 30,
+    target: str = "auto",
 ) -> str:
     """Execute arbitrary Tcl command in the connected SimVision bridge session.
 
@@ -336,15 +341,20 @@ async def execute_tcl(
     Args:
         tcl_cmd: Tcl command to execute (single or multi-line).
         timeout: Response timeout in seconds.
+        target:  "xmsim" | "simvision" | "auto" (default: auto).
     """
-    bridge = _get_bridge()
+    bridge = _get_bridge(target)
     return await bridge.execute(tcl_cmd, timeout=float(timeout))
 
 
 @mcp.tool()
-async def sim_status() -> str:
-    """Get current simulation status (time, scope, state)."""
-    bridge = _get_bridge()
+async def sim_status(target: str = "auto") -> str:
+    """Get current simulation status (time, scope, state).
+
+    Args:
+        target: "xmsim" | "simvision" | "auto" (default: auto).
+    """
+    bridge = _get_bridge(target)
     results: list[str] = []
 
     for label, cmd in [("Position", "where"), ("Scope", "scope")]:
@@ -438,14 +448,15 @@ async def find_drivers(signal: str) -> str:
 
 
 @mcp.tool()
-async def list_signals(scope: str, pattern: str = "*") -> str:
+async def list_signals(scope: str, pattern: str = "*", target: str = "auto") -> str:
     """List signals in a scope, optionally filtered by pattern.
 
     Args:
-        scope: Hierarchical scope path (e.g. "top.hw.u_ext").
+        scope:   Hierarchical scope path (e.g. "top.hw.u_ext").
         pattern: Glob pattern to filter signals (default "*").
+        target:  "xmsim" | "simvision" | "auto" (default: auto).
     """
-    bridge = _get_bridge()
+    bridge = _get_bridge(target)
 
     # Use 'describe' with hierarchical path + pattern
     # 'scope -describe' does NOT accept pattern args (causes SCMULT error)
@@ -552,12 +563,15 @@ async def take_waveform_screenshot() -> Image:
 
 
 @mcp.tool()
-async def run_debugger_mode() -> list:
+async def run_debugger_mode(target: str = "auto") -> list:
     """Comprehensive debug snapshot: simulation state + signal values + screenshot + debugging guide.
 
     Returns a combined text report and waveform screenshot for AI-assisted hardware debugging.
+
+    Args:
+        target: "xmsim" | "simvision" | "auto" (default: auto).
     """
-    bridge = _get_bridge()
+    bridge = _get_bridge(target)
     sections: list[str] = []
 
     # 1. Simulation state
@@ -634,22 +648,35 @@ async def run_debugger_mode() -> list:
 # ===================================================================
 
 @mcp.tool()
-async def shutdown_simulator() -> str:
+async def shutdown_simulator(target: str = "xmsim") -> str:
     """Safely shutdown the simulator, preserving SHM waveform data.
 
-    Closes all SHM databases and terminates xmsim gracefully.
+    Closes all SHM databases and terminates the target simulator gracefully.
     Always use this instead of disconnect_simulator when ending a debug session.
     WARNING: exit or pkill will lose SHM data. This is the only safe way.
+
+    Args:
+        target: "xmsim" (default) | "simvision". Which bridge to shutdown.
     """
-    global _bridge
-    bridge = _get_xmsim_bridge()
-    try:
-        resp = await bridge.execute_safe("__SHUTDOWN__")
-        return f"Simulator shutdown: {resp.body}"
-    except (ConnectionError, asyncio.TimeoutError):
-        return "Simulator shutdown completed (connection closed)."
-    finally:
-        _bridge = None
+    global _xmsim_bridge, _simvision_bridge
+    if target == "simvision":
+        bridge = _get_simvision_bridge()
+        try:
+            resp = await bridge.execute_safe("exit")
+            return f"SimVision shutdown: {resp.body}"
+        except (ConnectionError, asyncio.TimeoutError):
+            return "SimVision shutdown completed (connection closed)."
+        finally:
+            _simvision_bridge = None
+    else:
+        bridge = _get_xmsim_bridge()
+        try:
+            resp = await bridge.execute_safe("__SHUTDOWN__")
+            return f"Simulator shutdown: {resp.body}"
+        except (ConnectionError, asyncio.TimeoutError):
+            return "Simulator shutdown completed (connection closed)."
+        finally:
+            _xmsim_bridge = None
 
 
 @mcp.tool()
@@ -1062,6 +1089,13 @@ async def sim_batch_run(
     except UserInputRequired as e:
         return f"USER INPUT REQUIRED:\n{e.prompt}"
 
+    # v4.1: resolve short test name → full name
+    from xcelium_mcp.sim_runner import _resolve_test_name
+    try:
+        test_name = await _resolve_test_name(test_name, resolved_sim_dir)
+    except ValueError as e:
+        return f"ERROR: {e}"
+
     # Load runner config (v4: delegates to sim_discover if config missing)
     try:
         runner = await _load_or_detect_runner(resolved_sim_dir)
@@ -1191,6 +1225,13 @@ async def sim_batch_regression(
                 "Provide test_list explicitly."
             )
 
+    # v4.1: resolve short test names → full names
+    from xcelium_mcp.sim_runner import _resolve_test_name
+    try:
+        test_list = [await _resolve_test_name(t, resolved_sim_dir) for t in test_list]
+    except ValueError as e:
+        return f"ERROR: {e}"
+
     # Execute regression
     try:
         summary = await _run_batch_regression(
@@ -1199,6 +1240,8 @@ async def sim_batch_regression(
             runner=runner,
             from_checkpoint=from_checkpoint,
             rename_dump=rename_dump,
+            sim_mode=sim_mode,
+            extra_args=extra_args,
         )
     except Exception as e:
         return f"ERROR running regression: {e}"

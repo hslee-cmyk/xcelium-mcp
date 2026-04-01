@@ -752,6 +752,8 @@ async def _run_batch_regression(
     runner: dict,
     from_checkpoint: str = "",
     rename_dump: bool = False,
+    sim_mode: str = "",
+    extra_args: str = "",
 ) -> str:
     """Execute regression tests via screen session with per-test polling.
 
@@ -783,12 +785,21 @@ async def _run_batch_regression(
     )
     await ssh_run(f"screen -S {session} -X stuff 'cd {sim_dir}\\n'", timeout=10.0)
 
+    # v4.1: resolve sim_mode/extra_args for regression
+    effective_sim_mode = sim_mode or runner.get("default_mode", "rtl")
+    params = _resolve_sim_params(runner, effective_sim_mode, extra_args=extra_args)
+
     info = _resolve_exec_cmd(runner, regression=True)
 
     if not info.needs_test_name:
         # regression_script handles all tests internally → 1 cmd
+        cmd_with_extra = (
+            f"{info.cmd} {params['extra_args']}".strip()
+            if params["extra_args"]
+            else info.cmd
+        )
         await ssh_run(
-            f"screen -S {session} -X stuff '{info.cmd}\\n'", timeout=10.0
+            f"screen -S {session} -X stuff '{cmd_with_extra}\\n'", timeout=10.0
         )
         # Poll for overall completion
         for _ in range(360):  # max ~1 hour
@@ -806,6 +817,8 @@ async def _run_batch_regression(
                 timeout=10.0,
             )
             cmd = info.cmd.format(test_name=test_name)
+            if params["extra_args"]:
+                cmd = f"{cmd} {params['extra_args']}"
             await ssh_run(
                 f"screen -S {session} -X stuff '{cmd}\\n'", timeout=10.0
             )
@@ -1441,9 +1454,8 @@ async def _start_bridge(
             f"Use shutdown_simulator or 'pkill -f xmsim' first."
         )
 
-    # S-3: Clean stale ready file
-    ready_file = f"/tmp/mcp_bridge_ready_{port}"
-    await ssh_run(f"rm -f {ready_file}", timeout=5)
+    # S-3: Clean stale ready files (all ports — auto port support)
+    await ssh_run("rm -f /tmp/mcp_bridge_ready_*", timeout=5)
 
     # S-4: Start via run script with env vars
     # Use script_shell from registry
@@ -1494,9 +1506,16 @@ async def _start_bridge(
         inner_parts.append(f"./{script} {test_args}")
         inner_cmd = "; ".join(inner_parts)
         shell_cmd = _login_shell_cmd(login_shell, inner_cmd)
+    # v4.1: run_dir / script_has_cd — cwd selection
+    run_dir = runner.get("run_dir", "run")
+    if runner.get("script_has_cd", False):
+        cwd = sim_dir
+    else:
+        cwd = f"{sim_dir}/{run_dir}"
+
     # Wrap in subshell + < /dev/null to fully detach from asyncio PIPE
     cmd = (
-        f"cd {sim_dir} && "
+        f"cd {cwd} && "
         f"(nohup {shell_cmd} "
         f"{_build_redirect(log_file)} < /dev/null &)"
     )
