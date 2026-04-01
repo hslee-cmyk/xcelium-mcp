@@ -2003,7 +2003,7 @@ async def generate_debug_tcl(
 
 @mcp.tool()
 async def attach_to_simvision(
-    port: int = 9876,
+    port: int = 0,
     timeout: int = 10,
 ) -> str:
     """Attach to an already-running SimVision session via TCP bridge.
@@ -2019,20 +2019,10 @@ async def attach_to_simvision(
       - attach_to_simvision: connects to already-running SimVision (no restart)
 
     Args:
-        port:    TCP bridge port (default 9876).
+        port:    TCP bridge port. 0 = auto-detect from ready files.
         timeout: Connection wait timeout in seconds.
     """
-    check = await ssh_run(
-        f"nc -z localhost {port} 2>/dev/null && echo OK || echo FAIL",
-        timeout=float(timeout + 2),
-    )
-    if "OK" in check:
-        return await connect_simulator(host="localhost", port=port)
-    return (
-        f"SimVision bridge not found on port {port}.\n"
-        "Setup: echo 'source /path/to/mcp_bridge.tcl' >> ~/.simvisionrc\n"
-        "Then (re)start SimVision."
-    )
+    return await connect_simulator(host="localhost", port=port, target="simvision", timeout=timeout)
 
 
 @mcp.tool()
@@ -2094,14 +2084,20 @@ async def open_debug_view(
         timeout=5.0,
     )
 
-    # 3. Wait for bridge (15 × 2s = 30s)
-    bridge_ready = await ssh_run(
-        "for i in $(seq 1 15); do sleep 2; "
-        "nc -z localhost 9876 2>/dev/null && echo READY && break; done",
-        timeout=35.0,
-    )
+    # 3. Wait for SimVision bridge ready file (30s)
+    bridge_ready = False
+    for _i in range(15):
+        await __import__("asyncio").sleep(2)
+        r = await ssh_run("cat /tmp/mcp_bridge_ready_* 2>/dev/null")
+        for line in r.strip().splitlines():
+            parts = line.strip().split()
+            if len(parts) >= 2 and parts[1] == "simvision":
+                bridge_ready = True
+                break
+        if bridge_ready:
+            break
 
-    if "READY" not in bridge_ready:
+    if not bridge_ready:
         tcl_result = await generate_debug_tcl(
             shm_path=shm_path, signals=signals, center_time_ns=center_time_ns,
             zoom_range_ns=zoom_range_ns, markers=markers, context_note=context_note,
@@ -2111,8 +2107,8 @@ async def open_debug_view(
             f"{tcl_result}"
         )
 
-    # 4. Connect
-    await connect_simulator(host="localhost", port=9876)
+    # 4. Connect (auto-detect SimVision port from ready files)
+    await connect_simulator(port=0, target="simvision")
     bridge = _get_simvision_bridge()
 
     # 5. Add signals to AI_Debug group (duplicate skip via P5-2)
@@ -2211,28 +2207,33 @@ async def compare_waveforms(
             timeout=5.0,
         )
 
-        # 3. Wait for bridge (15 × 2s = 30s)
-        bridge_ready = await ssh_run(
-            "for i in $(seq 1 15); do sleep 2; "
-            "nc -z localhost 9876 2>/dev/null && echo READY && break; done",
-            timeout=35.0,
-        )
-        if "READY" not in bridge_ready:
+        # 3. Wait for SimVision bridge ready file (30s)
+        bridge_ready = False
+        for _i in range(15):
+            await __import__("asyncio").sleep(2)
+            r = await ssh_run("cat /tmp/mcp_bridge_ready_* 2>/dev/null")
+            for line in r.strip().splitlines():
+                parts = line.strip().split()
+                if len(parts) >= 2 and parts[1] == "simvision":
+                    bridge_ready = True
+                    break
+            if bridge_ready:
+                break
+        if not bridge_ready:
             return (
-                f"SimVision launched on {display} but TCP bridge not ready on port 9876.\n"
+                f"SimVision launched on {display} but bridge not ready after 30s.\n"
                 "Ensure ~/.simvisionrc sources mcp_bridge.tcl.\n"
-                "Setup: echo 'source /path/to/mcp_bridge.tcl' >> ~/.simvisionrc\n"
                 "Fallback: use output_mode='csv_diff' for text-based comparison."
             )
 
-        # 4. Connect bridge
-        await connect_simulator(host="localhost", port=9876)
+        # 4. Connect bridge (auto-detect SimVision port)
+        await connect_simulator(port=0, target="simvision")
         bridge = _get_simvision_bridge()
 
-        # 5. Open shm_after as second database
+        # 5. Open shm_after as second database (SimVision syntax)
         try:
             await bridge.execute(
-                f'database -open -shm -into cmp_after {shm_after}',
+                f'database open {shm_after} -name cmp_after',
                 timeout=30.0,
             )
         except Exception as e:
