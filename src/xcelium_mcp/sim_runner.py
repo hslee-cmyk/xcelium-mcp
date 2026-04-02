@@ -1501,6 +1501,7 @@ async def start_simulation(
     run_duration: str = "",
     timeout: int = 120,
     extra_args: str = "",
+    bridges=None,
 ) -> str:
     """Start simulation. Registry없으면 sim_discover 자동 호출."""
     _validate_extra_args(extra_args)
@@ -1535,7 +1536,7 @@ async def start_simulation(
     if mode == "bridge":
         return await _start_bridge(
             resolved_dir, config, test_name, setup_tcl, effective_mode, timeout,
-            extra_args=extra_args,
+            extra_args=extra_args, bridges=bridges,
         )
     elif mode == "batch":
         return await _start_batch(
@@ -1553,6 +1554,7 @@ async def _start_bridge(
     sim_mode: str,
     timeout: int,
     extra_args: str = "",
+    bridges=None,
 ) -> str:
     """Start simulation in bridge mode via legacy run script + env vars."""
     runner = config["runner"]
@@ -1636,14 +1638,13 @@ async def _start_bridge(
     )
     await ssh_run(cmd, timeout=15)
 
-    # S-5 v4.1: Poll for bridge ready + AUTO-CONNECT to _xmsim_bridge
-    import xcelium_mcp.server as _srv
+    # S-5 v4.2: Poll for bridge ready + AUTO-CONNECT via BridgeManager
     from xcelium_mcp.tcl_bridge import TclBridge as _TB
 
     # Disconnect existing xmsim bridge (max 1 constraint)
-    if _srv._xmsim_bridge and _srv._xmsim_bridge.connected:
-        await _srv._xmsim_bridge.disconnect()
-        _srv._xmsim_bridge = None
+    if bridges is not None and bridges.xmsim_raw and bridges.xmsim_raw.connected:
+        await bridges.xmsim_raw.disconnect()
+        bridges.set_xmsim(None)
 
     for i in range(effective_timeout // 2):
         await asyncio.sleep(2)
@@ -1653,10 +1654,11 @@ async def _start_bridge(
             parts = line.strip().split()
             if len(parts) >= 2 and parts[1] == "xmsim":
                 actual_port = int(parts[0])
-                bridge = _TB(host="localhost", port=actual_port)
+                new_bridge = _TB(host="localhost", port=actual_port)
                 try:
-                    ping = await bridge.connect()
-                    _srv._xmsim_bridge = bridge
+                    ping = await new_bridge.connect()
+                    if bridges is not None:
+                        bridges.set_xmsim(new_bridge)
                     return (
                         f"Simulation started and connected (bridge mode, {sim_mode}).\n"
                         f"  test: {test_name}\n"

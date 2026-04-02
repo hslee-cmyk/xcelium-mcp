@@ -16,6 +16,7 @@ from mcp.server.fastmcp import FastMCP, Image
 
 from xcelium_mcp.tcl_bridge import TclBridge, TclError
 from xcelium_mcp.screenshot import ps_to_png
+from xcelium_mcp.bridge_manager import BridgeManager
 import xcelium_mcp.csv_cache as csv_cache
 import xcelium_mcp.debug_tools as debug_tools
 import xcelium_mcp.checkpoint_manager as checkpoint_manager
@@ -42,50 +43,15 @@ from xcelium_mcp.sim_runner import (
 )
 
 # ---------------------------------------------------------------------------
-# Server & global bridge instances (v4.1: dual slot)
+# Server & bridge state (v4.2: BridgeManager replaces global state)
 # ---------------------------------------------------------------------------
 mcp = FastMCP(
     "xcelium-mcp",
     instructions="MCP server for Cadence Xcelium/SimVision simulator control",
 )
 
-# v4.1: Independent bridge slots (max 1 each)
-_xmsim_bridge: TclBridge | None = None
-_simvision_bridge: TclBridge | None = None
-
-
-def _get_xmsim_bridge() -> TclBridge:
-    """Return the xmsim bridge or raise."""
-    if _xmsim_bridge is None or not _xmsim_bridge.connected:
-        raise ConnectionError(
-            "Not connected to xmsim. Call sim_start or connect_simulator(target='xmsim') first."
-        )
-    return _xmsim_bridge
-
-
-def _get_simvision_bridge() -> TclBridge:
-    """Return the SimVision bridge or raise."""
-    if _simvision_bridge is None or not _simvision_bridge.connected:
-        raise ConnectionError(
-            "Not connected to SimVision. Call simvision_start or connect_simulator(target='simvision') first."
-        )
-    return _simvision_bridge
-
-
-def _get_bridge(target: str = "auto") -> TclBridge:
-    """Return bridge by target. target='auto' → xmsim priority."""
-    if target == "xmsim":
-        return _get_xmsim_bridge()
-    if target == "simvision":
-        return _get_simvision_bridge()
-    # auto: xmsim priority
-    if _xmsim_bridge and _xmsim_bridge.connected:
-        return _xmsim_bridge
-    if _simvision_bridge and _simvision_bridge.connected:
-        return _simvision_bridge
-    raise ConnectionError(
-        "Not connected. Call sim_start or connect_simulator first."
-    )
+# v4.2: BridgeManager — single instance, replaces _xmsim_bridge/_simvision_bridge globals
+bridges = BridgeManager()
 
 
 # ===================================================================
@@ -102,8 +68,8 @@ async def database_open(shm_path: str, name: str = "") -> str:
     Routes to SimVision bridge first, falls back to xmsim.
     """
     # SimVision bridge first
-    if _simvision_bridge and _simvision_bridge.connected:
-        bridge = _simvision_bridge
+    if bridges.simvision_raw and bridges.simvision_raw.connected:
+        bridge = bridges.simvision_raw
         # Check if already open (database open on already-opened SHM hangs SimVision)
         try:
             existing = await bridge.execute("database find")
@@ -128,7 +94,7 @@ async def database_open(shm_path: str, name: str = "") -> str:
 
     # xmsim fallback
     try:
-        bridge = _get_xmsim_bridge()
+        bridge = bridges.xmsim
         result = await bridge.execute(f"database -open {shm_path} -shm")
         return f"Database opened (xmsim): {result}"
     except (ConnectionError, TclError, TimeoutError) as e:
@@ -152,7 +118,7 @@ async def simvision_setup(
     """
     if signals is None:
         signals = []
-    bridge = _get_simvision_bridge()
+    bridge = bridges.simvision
     results = []
 
     if shm_path:
@@ -234,12 +200,10 @@ async def simvision_start(
         display:   X11 DISPLAY. Empty = auto-detect user's VNC session.
         sim_dir:   Simulation directory. Empty = registry default.
     """
-    global _simvision_bridge
-
     # 0. Disconnect existing (max 1 constraint)
-    if _simvision_bridge and _simvision_bridge.connected:
-        await _simvision_bridge.disconnect()
-        _simvision_bridge = None
+    if bridges.simvision_raw and bridges.simvision_raw.connected:
+        await bridges.simvision_raw.disconnect()
+        bridges.set_simvision(None)
 
     # 1. Check existing SimVision bridge → auto-connect
     r = await ssh_run("cat /tmp/mcp_bridge_ready_* 2>/dev/null")
@@ -250,7 +214,7 @@ async def simvision_start(
             bridge = TclBridge(host="localhost", port=port)
             try:
                 ping = await bridge.connect()
-                _simvision_bridge = bridge
+                bridges.set_simvision(bridge)
                 return f"SimVision already running — connected to port {port} (ping={ping})"
             except Exception:
                 pass
@@ -328,7 +292,7 @@ async def simvision_start(
                 bridge = TclBridge(host="localhost", port=port)
                 try:
                     ping = await bridge.connect()
-                    _simvision_bridge = bridge
+                    bridges.set_simvision(bridge)
                     return (
                         f"SimVision started and connected.\n"
                         f"  display: {display}\n"
@@ -359,11 +323,11 @@ async def simvision_live(
     if signals is None:
         signals = []
     try:
-        xmsim = _get_xmsim_bridge()
+        xmsim = bridges.xmsim
     except ConnectionError as e:
         return f"ERROR: xmsim bridge not connected — {e}"
     try:
-        sv = _get_simvision_bridge()
+        sv = bridges.simvision
     except ConnectionError as e:
         return f"ERROR: SimVision bridge not connected — {e}"
     results = []
@@ -441,7 +405,7 @@ async def simvision_live(
 @mcp.tool()
 async def simvision_live_stop() -> str:
     """Stop SimVision live waveform auto-reload."""
-    sv = _get_simvision_bridge()
+    sv = bridges.simvision
     try:
         await sv.execute("foreach id [after info] { after cancel $id }")
         return "Auto-reload stopped."
@@ -521,7 +485,7 @@ async def sim_start(
         # v4.1: resolve short test name → full name
         from xcelium_mcp.sim_runner import _resolve_test_name
         test_name = await _resolve_test_name(test_name, sim_dir)
-        return await start_simulation(test_name, sim_dir, mode, sim_mode, run_duration, timeout, extra_args=extra_args)
+        return await start_simulation(test_name, sim_dir, mode, sim_mode, run_duration, timeout, extra_args=extra_args, bridges=bridges)
     except UserInputRequired as e:
         return f"USER INPUT REQUIRED:\n{e.prompt}"
     except RuntimeError as e:
@@ -550,8 +514,6 @@ async def connect_simulator(
                  port=0 + target=auto → scan all ready files, connect each to slot.
         timeout: Connection timeout in seconds.
     """
-    global _xmsim_bridge, _simvision_bridge
-
     if port == 0 and target == "auto":
         return await _auto_connect_all(host, timeout)
 
@@ -571,9 +533,9 @@ async def connect_simulator(
         return f"ERROR: Connection failed: {type(e).__name__}: {e}"
 
     if target == "simvision":
-        _simvision_bridge = bridge
+        bridges.set_simvision(bridge)
     else:
-        _xmsim_bridge = bridge
+        bridges.set_xmsim(bridge)
 
     try:
         where = await bridge.execute("where")
@@ -585,7 +547,6 @@ async def connect_simulator(
 
 async def _auto_connect_all(host: str, timeout: float) -> str:
     """Scan all ready files, connect to each, assign to appropriate slot."""
-    global _xmsim_bridge, _simvision_bridge
     results = []
 
     r = await ssh_run("cat /tmp/mcp_bridge_ready_* 2>/dev/null")
@@ -602,9 +563,9 @@ async def _auto_connect_all(host: str, timeout: float) -> str:
         try:
             ping = await bridge.connect()
             if btype == "simvision":
-                _simvision_bridge = bridge
+                bridges.set_simvision(bridge)
             else:
-                _xmsim_bridge = bridge
+                bridges.set_xmsim(bridge)
             results.append(f"  {btype}:{p} (ping={ping})")
         except Exception as e:
             results.append(f"  {btype}:{p} FAILED ({e})")
@@ -640,17 +601,16 @@ async def disconnect_simulator(target: str = "all") -> str:
     Args:
         target: "xmsim" | "simvision" | "all" (default: all)
     """
-    global _xmsim_bridge, _simvision_bridge
     results = []
 
-    if target in ("xmsim", "all") and _xmsim_bridge and _xmsim_bridge.connected:
-        await _xmsim_bridge.disconnect()
-        _xmsim_bridge = None
+    if target in ("xmsim", "all") and bridges.xmsim_raw and bridges.xmsim_raw.connected:
+        await bridges.xmsim_raw.disconnect()
+        bridges.set_xmsim(None)
         results.append("xmsim: disconnected")
 
-    if target in ("simvision", "all") and _simvision_bridge and _simvision_bridge.connected:
-        await _simvision_bridge.disconnect()
-        _simvision_bridge = None
+    if target in ("simvision", "all") and bridges.simvision_raw and bridges.simvision_raw.connected:
+        await bridges.simvision_raw.disconnect()
+        bridges.set_simvision(None)
         results.append("simvision: disconnected")
 
     return "\n".join(results) if results else f"No {target} bridge connected."
@@ -664,7 +624,7 @@ async def sim_run(duration: str = "", timeout: float = 600.0) -> str:
         duration: Simulation time to run (e.g. "100ns", "1us"). Empty = run until breakpoint or end.
         timeout: MCP response timeout in seconds (default 600s for gate-level sim support).
     """
-    bridge = _get_xmsim_bridge()
+    bridge = bridges.xmsim
     cmd = f"run {duration}" if duration else "run"
     await bridge.execute(cmd, timeout=timeout)
     try:
@@ -677,7 +637,7 @@ async def sim_run(duration: str = "", timeout: float = 600.0) -> str:
 @mcp.tool()
 async def sim_stop() -> str:
     """Stop a running simulation."""
-    bridge = _get_xmsim_bridge()
+    bridge = bridges.xmsim
     await bridge.execute("stop")
     try:
         where = await bridge.execute("where")
@@ -693,7 +653,7 @@ async def sim_restart() -> str:
     Tries run -clean first, then snapshot restore, then plain restart.
     Returns method used: run-clean | snapshot | plain.
     """
-    bridge = _get_xmsim_bridge()
+    bridge = bridges.xmsim
     result = await bridge.execute("__RESTART__")
     return f"Simulation restarted to time 0. ({result})"
 
@@ -717,7 +677,7 @@ async def execute_tcl(
         timeout: Response timeout in seconds.
         target:  "xmsim" | "simvision" | "auto" (default: auto).
     """
-    bridge = _get_bridge(target)
+    bridge = bridges.get_bridge(target)
     return await bridge.execute(tcl_cmd, timeout=float(timeout))
 
 
@@ -728,7 +688,7 @@ async def sim_status(target: str = "auto") -> str:
     Args:
         target: "xmsim" | "simvision" | "auto" (default: auto).
     """
-    bridge = _get_bridge(target)
+    bridge = bridges.get_bridge(target)
     results: list[str] = []
 
     for label, cmd in [("Position", "where"), ("Scope", "scope")]:
@@ -757,7 +717,7 @@ async def set_breakpoint(condition: str, name: str = "") -> str:
                    or raw Tcl expression in braces.
         name: Optional breakpoint name.
     """
-    bridge = _get_xmsim_bridge()
+    bridge = bridges.xmsim
 
     # Parse "signal op value" format for hierarchical signal paths
     m = re.match(r'^(\S+)\s*(==|!=|>|<|>=|<=)\s*(.+)$', condition.strip())
@@ -785,7 +745,7 @@ async def get_signal_value(signals: list[str]) -> str:
     Args:
         signals: List of signal paths (e.g. ["/tb/dut/clk", "/tb/dut/data[7:0]"]).
     """
-    bridge = _get_xmsim_bridge()
+    bridge = bridges.xmsim
     results: list[str] = []
     for sig in signals:
         try:
@@ -803,7 +763,7 @@ async def describe_signal(signal: str) -> str:
     Args:
         signal: Full hierarchical signal path.
     """
-    bridge = _get_xmsim_bridge()
+    bridge = bridges.xmsim
     result = await bridge.execute(f"describe {signal}")
     return result
 
@@ -815,7 +775,7 @@ async def find_drivers(signal: str) -> str:
     Args:
         signal: Full hierarchical signal path.
     """
-    bridge = _get_xmsim_bridge()
+    bridge = bridges.xmsim
     result = await bridge.execute(f"drivers {signal}")
     return result
 
@@ -829,7 +789,7 @@ async def list_signals(scope: str, pattern: str = "*", target: str = "auto") -> 
         pattern: Glob pattern to filter signals (default "*").
         target:  "xmsim" | "simvision" | "auto" (default: auto).
     """
-    bridge = _get_bridge(target)
+    bridge = bridges.get_bridge(target)
 
     # Use 'describe' with hierarchical path + pattern
     # 'scope -describe' does NOT accept pattern args (causes SCMULT error)
@@ -845,7 +805,7 @@ async def deposit_value(signal: str, value: str) -> str:
         signal: Full hierarchical signal path.
         value: Value to deposit (e.g. "1'b1", "8'hFF", "0").
     """
-    bridge = _get_xmsim_bridge()
+    bridge = bridges.xmsim
     await bridge.execute(f"deposit {signal} {value}")
     # Verify
     readback = await bridge.execute(f"value {signal}")
@@ -859,7 +819,7 @@ async def release_signal(signal: str) -> str:
     Args:
         signal: Full hierarchical signal path.
     """
-    bridge = _get_xmsim_bridge()
+    bridge = bridges.xmsim
     await bridge.execute(f"release {signal}")
     readback = await bridge.execute(f"value {signal}")
     return f"Released {signal}. Current value: {readback}"
@@ -882,7 +842,7 @@ async def waveform_add_signals(
         group_name:  Group within window. Empty = no group.
         window_name: Target waveform window. Empty = current (or auto-create).
     """
-    bridge = _get_simvision_bridge()
+    bridge = bridges.simvision
     results = []
 
     # 1. Window: specified → switch, unspecified → current or auto-create
@@ -960,7 +920,7 @@ async def waveform_zoom(start_time: str, end_time: str) -> str:
         start_time: Start time (e.g. "0ns").
         end_time: End time (e.g. "100ns").
     """
-    bridge = _get_simvision_bridge()
+    bridge = bridges.simvision
     result = await bridge.execute(
         f"waveform xview limits {start_time} {end_time}"
     )
@@ -975,7 +935,7 @@ async def cursor_set(time: str, cursor_name: str = "TimeA") -> str:
         time: Simulation time (e.g. "50ns").
         cursor_name: Cursor name (default "TimeA").
     """
-    bridge = _get_simvision_bridge()
+    bridge = bridges.simvision
     result = await bridge.execute(
         f"cursor set -using {cursor_name} -time {time}"
     )
@@ -992,7 +952,7 @@ async def take_waveform_screenshot() -> Image:
 
     Returns the screenshot as a PNG image that Claude can analyze.
     """
-    bridge = _get_simvision_bridge()
+    bridge = bridges.simvision
     ps_path = await bridge.screenshot()
     png_bytes = await ps_to_png(ps_path)
     return Image(data=png_bytes, format="png")
@@ -1007,7 +967,7 @@ async def run_debugger_mode(target: str = "auto") -> list:
     Args:
         target: "xmsim" | "simvision" | "auto" (default: auto).
     """
-    bridge = _get_bridge(target)
+    bridge = bridges.get_bridge(target)
     sections: list[str] = []
 
     # 1. Simulation state
@@ -1094,9 +1054,8 @@ async def shutdown_simulator(target: str = "xmsim") -> str:
     Args:
         target: "xmsim" (default) | "simvision". Which bridge to shutdown.
     """
-    global _xmsim_bridge, _simvision_bridge
     if target == "simvision":
-        bridge = _get_simvision_bridge()
+        bridge = bridges.simvision
         port = bridge.port if hasattr(bridge, 'port') else 0
         try:
             resp = await bridge.execute_safe("__SHUTDOWN__")
@@ -1104,12 +1063,12 @@ async def shutdown_simulator(target: str = "xmsim") -> str:
         except (ConnectionError, asyncio.TimeoutError):
             return "SimVision shutdown completed (connection closed)."
         finally:
-            _simvision_bridge = None
+            bridges.set_simvision(None)
             # Fallback: cleanup ready file from Python side
             if port:
                 await ssh_run(f"rm -f /tmp/mcp_bridge_ready_{port}")
     else:
-        bridge = _get_xmsim_bridge()
+        bridge = bridges.xmsim
         port = bridge.port if hasattr(bridge, 'port') else 0
         try:
             resp = await bridge.execute_safe("__SHUTDOWN__")
@@ -1117,7 +1076,7 @@ async def shutdown_simulator(target: str = "xmsim") -> str:
         except (ConnectionError, asyncio.TimeoutError):
             return "Simulator shutdown completed (connection closed)."
         finally:
-            _xmsim_bridge = None
+            bridges.set_xmsim(None)
             # Fallback: cleanup ready file from Python side
             if port:
                 await ssh_run(f"rm -f /tmp/mcp_bridge_ready_{port}")
@@ -1135,7 +1094,7 @@ async def watch_signal(signal: str, op: str = "==", value: str = "") -> str:
         op: Comparison operator ("==", "!=", ">", "<", ">=", "<=").
         value: Target value in Verilog format (e.g. "8'h10", "4'b1010").
     """
-    bridge = _get_xmsim_bridge()
+    bridge = bridges.xmsim
     result = await bridge.execute(f"__WATCH__ {signal} {op} {value}")
     return f"Watchpoint set: {result}"
 
@@ -1147,7 +1106,7 @@ async def watch_clear(watch_id: str = "all") -> str:
     Args:
         watch_id: Watchpoint ID to clear, or "all" for all watchpoints.
     """
-    bridge = _get_xmsim_bridge()
+    bridge = bridges.xmsim
     result = await bridge.execute(f"__WATCH_CLEAR__ {watch_id}")
     return result
 
@@ -1163,7 +1122,7 @@ async def probe_control(mode: str, scope: str = "") -> str:
         mode: "enable" to start recording, "disable" to pause, "status" to check.
         scope: Hierarchical scope to target (e.g. "top.hw.u_ext"). Empty = all probes.
     """
-    bridge = _get_xmsim_bridge()
+    bridge = bridges.xmsim
     cmd = f"__PROBE_CONTROL__ {mode} {scope}" if scope else f"__PROBE_CONTROL__ {mode}"
     result = await bridge.execute(cmd)
     return result
@@ -1187,7 +1146,7 @@ async def save_checkpoint(
         sim_dir:       Simulation directory (auto-detected if empty).
         saved_time_ns: Current simulation time in ns for nearest-checkpoint lookup.
     """
-    bridge = _get_xmsim_bridge()
+    bridge = bridges.xmsim
 
     resolved_dir = sim_dir if sim_dir else await _get_default_sim_dir()
     chk_base = os.path.join(resolved_dir, "checkpoints") if resolved_dir else "/tmp/mcp_checkpoints"
@@ -1242,7 +1201,7 @@ async def restore_checkpoint(
             )
             return msg
 
-    bridge = _get_xmsim_bridge()
+    bridge = bridges.xmsim
     cmd = f"__RESTORE__ {name} {chk_base}" if name else f"__RESTORE__  {chk_base}"
     result = await bridge.execute(cmd, timeout=120.0)
     return result
@@ -1291,7 +1250,7 @@ async def bisect_signal(
         )
 
     # Mode B: bridge-based binary search (legacy)
-    bridge = _get_xmsim_bridge()
+    bridge = bridges.xmsim
     cmd = f"__BISECT__ {signal} {op} {value} {start_ns} {end_ns} {precision_ns}"
     result = await bridge.execute(cmd, timeout=600.0)
     return result
@@ -1391,7 +1350,7 @@ async def bisect_restore_and_debug(
 
     # 2. Add probe signals
     if probe_signals:
-        bridge = _get_xmsim_bridge()
+        bridge = bridges.xmsim
         sig_str = " ".join(probe_signals)
         try:
             await bridge.execute(
@@ -1401,7 +1360,7 @@ async def bisect_restore_and_debug(
             return f"Restore succeeded but probe_add_signals failed: {e}\nRestore result: {restore_result}"
 
     # 3. Run (with or without watchpoint)
-    bridge = _get_xmsim_bridge()
+    bridge = bridges.xmsim
     if watch_signal_path and watch_value:
         # Use __WATCH__ meta command (same as watch_signal tool)
         # xmsim stop -create doesn't support -signal option
@@ -1554,7 +1513,7 @@ async def sim_batch_run(
             return f"ERROR in [A'] restore: {restore_result}"
         if probe_signals:
             try:
-                bridge = _get_xmsim_bridge()
+                bridge = bridges.xmsim
                 sig_str = " ".join(probe_signals)
                 await bridge.execute(
                     f"probe -create {{{sig_str}}} -shm -depth all", timeout=30.0
@@ -1798,7 +1757,7 @@ async def probe_add_signals(
         shm_path: SHM file to write probe data to. Empty = current session SHM.
         depth:    Probe depth ("all", "1", "2", ...).
     """
-    bridge = _get_xmsim_bridge()
+    bridge = bridges.xmsim
     sig_str = " ".join(signals)
     if shm_path:
         cmd = f"probe -create {{{sig_str}}} -shm {shm_path} -depth {depth}"
@@ -2134,7 +2093,7 @@ async def open_debug_view(
 
     # 4. Connect (auto-detect SimVision port from ready files)
     await connect_simulator(port=0, target="simvision")
-    bridge = _get_simvision_bridge()
+    bridge = bridges.simvision
 
     # 5. Add signals to AI_Debug group (duplicate skip via P5-2)
     if signals:
@@ -2254,7 +2213,7 @@ async def compare_waveforms(
 
         # 4. Connect bridge (auto-detect SimVision port)
         await connect_simulator(port=0, target="simvision")
-        bridge = _get_simvision_bridge()
+        bridge = bridges.simvision
 
         # 5. Open shm_after as second database (SimVision syntax)
         try:
