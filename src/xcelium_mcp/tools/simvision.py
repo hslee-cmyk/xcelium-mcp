@@ -480,16 +480,19 @@ def register(
         end_zoom = center_time_ns + zoom_range_ns
         await bridge.execute(f"waveform xview limits {start_zoom}ns {end_zoom}ns", timeout=10.0)
 
-        # 7. Cursor
+        # 7. Cursor (SimVision requires -using {cursor_name})
         t_cursor = cursor_time_ns if cursor_time_ns else center_time_ns
-        await bridge.execute(f"cursor set -time {t_cursor}ns", timeout=10.0)
+        await bridge.execute(f"cursor set -using TimeA -time {t_cursor}ns", timeout=10.0)
 
-        # 8. Markers
-        for m in markers:
+        # 8. Markers (additional cursors with labels)
+        for i, m in enumerate(markers):
             t = m.get("time_ns", 0)
             label = m.get("label", "").replace('"', "'")
+            marker_name = f"Marker{i+1}"
             try:
-                await bridge.execute(f'cursor set -time {t}ns -name "{label}"', timeout=5.0)
+                await bridge.execute(
+                    f'cursor new -name {marker_name} -time {t}ns', timeout=5.0
+                )
             except Exception:
                 pass
 
