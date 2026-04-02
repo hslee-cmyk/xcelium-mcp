@@ -285,10 +285,12 @@ proc ::mcp_bridge::dispatch {channel cmd} {
     # --- Phase 5 meta commands ---
 
     if {[string match "__WAVEFORM_ADD_GROUP__*" $cmd]} {
-        # Protocol: "__WAVEFORM_ADD_GROUP__ {group_name} sig1 sig2 ..."
+        # Protocol: "__WAVEFORM_ADD_GROUP__ {group_name_or_""} sig1 sig2 ..."
         set args [string trim [string range $cmd 23 end]]
         set parts [split $args " "]
         set group_name [lindex $parts 0]
+        # Normalize: "" placeholder → empty string (no group)
+        if {$group_name eq {""}} { set group_name "" }
         set sig_list [lrange $parts 1 end]
         ::mcp_bridge::do_waveform_add_group $channel $group_name $sig_list
         return
@@ -866,37 +868,66 @@ proc ::mcp_bridge::do_waveform_add_group {channel group_name sig_list} {
     if {[catch {waveform using}]} {
         waveform new
     }
-    # 1. Create group if not exists (catch = no-op when already exists)
-    catch {waveform create -group $group_name}
 
-    # 2. Collect existing signals in this group for duplicate detection
+    # 1. Resolve DB prefix (SimVision requires db_name::signal_path)
+    set db_prefix ""
+    if {![catch {set db_name [database find]}]} {
+        set db_name [string trim $db_name]
+        if {$db_name ne ""} {
+            set db_prefix "${db_name}::"
+        }
+    }
+
+    # 2. Create group if specified (catch = no-op when already exists)
+    if {$group_name ne ""} {
+        catch {waveform create -group $group_name}
+    }
+
+    # 3. Collect existing signals for duplicate detection
     set existing {}
-    catch {set existing [waveform list -using $group_name]}
+    if {$group_name ne ""} {
+        catch {set existing [waveform list -using $group_name]}
+    } else {
+        catch {set existing [waveform signals -format fullpath]}
+    }
 
-    # 3. Filter: only add signals not already in the group
+    # 4. Filter: resolve DB prefix + skip duplicates
     set to_add {}
     foreach sig $sig_list {
-        if {[lsearch -exact $existing $sig] < 0} {
-            lappend to_add $sig
+        # Add db_prefix if signal doesn't already have ::
+        if {$db_prefix ne "" && [string first "::" $sig] < 0} {
+            set full "${db_prefix}${sig}"
+        } else {
+            set full $sig
+        }
+        if {[lsearch -exact $existing $full] < 0 && [lsearch -exact $existing $sig] < 0} {
+            lappend to_add $full
         }
     }
 
     set skipped [expr {[llength $sig_list] - [llength $to_add]}]
 
     if {[llength $to_add] == 0} {
+        set label [expr {$group_name ne "" ? $group_name : "default"}]
         ::mcp_bridge::send_ok $channel \
-            "added:0|skipped:$skipped|group:$group_name (all signals already present)"
+            "added:0|skipped:$skipped|group:$label (all signals already present)"
         return
     }
 
-    # 4. Add new signals to the group
-    if {[catch {waveform add -using $group_name -signals $to_add} err]} {
+    # 5. Add new signals
+    if {$group_name ne ""} {
+        set add_cmd [list waveform add -using $group_name -signals $to_add]
+    } else {
+        set add_cmd [list waveform add -signals $to_add]
+    }
+    if {[catch {eval $add_cmd} err]} {
         ::mcp_bridge::send_error $channel "waveform add failed: $err"
         return
     }
 
+    set label [expr {$group_name ne "" ? $group_name : "default"}]
     ::mcp_bridge::send_ok $channel \
-        "added:[llength $to_add]|skipped:$skipped|group:$group_name"
+        "added:[llength $to_add]|skipped:$skipped|group:$label"
 }
 
 # ---------------------------------------------------------------------------
