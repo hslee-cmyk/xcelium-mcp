@@ -94,6 +94,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
         mode: str = "stale",
         filter_value: str = "",
         dry_run: bool = True,
+        invert: bool = False,
     ) -> str:
         """List or remove checkpoints from {sim_dir}/checkpoints/.
 
@@ -108,6 +109,10 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
           "project" — checkpoints whose path contains filter_value
           "all"     — every checkpoint
 
+        invert: When True, keep what matches the filter and remove everything else.
+                e.g. mode="pattern", filter_value="TOP015", invert=True
+                → keep only TOP015 checkpoints, remove all others.
+
         dry_run=True (default): report candidates only, no deletion.
         Set dry_run=False to actually remove.
 
@@ -116,6 +121,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             mode:         Cleanup mode.
             filter_value: Filter parameter for hash/origin/pattern/before/project modes.
             dry_run:      True = report only, False = delete.
+            invert:       True = keep matching, remove rest. False = remove matching (default).
         """
         resolved_dir = sim_dir if sim_dir else await get_default_sim_dir()
         if not resolved_dir:
@@ -176,7 +182,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             return "\n".join(lines)
 
         result = checkpoint_manager.cleanup_checkpoints(
-            resolved_dir, mode=mode, filter_value=filter_value, dry_run=dry_run
+            resolved_dir, mode=mode, filter_value=filter_value, dry_run=dry_run, invert=invert,
         )
 
         lines = [

@@ -258,18 +258,23 @@ def cleanup_checkpoints(
     mode: str = "stale",
     filter_value: str = "",
     dry_run: bool = True,
+    invert: bool = False,
 ) -> dict:
     """List or remove checkpoints.
 
     mode:
       "list"    — list all with details (no deletion)
       "stale"   — compile_hash differs from current
-      "hash"    — compile_hash == filter_value (remove a specific build's checkpoints)
+      "hash"    — compile_hash == filter_value
       "origin"  — origin == filter_value ("regression", "bridge", "single")
-      "pattern" — test_name or name contains filter_value (glob-like substring)
+      "pattern" — test_name or name contains filter_value
       "before"  — saved_at < filter_value (ISO date, e.g. "2026-04-01")
       "project" — path contains filter_value
       "all"     — every checkpoint
+
+    invert: When True, filter selects what to KEEP (remove everything else).
+            e.g. mode="pattern", filter_value="TOP015", invert=True
+            → keep TOP015, remove all others.
 
     dry_run=True (default): report only, no filesystem changes.
 
@@ -313,6 +318,8 @@ def cleanup_checkpoints(
         elif mode == "project" and filter_value:
             remove = filter_value in info.get("path", "")
 
+        if invert:
+            remove = not remove
         if remove:
             to_remove.append(name)
         else:
