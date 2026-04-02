@@ -46,21 +46,15 @@ def _build_checkpoint_tcl(
     test_name: str, chk_dir: str, l1_time: str,
     runner: dict, sim_dir: str,
 ) -> str:
-    """Generate a Tcl wrapper that sources the original setup + saves L1/L2 checkpoints.
+    """Generate a Tcl script with probe setup + L1/L2 checkpoint saves.
 
-    The wrapper:
-      1. Sources the original setup Tcl (probes, etc.)
-      2. Runs to l1_time → saves L1_{test_name}
-      3. Continues to $finish → L2 saved via stop callback before exit
+    IMPORTANT: Does NOT source the original setup Tcl (which contains
+    its own `run` + `exit` that would bypass checkpoint logic).
+    Instead, duplicates the probe/database setup commands and controls
+    `run` directly.
 
     Injected via MCP_INPUT_TCL env var.
     """
-    # Resolve original setup Tcl
-    setup_tcls = runner.get("setup_tcls", {})
-    mode = runner.get("default_mode", "rtl")
-    original_tcl = setup_tcls.get(mode, "scripts/setup_rtl.tcl")
-
-    # Default l1_time: 500us (common init completion for venezia-t0)
     if not l1_time:
         l1_time = "500us"
 
@@ -68,29 +62,35 @@ def _build_checkpoint_tcl(
     l2_name = f"L2_{test_name}"
 
     return f"""\
-# Auto-generated checkpoint wrapper (Phase 4)
-# Sources original setup, saves L1 at {l1_time}, L2 before $finish
+# Auto-generated checkpoint Tcl (Phase 4)
+# Probe setup + L1 at {l1_time} + L2 before $finish
 
-# 1. Source original setup (probes, dump config)
-source {sim_dir}/{original_tcl}
+# 1. Probe/database setup (replicated from setup_rtl_batch.tcl, without run/exit)
+database -open ../dump/ci_top.shm -shm
+probe -create top -unpacked 100 -database ../dump/ci_top.shm -depth all -all -memories -dynamic
 
 # 2. Ensure checkpoint directory exists
 file mkdir {chk_dir}
 
-# 3. Run to L1 time (common init completion)
+# 3. Run to L1 time (common init completion) + save L1
 run {l1_time}
-save -simulation worklib.{l1_name}:module -path {chk_dir} -overwrite
+catch {{save -simulation worklib.{l1_name}:module -path {chk_dir} -overwrite}}
 
-# 4. Set up L2 save before $finish (stop callback)
-stop -create -condition {{\\$finish}} -name _L2_save -silent
+# 4. Set up L2 save — stop at $finish, save, then continue to exit
+stop -create -condition {{\\$finish}} -name _L2_guard -silent
 proc _mcp_l2_save {{}} {{
     catch {{save -simulation worklib.{l2_name}:module -path {chk_dir} -overwrite}}
+    catch {{stop -delete _L2_guard}}
+    run
 }}
-# When $finish stop triggers, save L2 then continue to exit
-stop -create -command {{_mcp_l2_save; stop -delete _L2_save; run}} -name _L2_trigger
+stop -create -command {{_mcp_l2_save}} -name _L2_trigger
 
-# 5. Continue simulation (run to $finish)
+# 5. Continue simulation to $finish
 run
+
+# 6. Close database and exit
+database -close ../dump/ci_top.shm
+exit
 """
 
 
@@ -444,6 +444,15 @@ async def _run_batch_regression(
 
             # Per-test poll (P6-1/P6-2/P6-5 via _poll_batch_log)
             await _poll_batch_log(test_log, 600)
+
+            # Guard: kill stale xmsim/xmrm if still alive after poll (prevents worklib lock)
+            if pid_str.strip().isdigit():
+                await ssh_run(
+                    f"kill -0 {test_pid} 2>/dev/null && kill {test_pid}",
+                    timeout=5,
+                )
+            # Also kill any xmrm (compile) that may be stuck on worklib lock
+            await ssh_run("pkill -f xmrm 2>/dev/null", timeout=5)
 
             completed_tests.append(test_name)
 
