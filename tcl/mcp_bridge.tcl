@@ -879,17 +879,14 @@ proc ::mcp_bridge::do_waveform_add_group {channel group_name sig_list} {
     }
 
     # 2. Create group if specified (catch = no-op when already exists)
+    #    SimVision: -groups creates group, -into adds signals into group
     if {$group_name ne ""} {
-        catch {waveform create -group $group_name}
+        catch {waveform add -groups [list $group_name]}
     }
 
     # 3. Collect existing signals for duplicate detection
     set existing {}
-    if {$group_name ne ""} {
-        catch {set existing [waveform list -using $group_name]}
-    } else {
-        catch {set existing [waveform signals -format fullpath]}
-    }
+    catch {set existing [waveform signals -format fullpath]}
 
     # 4. Filter: resolve DB prefix + skip duplicates
     set to_add {}
@@ -914,9 +911,9 @@ proc ::mcp_bridge::do_waveform_add_group {channel group_name sig_list} {
         return
     }
 
-    # 5. Add new signals
+    # 5. Add new signals (-into for group, plain -signals otherwise)
     if {$group_name ne ""} {
-        set add_cmd [list waveform add -using $group_name -signals $to_add]
+        set add_cmd [list waveform add -into $group_name -signals $to_add]
     } else {
         set add_cmd [list waveform add -signals $to_add]
     }
