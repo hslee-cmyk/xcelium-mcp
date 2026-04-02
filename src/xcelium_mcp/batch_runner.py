@@ -389,16 +389,24 @@ async def _run_batch_regression(
     # Cleanup job file
     await ssh_run(f"rm -f {job_file}", timeout=5)
 
-    # Parse final results
-    raw = await ssh_run(
-        f"grep -E 'PASS|FAIL' {log_file} 2>/dev/null | tail -100"
-    )
-    pass_count = raw.count("PASS")
-    fail_count = raw.count("FAIL")
-    total = len(test_list)
+    # Parse final results from per-test logs (reliable regardless of append timing)
+    all_parts: list[str] = []
+    pass_count = 0
+    fail_count = 0
+    for tn in test_list:
+        t_log = f"{user_tmp}/regression_{ts}_{sq(tn)}.log"
+        t_raw = await ssh_run(
+            f"grep -E 'PASS|FAIL|Errors:|COMPLETE' {t_log} | tail -20",
+            timeout=30.0,
+        )
+        all_parts.append(f"=== {tn} ===\n{t_raw}")
+        pass_count += t_raw.count("PASS")
+        fail_count += t_raw.count("FAIL")
 
+    total = len(test_list)
+    raw = "\n".join(all_parts)
     summary = f"{pass_count}/{total} tests PASS, {fail_count} FAIL"
-    details = raw[:2000] if raw.strip() else "(no PASS/FAIL lines found in log)"
+    details = raw[:4000] if raw.strip() else "(no PASS/FAIL lines found in per-test logs)"
     return f"{summary}\n\nLog ({log_file}):\n{details}"
 
 
