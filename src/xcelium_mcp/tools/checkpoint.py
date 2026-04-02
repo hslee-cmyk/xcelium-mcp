@@ -11,23 +11,14 @@ import xcelium_mcp.checkpoint_manager as checkpoint_manager
 
 
 async def restore_checkpoint_impl(bridges: BridgeManager, name: str, sim_dir: str) -> str:
-    """Shared restore logic — callable from other modules (e.g. debug.bisect_restore_and_debug)."""
+    """Shared restore logic — callable from other modules (e.g. debug.bisect_restore_and_debug).
+
+    No compile_hash verification — user may intentionally restore from a
+    previous compile (e.g. to compare behavior before/after RTL change).
+    Use cleanup_checkpoints(mode="stale") to remove outdated checkpoints.
+    """
     resolved_dir = sim_dir if sim_dir else await get_default_sim_dir()
     chk_base = os.path.join(resolved_dir, "checkpoints") if resolved_dir else f"{await get_user_tmp_dir()}/checkpoints"
-
-    # compile_hash verification
-    if resolved_dir and name:
-        valid, reason = checkpoint_manager.verify_checkpoint(resolved_dir, name)
-        if not valid:
-            stale = checkpoint_manager.invalidate_stale_checkpoints(
-                resolved_dir, reason="hash mismatch on restore"
-            )
-            msg = (
-                f"ERROR: {reason}\n"
-                f"Stale checkpoints removed: {stale}\n"
-                f"Re-run sim_batch_run to create new checkpoints."
-            )
-            return msg
 
     bridge = bridges.xmsim
     cmd = f"__RESTORE__ {name} {chk_base}" if name else f"__RESTORE__  {chk_base}"
