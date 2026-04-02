@@ -109,17 +109,11 @@ file mkdir {chk_dir}
 run {l1_time}
 catch {{save -simulation worklib.{l1_name}:module -path {chk_dir} -overwrite}}
 
-# 4. Set up L2 save — stop at $finish, save, then continue to exit
-stop -create -condition {{\\$finish}} -name _L2_guard -silent
-proc _mcp_l2_save {{}} {{
-    catch {{save -simulation worklib.{l2_name}:module -path {chk_dir} -overwrite}}
-    catch {{stop -delete _L2_guard}}
-    run
-}}
-stop -create -command {{_mcp_l2_save}} -name _L2_trigger
-
-# 5. Continue simulation to $finish
+# 4. Continue simulation to $finish
 run
+
+# 5. Save L2 (at $finish — run returned, sim completed but process still alive)
+catch {{save -simulation worklib.{l2_name}:module -path {chk_dir} -overwrite}}
 
 # 6. Clean exit
 exit
