@@ -119,52 +119,6 @@ def register_checkpoint(
     return entry
 
 
-def verify_checkpoint(sim_dir: str, name: str) -> tuple[bool, str]:
-    """Check if a checkpoint is valid (compile hash matches current).
-
-    Returns: (is_valid, reason_string)
-    """
-    manifest = _read_manifest(sim_dir)
-    checkpoints = manifest.get("checkpoints", {})
-
-    if name not in checkpoints:
-        return False, f"Checkpoint '{name}' not found in manifest"
-
-    current_hash = compute_compile_hash(sim_dir)
-    saved_hash = checkpoints[name].get("compile_hash", "")
-    if saved_hash != current_hash:
-        return False, (
-            f"Compile hash mismatch (saved={saved_hash}, current={current_hash}). "
-            f"RTL was recompiled after this checkpoint was saved."
-        )
-    return True, "ok"
-
-
-def invalidate_stale_checkpoints(sim_dir: str, reason: str = "") -> list[str]:
-    """Delete all checkpoints whose compile_hash differs from current.
-
-    Returns list of deleted checkpoint names.
-    Called by sim_batch_run when recompile is detected.
-    """
-    manifest = _read_manifest(sim_dir)
-    current_hash = compute_compile_hash(sim_dir)
-    checkpoints = manifest.get("checkpoints", {})
-
-    removed: list[str] = []
-    for name in list(checkpoints):
-        if checkpoints[name].get("compile_hash", "") != current_hash:
-            chk_path = Path(_checkpoint_base_dir(sim_dir)) / name
-            shutil.rmtree(chk_path, ignore_errors=True)
-            del checkpoints[name]
-            removed.append(name)
-
-    if removed:
-        manifest["compile_hash"] = current_hash
-        manifest.setdefault("last_invalidation", {}).update(
-            {"reason": reason, "removed": removed, "timestamp": time.time()}
-        )
-        _write_manifest(sim_dir, manifest)
-    return removed
 
 
 def list_checkpoints(sim_dir: str) -> list[dict]:
