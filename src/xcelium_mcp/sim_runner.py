@@ -287,9 +287,8 @@ async def _update_simvisionrc(bridge_tcl: str) -> str:
         return "updated (marker found)"
 
     if "mcp_bridge" in content:
-        await ssh_run(
-            f"sed -i '/mcp_bridge/c\\{_SIMVISIONRC_MARKER}\\n{source_line}' {rc_path}"
-        )
+        sed_pattern = f"/mcp_bridge/c\\{_SIMVISIONRC_MARKER}\\n{source_line}"
+        await ssh_run(f"sed -i -e {sq(sed_pattern)} {sq(rc_path)}")
         return "replaced unmanaged entry"
 
     managed_block = f"{_SIMVISIONRC_MARKER}\n{source_line}"
