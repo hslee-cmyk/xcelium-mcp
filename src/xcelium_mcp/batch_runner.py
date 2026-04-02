@@ -358,9 +358,10 @@ async def _run_batch_regression(
                 })
                 await ssh_run(f"cat > {job_file} << 'MCPEOF'\n{job_update}\nMCPEOF", timeout=5)
                 # P6-5: PID watcher for per-test done marker
+                # >& /dev/null: B-0 fix — detach from asyncio PIPE fds
                 test_done = f"{test_log}.done"
                 await ssh_run(
-                    f"(while kill -0 {test_pid} 2>/dev/null; do sleep 2; done; touch {test_done}) &",
+                    f"(while kill -0 {test_pid} 2>/dev/null; do sleep 2; done; touch {test_done}) >& /dev/null &",
                     timeout=5,
                 )
 
