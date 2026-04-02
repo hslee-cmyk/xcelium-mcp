@@ -164,9 +164,8 @@ def register(
         """Run regression over a list of tests.
 
         Each test is compiled and run independently via nohup batch.
-        When save_checkpoints=True, L1/L2 checkpoints are auto-saved per test:
+        When save_checkpoints=True, L1 checkpoint is auto-saved per test:
           L1_{test}: at l1_time (common init completion, default 500us)
-          L2_{test}: just before $finish (test completion)
         Use sim_batch_run(from_checkpoint="L1_{test}") later for fast debugging.
 
         Returns: regression summary table (N/M PASS, failures: [...]).

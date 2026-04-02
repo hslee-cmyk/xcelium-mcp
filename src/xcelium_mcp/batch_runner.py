@@ -99,7 +99,10 @@ def _build_checkpoint_tcl(
     test_name: str, chk_dir: str, l1_time: str,
     setup_lines: str,
 ) -> str:
-    """Generate a Tcl script with probe setup + L1/L2 checkpoint saves.
+    """Generate a Tcl script with probe setup + L1 checkpoint save.
+
+    Saves L1 at l1_time (common init completion), then continues to $finish.
+    L2 ($finish) is not saved — SHM dump is sufficient for post-mortem analysis.
 
     Uses setup_lines (extracted by extract_setup_lines) — no run/exit included.
     Injected via MCP_INPUT_TCL env var.
@@ -108,11 +111,10 @@ def _build_checkpoint_tcl(
         l1_time = "500us"
 
     l1_name = f"L1_{test_name}"
-    l2_name = f"L2_{test_name}"
 
     return f"""\
 # Auto-generated checkpoint Tcl (Phase 4)
-# Probe setup from original + L1 at {l1_time} + L2 before $finish
+# Probe setup + L1 at {l1_time}
 
 # 1. Probe/database setup (extracted from setup Tcl, run/exit stripped)
 {setup_lines}
@@ -127,10 +129,7 @@ catch {{save -simulation worklib.{l1_name}:module -path {chk_dir} -overwrite}}
 # 4. Continue simulation to $finish
 run
 
-# 5. Save L2 (at $finish — run returned, sim completed but process still alive)
-catch {{save -simulation worklib.{l2_name}:module -path {chk_dir} -overwrite}}
-
-# 6. Clean exit
+# 5. Clean exit
 exit
 """
 
@@ -510,7 +509,6 @@ async def _run_batch_regression(
                 from xcelium_mcp import checkpoint_manager as _ckpt
                 l1_ns = _parse_l1_time_ns(l1_time)
                 _ckpt.register_checkpoint(sim_dir, f"L1_{test_name}", l1_ns)
-                _ckpt.register_checkpoint(sim_dir, f"L2_{test_name}", 0)
 
             # Method 6-B fallback
             if rename_dump:
