@@ -42,17 +42,48 @@ def validate_extra_args(s: str) -> str:
     return s
 
 
+def extract_setup_lines(tcl_content: str) -> str:
+    """Extract probe/database setup lines from a setup Tcl, stripping run/exit/finish.
+
+    Used by both _prepare_dump_scope_internal and _build_checkpoint_tcl
+    to get the probe configuration without simulation control commands.
+    """
+    lines = []
+    for line in tcl_content.splitlines():
+        stripped = line.strip().lower()
+        # Skip simulation control commands
+        if stripped.startswith("run") or stripped.startswith("exit") or stripped.startswith("finish"):
+            continue
+        # Skip database close (we control this ourselves)
+        if "database" in stripped and "close" in stripped:
+            continue
+        # Skip commented-out control commands
+        if stripped.startswith("#") and any(kw in stripped for kw in ("run", "exit", "finish")):
+            continue
+        lines.append(line)
+    return "\n".join(lines)
+
+
+async def _read_setup_tcl(runner: dict, sim_dir: str) -> str:
+    """Read the content of the setup Tcl for the current sim_mode.
+
+    Returns the raw file content, or empty string if not found.
+    """
+    setup_tcls = runner.get("setup_tcls", {})
+    mode = runner.get("default_mode", "rtl")
+    tcl_rel = setup_tcls.get(mode, "scripts/setup_rtl.tcl")
+    tcl_path = f"{sim_dir}/{tcl_rel}"
+    content = await ssh_run(f"cat {sq(tcl_path)}", timeout=10)
+    return content if content.strip() else ""
+
+
 def _build_checkpoint_tcl(
     test_name: str, chk_dir: str, l1_time: str,
-    runner: dict, sim_dir: str,
+    setup_lines: str,
 ) -> str:
     """Generate a Tcl script with probe setup + L1/L2 checkpoint saves.
 
-    IMPORTANT: Does NOT source the original setup Tcl (which contains
-    its own `run` + `exit` that would bypass checkpoint logic).
-    Instead, duplicates the probe/database setup commands and controls
-    `run` directly.
-
+    Uses setup_lines (extracted by extract_setup_lines) — no run/exit included.
     Injected via MCP_INPUT_TCL env var.
     """
     if not l1_time:
@@ -63,11 +94,10 @@ def _build_checkpoint_tcl(
 
     return f"""\
 # Auto-generated checkpoint Tcl (Phase 4)
-# Probe setup + L1 at {l1_time} + L2 before $finish
+# Probe setup from original + L1 at {l1_time} + L2 before $finish
 
-# 1. Probe/database setup (replicated from setup_rtl_batch.tcl, without run/exit)
-database -open ../dump/ci_top.shm -shm
-probe -create top -unpacked 100 -database ../dump/ci_top.shm -depth all -all -memories -dynamic
+# 1. Probe/database setup (extracted from setup Tcl, run/exit stripped)
+{setup_lines}
 
 # 2. Ensure checkpoint directory exists
 file mkdir {chk_dir}
@@ -88,8 +118,7 @@ stop -create -command {{_mcp_l2_save}} -name _L2_trigger
 # 5. Continue simulation to $finish
 run
 
-# 6. Close database and exit
-database -close ../dump/ci_top.shm
+# 6. Clean exit
 exit
 """
 
@@ -321,10 +350,13 @@ async def _run_batch_regression(
     params = resolve_sim_params(runner, effective_sim_mode, extra_args=extra_args)
     info = _resolve_exec_cmd(runner, regression=True)
 
-    # Phase 4: generate checkpoint Tcl if requested
+    # Phase 4: prepare checkpoint setup (read + strip run/exit once)
     chk_dir = f"{sim_dir}/checkpoints"
+    setup_lines = ""
     if save_checkpoints:
         await ssh_run(f"mkdir -p {sq(chk_dir)}", timeout=5)
+        raw_tcl = await _read_setup_tcl(runner, sim_dir)
+        setup_lines = extract_setup_lines(raw_tcl)
 
     # Check for existing regression job (reconnection scenario)
     completed_tests: list[str] = []
@@ -382,9 +414,9 @@ async def _run_batch_regression(
             env_prefix = f"TEST_NAME={sq(test_name)} "
 
             # Phase 4: inject checkpoint save commands into xmsim Tcl
-            if save_checkpoints:
+            if save_checkpoints and setup_lines:
                 chk_tcl = _build_checkpoint_tcl(
-                    test_name, chk_dir, l1_time, runner, sim_dir,
+                    test_name, chk_dir, l1_time, setup_lines,
                 )
                 chk_tcl_path = f"{user_tmp}/chk_{sq(test_name)}.tcl"
                 import base64 as _b64
