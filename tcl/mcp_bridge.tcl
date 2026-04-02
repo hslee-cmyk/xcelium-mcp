@@ -898,50 +898,55 @@ proc ::mcp_bridge::do_bisect {channel args_str} {
 # ---------------------------------------------------------------------------
 
 # __STATUS__ — where + scope in 1 call (was 2 round-trips)
+# uplevel #0: xmsim commands must execute in global namespace
 proc ::mcp_bridge::do_status {channel} {
     set pos "(unknown)"
     set sc "(unknown)"
-    catch {set pos [where]}
-    catch {set sc [scope]}
+    catch {set pos [uplevel #0 where]}
+    catch {set sc [uplevel #0 scope]}
     ::mcp_bridge::send_ok $channel "Position: $pos\nScope: $sc"
 }
 
 # __RUN_AND_REPORT__ — run + where in 1 call (was 2 round-trips)
+# uplevel #0: xmsim commands (run, where) must execute in global namespace
 proc ::mcp_bridge::do_run_and_report {channel duration} {
     if {$duration ne ""} {
-        run $duration
+        uplevel #0 [list run $duration]
     } else {
-        run
+        uplevel #0 run
     }
     set pos "(unknown)"
-    catch {set pos [where]}
+    catch {set pos [uplevel #0 where]}
     ::mcp_bridge::send_ok $channel $pos
 }
 
 # __DEPOSIT_AND_VERIFY__ — deposit + value readback in 1 call (was 2 round-trips)
+# uplevel #0: xmsim commands must execute in global namespace
 proc ::mcp_bridge::do_deposit_and_verify {channel signal val} {
-    deposit $signal $val
+    uplevel #0 [list deposit $signal $val]
     set readback "(unknown)"
-    catch {set readback [value $signal]}
+    catch {set readback [uplevel #0 [list value $signal]]}
     ::mcp_bridge::send_ok $channel $readback
 }
 
 # __RELEASE_AND_VERIFY__ — release + value readback in 1 call (was 2 round-trips)
+# uplevel #0: xmsim commands must execute in global namespace
 proc ::mcp_bridge::do_release_and_verify {channel signal} {
-    release $signal
+    uplevel #0 [list release $signal]
     set readback "(unknown)"
-    catch {set readback [value $signal]}
+    catch {set readback [uplevel #0 [list value $signal]]}
     ::mcp_bridge::send_ok $channel $readback
 }
 
 # __DEBUG_SNAPSHOT__ — where + scope + stop -show in 1 call (was 3+ round-trips)
+# uplevel #0: xmsim commands must execute in global namespace
 proc ::mcp_bridge::do_debug_snapshot {channel} {
     set pos "(unknown)"
     set sc "(unknown)"
     set stops "(none)"
-    catch {set pos [where]}
-    catch {set sc [scope]}
-    catch {set stops [stop -show]}
+    catch {set pos [uplevel #0 where]}
+    catch {set sc [uplevel #0 scope]}
+    catch {set stops [uplevel #0 {stop -show}]}
     ::mcp_bridge::send_ok $channel "POSITION:$pos\nSCOPE:$sc\nSTOPS:$stops"
 }
 
