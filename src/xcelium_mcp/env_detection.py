@@ -13,9 +13,8 @@ from xcelium_mcp.sim_runner import (
     _sq,
     _login_shell_cmd,
     UserInputRequired,
-    load_sim_config,
-    run_full_discovery,
 )
+from xcelium_mcp.registry import load_sim_config
 
 
 async def _detect_env_shell(env_file: str, login_shell: str) -> str:
@@ -363,6 +362,8 @@ async def _load_or_detect_runner(sim_dir: str) -> dict:
         return cfg.get("runner", cfg)
 
     # v4: delegate to sim_discover instead of self-detecting
+    # Lazy import to avoid circular dependency (sim_runner → env_detection → sim_runner)
+    from xcelium_mcp.sim_runner import run_full_discovery
     await run_full_discovery(sim_dir)
     cfg = await load_sim_config(sim_dir)
     if cfg is not None:
