@@ -290,13 +290,15 @@ proc ::mcp_bridge::dispatch {channel cmd} {
     }
 
     if {[string match "__RUN_AND_REPORT__*" $cmd]} {
-        set duration [string trim [string range $cmd 20 end]]
+        # __RUN_AND_REPORT__ = 18 chars
+        set duration [string trim [string range $cmd 18 end]]
         ::mcp_bridge::do_run_and_report $channel $duration
         return
     }
 
     if {[string match "__DEPOSIT_AND_VERIFY__*" $cmd]} {
-        set args [string trim [string range $cmd 23 end]]
+        # __DEPOSIT_AND_VERIFY__ = 22 chars
+        set args [string trim [string range $cmd 22 end]]
         set parts [split $args " "]
         set signal [lindex $parts 0]
         set val [lindex $parts 1]
@@ -305,6 +307,7 @@ proc ::mcp_bridge::dispatch {channel cmd} {
     }
 
     if {[string match "__RELEASE_AND_VERIFY__*" $cmd]} {
+        # __RELEASE_AND_VERIFY__ = 22 chars
         set signal [string trim [string range $cmd 22 end]]
         ::mcp_bridge::do_release_and_verify $channel $signal
         return
@@ -319,7 +322,8 @@ proc ::mcp_bridge::dispatch {channel cmd} {
 
     if {[string match "__WAVEFORM_ADD_GROUP__*" $cmd]} {
         # Protocol: "__WAVEFORM_ADD_GROUP__ {group_name_or_""} sig1 sig2 ..."
-        set args [string trim [string range $cmd 23 end]]
+        # __WAVEFORM_ADD_GROUP__ = 22 chars
+        set args [string trim [string range $cmd 22 end]]
         set parts [split $args " "]
         set group_name [lindex $parts 0]
         # Normalize: "" placeholder → empty string (no group)
@@ -898,55 +902,50 @@ proc ::mcp_bridge::do_bisect {channel args_str} {
 # ---------------------------------------------------------------------------
 
 # __STATUS__ — where + scope in 1 call (was 2 round-trips)
-# uplevel #0: xmsim commands must execute in global namespace
 proc ::mcp_bridge::do_status {channel} {
     set pos "(unknown)"
     set sc "(unknown)"
-    catch {set pos [uplevel #0 where]}
-    catch {set sc [uplevel #0 scope]}
+    catch {set pos [where]}
+    catch {set sc [scope]}
     ::mcp_bridge::send_ok $channel "Position: $pos\nScope: $sc"
 }
 
 # __RUN_AND_REPORT__ — run + where in 1 call (was 2 round-trips)
-# uplevel #0: xmsim commands (run, where) must execute in global namespace
 proc ::mcp_bridge::do_run_and_report {channel duration} {
     if {$duration ne ""} {
-        uplevel #0 [list run $duration]
+        run $duration
     } else {
-        uplevel #0 run
+        run
     }
     set pos "(unknown)"
-    catch {set pos [uplevel #0 where]}
+    catch {set pos [where]}
     ::mcp_bridge::send_ok $channel $pos
 }
 
 # __DEPOSIT_AND_VERIFY__ — deposit + value readback in 1 call (was 2 round-trips)
-# uplevel #0: xmsim commands must execute in global namespace
 proc ::mcp_bridge::do_deposit_and_verify {channel signal val} {
-    uplevel #0 [list deposit $signal $val]
+    deposit $signal $val
     set readback "(unknown)"
-    catch {set readback [uplevel #0 [list value $signal]]}
+    catch {set readback [value $signal]}
     ::mcp_bridge::send_ok $channel $readback
 }
 
 # __RELEASE_AND_VERIFY__ — release + value readback in 1 call (was 2 round-trips)
-# uplevel #0: xmsim commands must execute in global namespace
 proc ::mcp_bridge::do_release_and_verify {channel signal} {
-    uplevel #0 [list release $signal]
+    release $signal
     set readback "(unknown)"
-    catch {set readback [uplevel #0 [list value $signal]]}
+    catch {set readback [value $signal]}
     ::mcp_bridge::send_ok $channel $readback
 }
 
 # __DEBUG_SNAPSHOT__ — where + scope + stop -show in 1 call (was 3+ round-trips)
-# uplevel #0: xmsim commands must execute in global namespace
 proc ::mcp_bridge::do_debug_snapshot {channel} {
     set pos "(unknown)"
     set sc "(unknown)"
     set stops "(none)"
-    catch {set pos [uplevel #0 where]}
-    catch {set sc [uplevel #0 scope]}
-    catch {set stops [uplevel #0 {stop -show}]}
+    catch {set pos [where]}
+    catch {set sc [scope]}
+    catch {set stops [stop -show]}
     ::mcp_bridge::send_ok $channel "POSITION:$pos\nSCOPE:$sc\nSTOPS:$stops"
 }
 
