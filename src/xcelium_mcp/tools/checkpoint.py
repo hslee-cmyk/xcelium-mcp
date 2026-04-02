@@ -158,7 +158,8 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             login_shell = "/usr/bin/tcsh"
             if cfg and "runner" in cfg:
                 login_shell = cfg["runner"].get("login_shell", login_shell)
-            xmls_cmd = f"{sq(xmls_path)} -snapshot -all -cdslib {sq(cds_lib)} -nolog -nocopyright"
+            run_dir = os.path.join(resolved_dir, cfg.get("runner", {}).get("run_dir", "run")) if cfg else resolved_dir
+            xmls_cmd = f"cd {sq(run_dir)} && {sq(xmls_path)} -snapshot -all -cdslib {sq(cds_lib)} -nolog -nocopyright"
             xmls_out = await ssh_run(
                 login_shell_cmd(login_shell, xmls_cmd),
                 timeout=30,
@@ -229,9 +230,10 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
                 f"echo 'DEFINE worklib {chk_worklib}' > {sq(cds_lib)}",
                 timeout=5,
             )
+            run_dir = os.path.join(resolved_dir, cfg.get("runner", {}).get("run_dir", "run")) if cfg else resolved_dir
             xmrm_errors: list[str] = []
             for name in result["removed"]:
-                xmrm_cmd = f"{sq(xmrm_path)} -snapshot worklib.{name} -cdslib {sq(cds_lib)} -nolog -nocopyright -force"
+                xmrm_cmd = f"cd {sq(run_dir)} && {sq(xmrm_path)} -snapshot worklib.{name} -cdslib {sq(cds_lib)} -nolog -nocopyright -force"
                 out = await ssh_run(
                     login_shell_cmd(login_shell, xmrm_cmd),
                     timeout=15,
