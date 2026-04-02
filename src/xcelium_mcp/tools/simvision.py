@@ -478,7 +478,7 @@ def register(
         # 6. Zoom
         start_zoom = center_time_ns - zoom_range_ns
         end_zoom = center_time_ns + zoom_range_ns
-        await bridge.execute(f"waveform zoom -range {start_zoom}:{end_zoom}ns", timeout=10.0)
+        await bridge.execute(f"waveform xview limits {start_zoom}ns {end_zoom}ns", timeout=10.0)
 
         # 7. Cursor
         t_cursor = cursor_time_ns if cursor_time_ns else center_time_ns
