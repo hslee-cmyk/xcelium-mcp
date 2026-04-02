@@ -127,6 +127,60 @@ def list_checkpoints(sim_dir: str) -> list[dict]:
     return list(manifest.get("checkpoints", {}).values())
 
 
+def rebuild_manifest(sim_dir: str, xmls_output: str) -> dict:
+    """Rebuild manifest from xmls -snapshot output.
+
+    Parses lines like:
+      snapshot worklib.L1_TOP015:module (SSS)
+    Preserves existing manifest entries, adds missing ones with origin="recovered".
+
+    Args:
+        sim_dir: Simulation directory.
+        xmls_output: Raw output from xmls -snapshot -all command.
+
+    Returns: {"added": [...], "existing": [...], "total": int}
+    """
+    import re
+    from datetime import datetime
+
+    manifest = _read_manifest(sim_dir)
+    checkpoints = manifest.setdefault("checkpoints", {})
+    compile_hash = compute_compile_hash(sim_dir)
+    manifest["compile_hash"] = compile_hash
+
+    # Parse snapshot names from xmls output
+    # Format: "\tsnapshot worklib.NAME:module (SSS)"
+    discovered: list[str] = []
+    for line in xmls_output.splitlines():
+        m = re.search(r'snapshot\s+worklib\.(\S+):module', line)
+        if m:
+            name = m.group(1)
+            if name != "top":  # skip the base elaboration snapshot
+                discovered.append(name)
+
+    added: list[str] = []
+    existing: list[str] = []
+
+    for name in discovered:
+        if name in checkpoints:
+            existing.append(name)
+        else:
+            checkpoints[name] = {
+                "saved_at": datetime.now().isoformat(),
+                "saved_time_ns": 0,
+                "compile_hash": "unknown",
+                "origin": "recovered",
+                "test_name": "",
+                "path": str(Path(_checkpoint_base_dir(sim_dir)) / name),
+            }
+            added.append(name)
+
+    if added:
+        _write_manifest(sim_dir, manifest)
+
+    return {"added": added, "existing": existing, "total": len(discovered)}
+
+
 def find_nearest_checkpoint(sim_dir: str, bug_time_ns: int) -> list[dict]:
     """Find checkpoints saved before bug_time_ns, sorted by proximity.
 

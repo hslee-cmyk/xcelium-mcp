@@ -6,7 +6,7 @@ import os
 from mcp.server.fastmcp import FastMCP
 
 from xcelium_mcp.bridge_manager import BridgeManager
-from xcelium_mcp.sim_runner import get_default_sim_dir, get_user_tmp_dir
+from xcelium_mcp.sim_runner import get_default_sim_dir, get_user_tmp_dir, ssh_run, sq
 import xcelium_mcp.checkpoint_manager as checkpoint_manager
 
 
@@ -99,6 +99,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
 
         mode:
           "list"    — list all checkpoints with details (no deletion)
+          "rebuild" — scan worklib .pak via xmls and rebuild manifest for missing entries
           "stale"   — checkpoints whose compile_hash no longer matches (default)
           "hash"    — checkpoints with compile_hash == filter_value
           "origin"  — checkpoints with origin == filter_value ("regression"/"bridge"/"single")
@@ -119,6 +120,55 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
         resolved_dir = sim_dir if sim_dir else await get_default_sim_dir()
         if not resolved_dir:
             return "ERROR: Could not determine sim_dir. Pass sim_dir explicitly."
+
+        # Rebuild mode: scan worklib via xmls and recover missing manifest entries
+        if mode == "rebuild":
+            chk_dir = os.path.join(resolved_dir, "checkpoints", "worklib")
+            if not os.path.isdir(chk_dir):
+                return f"No checkpoints directory found at {chk_dir}"
+            # Resolve xmls path from registry
+            cfg = None
+            try:
+                from xcelium_mcp.registry import load_sim_config
+                cfg = await load_sim_config(resolved_dir)
+            except Exception:
+                pass
+            xmls_path = "xmls"
+            if cfg and "eda_tools" in cfg:
+                # xmls is in the same bin dir as xrun
+                xrun = cfg["eda_tools"].get("xrun", "")
+                if xrun:
+                    xmls_path = xrun.replace("/xrun", "/xmls")
+            # Create temp cds.lib pointing to checkpoints worklib
+            user_tmp = await get_user_tmp_dir()
+            cds_lib = f"{user_tmp}/rebuild_cds.lib"
+            abs_worklib = os.path.abspath(chk_dir)
+            await ssh_run(
+                f"echo 'DEFINE worklib {abs_worklib}' > {sq(cds_lib)}",
+                timeout=5,
+            )
+            # Run xmls
+            xmls_out = await ssh_run(
+                f"{sq(xmls_path)} -snapshot -all -cdslib {sq(cds_lib)} -nolog -nocopyright",
+                timeout=30,
+            )
+            result = checkpoint_manager.rebuild_manifest(resolved_dir, xmls_out)
+            lines = [
+                f"sim_dir: {resolved_dir}",
+                f"Scanned worklib: {abs_worklib}",
+                f"Total snapshots found: {result['total']}",
+            ]
+            if result["added"]:
+                lines.append(f"\nRecovered ({len(result['added'])}):")
+                for n in result["added"]:
+                    lines.append(f"  + {n}")
+            if result["existing"]:
+                lines.append(f"\nAlready in manifest ({len(result['existing'])}):")
+                for n in result["existing"]:
+                    lines.append(f"  = {n}")
+            if not result["added"] and not result["existing"]:
+                lines.append("No snapshots found in worklib.")
+            return "\n".join(lines)
 
         result = checkpoint_manager.cleanup_checkpoints(
             resolved_dir, mode=mode, filter_value=filter_value, dry_run=dry_run
