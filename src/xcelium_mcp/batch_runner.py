@@ -207,7 +207,7 @@ async def _run_batch_single(
         # P6-5: background watcher — touch {log}.done when PID exits
         done_file = f"{log_file}.done"
         await ssh_run(
-            f"(while kill -0 {pid} 2>/dev/null; do sleep 2; done; touch {done_file}) &",
+            f"(while kill -0 {pid} 2>/dev/null; do sleep 2; done; touch {done_file}) >& /dev/null &",
             timeout=5,
         )
 
