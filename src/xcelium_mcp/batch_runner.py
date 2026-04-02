@@ -16,7 +16,6 @@ from xcelium_mcp.sim_runner import (
     _sq,
     _build_redirect,
     _login_shell_cmd,
-    _get_user_tmp_dir,
 )
 from xcelium_mcp.registry import load_sim_config, save_sim_config
 
@@ -144,6 +143,7 @@ async def _run_batch_single(
     # nohup + polling returns grep summary only.
 
     # --- nohup + stdbuf + job resume ---
+    from xcelium_mcp.sim_runner import _get_user_tmp_dir
     user_tmp = await _get_user_tmp_dir()
     job_file = f"{user_tmp}/batch_job.json"
 
@@ -245,6 +245,7 @@ async def _run_batch_regression(
     """
     import time as _time
 
+    from xcelium_mcp.sim_runner import _get_user_tmp_dir
     user_tmp = await _get_user_tmp_dir()
     job_file = f"{user_tmp}/regression_job.json"
     ts = int(_time.time())
