@@ -237,7 +237,7 @@ async def _run_batch_single(
             pid_alive = await ssh_run(f"kill -0 {pid} 2>/dev/null && echo ALIVE || echo DEAD")
             if "ALIVE" in pid_alive:
                 # Previous batch still running → resume polling
-                result = await _poll_batch_log(
+                result, _ = await _poll_batch_log(
                     job["log_file"], effective_timeout,
                     f"(Resumed monitoring existing batch PID {pid})\n"
                 )
@@ -293,7 +293,7 @@ async def _run_batch_single(
         )
 
     # Poll for completion
-    result = await _poll_batch_log(log_file, effective_timeout)
+    result, _ = await _poll_batch_log(log_file, effective_timeout)
 
     # Cleanup job file
     await ssh_run(f"rm -f {job_file}", timeout=5)
@@ -378,7 +378,7 @@ async def _run_batch_regression(
                     log_file = job.get("log_file", log_file)
                     current_log = job.get("current_log", "")
                     if current_log:
-                        await _poll_batch_log(current_log, 600)
+                        _, _ = await _poll_batch_log(current_log, 600)
                         completed_tests.append(current)
                 else:
                     # PID dead — check what was completed
@@ -405,7 +405,7 @@ async def _run_batch_regression(
                 timeout=15.0,
             )
         # P6-1/P6-2: adaptive polling via _poll_batch_log
-        await _poll_batch_log(log_file, timeout=3600,)
+        _, _ = await _poll_batch_log(log_file, timeout=3600)
 
     else:
         # Per-test loop — skip completed tests (resume support)
@@ -477,16 +477,21 @@ async def _run_batch_regression(
                 )
 
             # Per-test poll (P6-1/P6-2/P6-5 via _poll_batch_log)
-            await _poll_batch_log(test_log, 600)
+            _, timed_out = await _poll_batch_log(test_log, 600)
 
-            # Guard: kill stale xmsim/xmrm if still alive after poll (prevents worklib lock)
-            if pid_str.strip().isdigit():
+            if timed_out:
+                # Guard: kill stale xmsim/xmrm to prevent worklib lock on next test
+                if pid_str.strip().isdigit():
+                    await ssh_run(
+                        f"kill -0 {test_pid} 2>/dev/null && kill {test_pid}",
+                        timeout=5,
+                    )
+                await ssh_run("pkill -f xmrm 2>/dev/null", timeout=5)
+                # Append TIMEOUT marker to per-test log
                 await ssh_run(
-                    f"kill -0 {test_pid} 2>/dev/null && kill {test_pid}",
+                    f"echo '[TIMEOUT] Test did not complete within 600s' >> {test_log}",
                     timeout=5,
                 )
-            # Also kill any xmrm (compile) that may be stuck on worklib lock
-            await ssh_run("pkill -f xmrm 2>/dev/null", timeout=5)
 
             completed_tests.append(test_name)
 
@@ -537,11 +542,14 @@ async def _poll_batch_log(log_file: str, timeout: float, prefix: str = "") -> st
           Short gap catches fast tests; longer gap reduces SSH overhead for slow ones.
     P6-2: Single SSH call per poll — tail + done-file check in one round-trip.
     P6-5: .done marker file — reliable completion signal even when keywords scroll past tail.
+
+    Returns: (result_str, timed_out) — timed_out=True when poll exhausted without completion.
     """
     import time as _time
     deadline = _time.time() + timeout
     interval = 2.0          # P6-1: start at 2s
     done_file = f"{log_file}.done"
+    timed_out = True
 
     while _time.time() < deadline:
         # P6-2: single SSH call — tail for keyword scan + done-file sentinel
@@ -552,6 +560,7 @@ async def _poll_batch_log(log_file: str, timeout: float, prefix: str = "") -> st
         if "__DONE__" in out or any(
             kw in out for kw in ("$finish", "COMPLETE", "PASS", "FAIL", "Errors:")
         ):
+            timed_out = False
             break
         # P6-1: adaptive backoff (×1.5, cap 10s)
         await asyncio.sleep(interval)
@@ -561,7 +570,7 @@ async def _poll_batch_log(log_file: str, timeout: float, prefix: str = "") -> st
         f"grep -E 'PASS|FAIL|Errors:|\\$finish|COMPLETE' {log_file} 2>/dev/null | tail -30"
     )
     await ssh_run(f"rm -f {done_file}", timeout=5)   # P6-5: cleanup marker
-    return prefix + result
+    return prefix + result, timed_out
 
 
 # ===========================================================================
