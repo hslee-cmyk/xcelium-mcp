@@ -157,33 +157,25 @@ def register(
         from_checkpoint: str = "",
         dump_signals: list[str] | None = None,
         rename_dump: bool = False,
-        parallel: bool = False,
         sim_mode: str = "",
         extra_args: str = "",
     ) -> str:
         """Run regression over a list of tests.
 
-        Normal run (from_checkpoint=""): L1 created on first test (Phase 4), L2 per test.
-        Restore run (from_checkpoint=name): restore from checkpoint, run each test (Phase 4).
-
-        Uses screen session for background execution with per-test progress polling.
-        Parallel execution is reserved for a later phase (parallel=True raises an error).
+        Normal run (from_checkpoint=""): nohup per-test execution with adaptive log polling.
+        Restore run (from_checkpoint=name): not yet implemented (Phase 4).
 
         Returns: regression summary table (N/M PASS, failures: [...]).
 
         Args:
             test_list: List of test names. Empty → auto-detect from mcp_sim_config.json.
             sim_dir: Simulation directory. Empty → default from mcp_registry.json.
-            from_checkpoint: Checkpoint for [A'] restore mode.
+            from_checkpoint: Checkpoint for [A'] restore mode (not yet implemented).
             dump_signals: Additional dump signals.
             rename_dump: Enable Method 6-B SHM rename fallback.
-            parallel: Parallel screen execution (reserved for future phase).
         """
         if dump_signals is None:
             dump_signals = []
-
-        if parallel:
-            return "ERROR: parallel=True is reserved for a future phase. Use parallel=False."
 
         # Resolve sim_dir
         try:

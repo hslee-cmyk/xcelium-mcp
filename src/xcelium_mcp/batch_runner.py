@@ -103,9 +103,7 @@ async def _run_batch_single(
 ) -> str:
     """Execute a single simulation test and return combined log output.
 
-    Strategy:
-      timeout <= 120 → direct ssh_run (synchronous, result returned immediately)
-      timeout  > 120 → nohup + stdbuf -oL + log polling (immediate flush, no screen)
+    Strategy: nohup + PID watcher + adaptive log polling (P6-1/P6-2/P6-5).
 
     SHM overwrite prevention:
       Method 6-A (default): injects TEST_NAME env var so setup tcl uses
@@ -243,13 +241,13 @@ async def _run_batch_regression(
 ) -> str:
     """Execute regression tests via nohup + stdbuf with job resume.
 
-    nohup + stdbuf -oL: immediate log flush, no buffer delay.
+    nohup + PID watcher + adaptive log polling (P6-1/P6-2/P6-5).
     Job resume: on reconnection, resumes from last completed test.
 
     needs_test_name=False → regression_script handles all tests → 1 cmd
     needs_test_name=True  → iterate test_list, per-test nohup + poll
 
-    Note: from_checkpoint raises NotImplementedError in regression mode (Phase 4).
+    Note: from_checkpoint raises NotImplementedError (Phase 4 — not yet implemented).
     """
     if from_checkpoint:
         # TODO: Phase 4 — restore_checkpoint then per-test run
