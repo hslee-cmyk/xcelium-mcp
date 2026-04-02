@@ -18,13 +18,13 @@ from xcelium_mcp.sim_runner import (
     UserInputRequired,
     ssh_run,
     build_redirect,
-    _get_default_sim_dir,
+    get_default_sim_dir,
     _parse_shm_path,
     _parse_time_ns,
-    _resolve_exec_cmd,
-    _load_or_detect_runner,
-    load_sim_config,
 )
+from xcelium_mcp.registry import load_sim_config
+from xcelium_mcp.env_detection import _load_or_detect_runner
+from xcelium_mcp.batch_runner import _resolve_exec_cmd
 import xcelium_mcp.csv_cache as csv_cache
 import xcelium_mcp.debug_tools as debug_tools
 import xcelium_mcp.checkpoint_manager as checkpoint_manager
@@ -313,11 +313,11 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             sim_dir:           Simulation directory (auto-detected if empty).
             keep_alive:        True = leave simulator running after analysis (default).
         """
-        resolved_dir = sim_dir if sim_dir else await _get_default_sim_dir()
+        resolved_dir = sim_dir if sim_dir else await get_default_sim_dir()
 
         # 1. Restore — import from checkpoint module's registered tool
-        from xcelium_mcp.tools.checkpoint import _restore_checkpoint_impl
-        restore_result = await _restore_checkpoint_impl(bridges, checkpoint_name, resolved_dir)
+        from xcelium_mcp.tools.checkpoint import restore_checkpoint_impl
+        restore_result = await restore_checkpoint_impl(bridges, checkpoint_name, resolved_dir)
         if "ERROR" in restore_result or "restore failed" in restore_result:
             return f"Restore failed: {restore_result}"
 
@@ -429,7 +429,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             sim_dir: Simulation directory for auto-detection and output. Uses default if empty.
         """
         try:
-            resolved_sim_dir = sim_dir if sim_dir else await _get_default_sim_dir()
+            resolved_sim_dir = sim_dir if sim_dir else await get_default_sim_dir()
         except UserInputRequired as e:
             return f"USER INPUT REQUIRED:\n{e.prompt}"
 
@@ -580,7 +580,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         # Auto-query nearest checkpoints from checkpoint_manager when not provided
         resolved_checkpoints = list(available_checkpoints)
         if not resolved_checkpoints and bug_time_ns:
-            sim_dir = await _get_default_sim_dir()
+            sim_dir = await get_default_sim_dir()
             if sim_dir:
                 nearest = checkpoint_manager.find_nearest_checkpoint(sim_dir, bug_time_ns)
                 resolved_checkpoints = [c["name"] for c in nearest[:3]]

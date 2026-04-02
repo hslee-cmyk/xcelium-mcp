@@ -11,14 +11,12 @@ from xcelium_mcp.bridge_manager import BridgeManager
 from xcelium_mcp.sim_runner import (
     UserInputRequired,
     ssh_run,
-    _get_default_sim_dir,
-    _load_or_detect_runner,
-    _run_batch_single,
-    _run_batch_regression,
-    resolve_test_name,
-    load_sim_config,
+    get_default_sim_dir,
     run_full_discovery,
 )
+from xcelium_mcp.registry import load_sim_config
+from xcelium_mcp.env_detection import _load_or_detect_runner
+from xcelium_mcp.batch_runner import _run_batch_single, _run_batch_regression, resolve_test_name
 
 
 # ---------------------------------------------------------------------------
@@ -126,11 +124,11 @@ def register(
             dump_signals = []
         # Resolve sim_dir
         try:
-            resolved_sim_dir = sim_dir if sim_dir else await _get_default_sim_dir()
+            resolved_sim_dir = sim_dir if sim_dir else await get_default_sim_dir()
             if not resolved_sim_dir:
                 # v4: auto-discover instead of error
                 await run_full_discovery(sim_dir)
-                resolved_sim_dir = sim_dir if sim_dir else await _get_default_sim_dir()
+                resolved_sim_dir = sim_dir if sim_dir else await get_default_sim_dir()
                 if not resolved_sim_dir:
                     return "ERROR: sim_discover failed. Provide sim_dir explicitly."
         except UserInputRequired as e:
@@ -231,11 +229,11 @@ def register(
 
         # Resolve sim_dir
         try:
-            resolved_sim_dir = sim_dir if sim_dir else await _get_default_sim_dir()
+            resolved_sim_dir = sim_dir if sim_dir else await get_default_sim_dir()
             if not resolved_sim_dir:
                 # v4: auto-discover instead of error
                 await run_full_discovery(sim_dir)
-                resolved_sim_dir = sim_dir if sim_dir else await _get_default_sim_dir()
+                resolved_sim_dir = sim_dir if sim_dir else await get_default_sim_dir()
                 if not resolved_sim_dir:
                     return "ERROR: sim_discover failed. Provide sim_dir explicitly."
         except UserInputRequired as e:

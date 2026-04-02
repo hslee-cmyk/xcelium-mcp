@@ -13,15 +13,15 @@ from xcelium_mcp.tcl_bridge import TclBridge, TclError
 from xcelium_mcp.sim_runner import (
     ssh_run,
     login_shell_cmd,
-    _detect_vnc_display,
     build_redirect,
     _parse_shm_path,
     _parse_time_ns,
-    resolve_test_name,
     get_user_tmp_dir,
-    load_sim_config,
-    _get_default_sim_dir,
+    get_default_sim_dir,
 )
+from xcelium_mcp.registry import load_sim_config
+from xcelium_mcp.env_detection import _detect_vnc_display
+from xcelium_mcp.batch_runner import resolve_test_name
 
 # Type aliases for cross-tool callable references
 WaveformAddSignalsFn = Callable[..., Coroutine[Any, Any, str]]
@@ -164,7 +164,7 @@ def register(
                     pass
 
         # 2. Resolve sim_dir + config
-        resolved_dir = sim_dir if sim_dir else await _get_default_sim_dir()
+        resolved_dir = sim_dir if sim_dir else await get_default_sim_dir()
         if not resolved_dir:
             return "ERROR: No sim_dir. Run sim_discover first."
         config = await load_sim_config(resolved_dir)

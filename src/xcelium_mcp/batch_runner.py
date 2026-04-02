@@ -488,8 +488,8 @@ async def resolve_test_name(short_name: str, sim_dir: str = "") -> str:
     Cache miss → triggers list_tests (mcp_config 경유 캐시 저장).
     """
     # Lazy import to avoid circular dependency (sim_runner → batch_runner → sim_runner)
-    from xcelium_mcp.sim_runner import _get_default_sim_dir
-    resolved_dir = sim_dir if sim_dir else await _get_default_sim_dir()
+    from xcelium_mcp.sim_runner import get_default_sim_dir
+    resolved_dir = sim_dir if sim_dir else await get_default_sim_dir()
     cfg = await load_sim_config(resolved_dir) if resolved_dir else None
     cached = cfg.get("test_discovery", {}).get("cached_tests", []) if cfg else []
 

@@ -6,13 +6,13 @@ import os
 from mcp.server.fastmcp import FastMCP
 
 from xcelium_mcp.bridge_manager import BridgeManager
-from xcelium_mcp.sim_runner import _get_default_sim_dir, get_user_tmp_dir
+from xcelium_mcp.sim_runner import get_default_sim_dir, get_user_tmp_dir
 import xcelium_mcp.checkpoint_manager as checkpoint_manager
 
 
-async def _restore_checkpoint_impl(bridges: BridgeManager, name: str, sim_dir: str) -> str:
+async def restore_checkpoint_impl(bridges: BridgeManager, name: str, sim_dir: str) -> str:
     """Shared restore logic — callable from other modules (e.g. debug.bisect_restore_and_debug)."""
-    resolved_dir = sim_dir if sim_dir else await _get_default_sim_dir()
+    resolved_dir = sim_dir if sim_dir else await get_default_sim_dir()
     chk_base = os.path.join(resolved_dir, "checkpoints") if resolved_dir else f"{await get_user_tmp_dir()}/checkpoints"
 
     # compile_hash verification
@@ -57,7 +57,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
         """
         bridge = bridges.xmsim
 
-        resolved_dir = sim_dir if sim_dir else await _get_default_sim_dir()
+        resolved_dir = sim_dir if sim_dir else await get_default_sim_dir()
         chk_base = os.path.join(resolved_dir, "checkpoints") if resolved_dir else f"{await get_user_tmp_dir()}/checkpoints"
 
         cmd = f"__SAVE__ {name} {chk_base}" if name else f"__SAVE__  {chk_base}"
@@ -92,7 +92,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             name:    Checkpoint name to restore. Empty = last saved checkpoint.
             sim_dir: Simulation directory (auto-detected if empty).
         """
-        return await _restore_checkpoint_impl(bridges, name, sim_dir)
+        return await restore_checkpoint_impl(bridges, name, sim_dir)
 
     @mcp.tool()
     async def cleanup_checkpoints(
@@ -118,7 +118,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             project_filter: Path substring for "project" mode.
             dry_run:        True = report only, False = delete.
         """
-        resolved_dir = sim_dir if sim_dir else await _get_default_sim_dir()
+        resolved_dir = sim_dir if sim_dir else await get_default_sim_dir()
         if not resolved_dir:
             return "ERROR: Could not determine sim_dir. Pass sim_dir explicitly."
 
@@ -144,3 +144,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             for n in result["kept"]:
                 lines.append(f"  - {n}")
         return "\n".join(lines)
+
+
+# Backward-compat alias
+_restore_checkpoint_impl = restore_checkpoint_impl

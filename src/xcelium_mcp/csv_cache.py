@@ -33,8 +33,8 @@ async def _resolve_simvisdbutil() -> str:
         return _simvisdbutil_path
 
     # Try registry first
-    from xcelium_mcp.sim_runner import _get_default_sim_dir, load_sim_config
-    sim_dir = await _get_default_sim_dir()
+    from xcelium_mcp.sim_runner import get_default_sim_dir, load_sim_config
+    sim_dir = await get_default_sim_dir()
     if sim_dir:
         cfg = await load_sim_config(sim_dir)
         if cfg and "eda_tools" in cfg:
@@ -48,7 +48,7 @@ async def _resolve_simvisdbutil() -> str:
     await run_full_discovery(sim_dir or "")
 
     # Retry after discover
-    sim_dir = await _get_default_sim_dir()
+    sim_dir = await get_default_sim_dir()
     if sim_dir:
         cfg = await load_sim_config(sim_dir)
         if cfg and "eda_tools" in cfg:
@@ -136,8 +136,8 @@ async def extract(
 
     # simvisdbutil is a wrapper script that needs EDA env (cds_root in PATH).
     # Source env from registry before execution.
-    from xcelium_mcp.sim_runner import _get_default_sim_dir, load_sim_config, login_shell_cmd
-    sim_dir = await _get_default_sim_dir()
+    from xcelium_mcp.sim_runner import get_default_sim_dir, load_sim_config, login_shell_cmd
+    sim_dir = await get_default_sim_dir()
     cfg = await load_sim_config(sim_dir) if sim_dir else None
     if cfg:
         runner = cfg.get("runner", {})

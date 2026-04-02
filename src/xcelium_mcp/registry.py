@@ -144,14 +144,14 @@ def _parse_json_value(value: str):
 async def config_action(action: str, file: str, key: str, value: str) -> str:
     """Execute mcp_config action."""
     # Lazy import to avoid circular dependency (sim_runner imports from registry)
-    from xcelium_mcp.sim_runner import _get_default_sim_dir
+    from xcelium_mcp.sim_runner import get_default_sim_dir
 
     # Load target file
     if file == "registry":
         data = load_registry()
         path = _REGISTRY_PATH
     else:
-        sim_dir = await _get_default_sim_dir()
+        sim_dir = await get_default_sim_dir()
         if not sim_dir:
             raise RuntimeError("No default sim_dir. Run sim_discover first.")
         cfg = await load_sim_config(sim_dir)

@@ -194,7 +194,7 @@ def _parse_time_ns(where_output: str) -> int:
     return 0
 
 
-async def _get_default_sim_dir() -> str:
+async def get_default_sim_dir() -> str:
     """Return the default simulation directory from mcp_registry.json."""
     registry = load_registry()
     projects = registry.get("projects", {})
@@ -203,6 +203,10 @@ async def _get_default_sim_dir() -> str:
             if env.get("is_default"):
                 return env_key
     return ""
+
+
+# Backward-compat alias
+_get_default_sim_dir = get_default_sim_dir
 
 
 # ===================================================================
@@ -444,10 +448,10 @@ async def start_simulation(
     """Start simulation. Registry없으면 sim_discover 자동 호출."""
     validate_extra_args(extra_args)
 
-    resolved_dir = sim_dir if sim_dir else await _get_default_sim_dir()
+    resolved_dir = sim_dir if sim_dir else await get_default_sim_dir()
     if not resolved_dir:
         await run_full_discovery(sim_dir)
-        resolved_dir = sim_dir if sim_dir else await _get_default_sim_dir()
+        resolved_dir = sim_dir if sim_dir else await get_default_sim_dir()
         if not resolved_dir:
             raise RuntimeError("sim_discover failed to create registry.")
 

@@ -15,15 +15,12 @@ from xcelium_mcp.sim_runner import (
     ssh_run,
     start_simulation,
     run_full_discovery,
-    _get_default_sim_dir,
-    resolve_test_name,
-    _detect_vnc_display,
+    get_default_sim_dir,
     get_user_tmp_dir,
-    load_sim_config,
-    load_registry,
-    config_action,
-    _update_registry_from_config,
 )
+from xcelium_mcp.registry import load_sim_config, load_registry, config_action, _update_registry_from_config
+from xcelium_mcp.batch_runner import resolve_test_name
+from xcelium_mcp.env_detection import _detect_vnc_display
 
 
 # ---------------------------------------------------------------------------
@@ -101,11 +98,11 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             sim_dir: Simulation directory. Empty = registry default.
             pattern: Filter pattern. Empty = all tests.
         """
-        resolved_dir = sim_dir if sim_dir else await _get_default_sim_dir()
+        resolved_dir = sim_dir if sim_dir else await get_default_sim_dir()
         if not resolved_dir:
             try:
                 await run_full_discovery(sim_dir)
-                resolved_dir = await _get_default_sim_dir()
+                resolved_dir = await get_default_sim_dir()
             except UserInputRequired as e:
                 return f"USER INPUT REQUIRED:\n{e.prompt}"
 

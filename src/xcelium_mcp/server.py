@@ -35,7 +35,7 @@ from xcelium_mcp.tools import (  # noqa: E402
     simvision,
     debug,
 )
-from xcelium_mcp.tools.checkpoint import _restore_checkpoint_impl  # noqa: E402
+from xcelium_mcp.tools.checkpoint import restore_checkpoint_impl  # noqa: E402
 
 # Phase 1: modules without cross-tool dependencies
 signal_inspection.register(mcp, bridges)
@@ -47,7 +47,7 @@ waveform_tools = waveform.register(mcp, bridges)
 debug_tools = debug.register(mcp, bridges)
 
 # Phase 3: batch needs restore_checkpoint
-batch.register(mcp, bridges, restore_checkpoint_fn=_restore_checkpoint_impl)
+batch.register(mcp, bridges, restore_checkpoint_fn=restore_checkpoint_impl)
 
 # Phase 4: simvision needs cross-tool references
 simvision.register(
