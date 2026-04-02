@@ -10,6 +10,7 @@ tools/*.py imports that reference sim_runner.
 from __future__ import annotations
 
 import asyncio
+import base64
 import os
 import re
 import shlex
@@ -78,14 +79,17 @@ async def ssh_run(cmd: str, timeout: float = 60.0, log_file: str = "") -> str:
 
 def login_shell_cmd(login_shell: str, cmd: str) -> str:
     """Build a command that runs in login shell environment."""
+    # Escape single quotes in cmd to prevent shell injection:
+    # replace ' with '\'' (end quote, literal apostrophe, reopen quote)
+    safe_cmd = cmd.replace("'", "'\\''")
     if "tcsh" in login_shell or "csh" in login_shell:
         return (
             f"{login_shell} -c '"
             f"if (-f ~/.tcshrc) source ~/.tcshrc >& /dev/null; "
             f"if (-f ~/.cshrc) source ~/.cshrc >& /dev/null; "
-            f"{cmd}'"
+            f"{safe_cmd}'"
         )
-    return f"{login_shell} -l -c '{cmd}'"
+    return f"{login_shell} -l -c '{safe_cmd}'"
 
 
 # Backward-compat alias
@@ -242,7 +246,9 @@ async def _patch_legacy_run_script(sim_dir: str, runner_info: dict) -> str:
     escaped_original = re.escape(original_tcl)
     replacement = f'${{MCP_INPUT_TCL:-{original_tcl}}}'
 
-    sed_cmd = f"sed -i 's|-input {escaped_original}|-input {replacement}|' {_sp}"
+    # sq() the sed pattern to prevent shell injection from original_tcl/replacement
+    sed_pattern = f"s|-input {escaped_original}|-input {replacement}|"
+    sed_cmd = f"sed -i -e {sq(sed_pattern)} {_sp}"
     await ssh_run(sed_cmd, timeout=10)
 
     r = await ssh_run(f"grep -c 'MCP_INPUT_TCL' {_sp} 2>/dev/null")
@@ -275,7 +281,9 @@ async def _update_simvisionrc(bridge_tcl: str) -> str:
             skip_next = False
             new_lines.append(line)
         new_content = "\n".join(new_lines)
-        await ssh_run(f"cat > {rc_path} << 'SIMVISIONRC_EOF'\n{new_content}\nSIMVISIONRC_EOF")
+        # base64-encode to avoid heredoc delimiter injection
+        b64 = base64.b64encode(new_content.encode()).decode()
+        await ssh_run(f"echo {sq(b64)} | base64 -d > {sq(rc_path)}")
         return "updated (marker found)"
 
     if "mcp_bridge" in content:

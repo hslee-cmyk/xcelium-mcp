@@ -11,9 +11,12 @@ _MISSING = object()
 
 
 def load_registry() -> dict:
-    """Load mcp_registry.json. Returns empty structure if not found."""
+    """Load mcp_registry.json. Returns empty structure if not found or corrupt."""
     if _REGISTRY_PATH.exists():
-        return json.loads(_REGISTRY_PATH.read_text())
+        try:
+            return json.loads(_REGISTRY_PATH.read_text())
+        except json.JSONDecodeError:
+            pass
     return {"version": 1, "projects": {}}
 
 

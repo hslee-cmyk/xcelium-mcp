@@ -76,6 +76,80 @@ async def _prepare_dump_scope_internal(
 
 
 # ---------------------------------------------------------------------------
+# Module-level implementation helpers (extracted for safe forward-reference)
+# ---------------------------------------------------------------------------
+
+async def _bisect_signal_dump_impl(
+    shm_path: str,
+    signal: str,
+    op: str,
+    value: str,
+    start_ns: int = 0,
+    end_ns: int = 0,
+    context_signals: list[str] | None = None,
+) -> str:
+    """Implementation of bisect_signal_dump — callable without a registered tool reference."""
+    if context_signals is None:
+        context_signals = []
+    all_signals = list({signal} | set(context_signals))
+
+    try:
+        csv_path = await csv_cache.extract(
+            shm_path=shm_path,
+            signals=all_signals,
+            start_ns=start_ns,
+            end_ns=end_ns,
+            missing_ok=True,
+        )
+    except RuntimeError as e:
+        return f"ERROR extracting CSV: {e}"
+
+    result = csv_cache.bisect_csv(
+        csv_path=csv_path,
+        signal=signal,
+        op=op,
+        value=value,
+        start_ns=start_ns,
+        end_ns=end_ns,
+        context_rows=2,
+    )
+
+    if "error" in result:
+        return (
+            f"Signal '{signal}' not found in SHM.\n"
+            f"{result['error']}\n\n"
+            "Tip: Call request_additional_signals to re-run simulation with this signal probed."
+        )
+
+    if not result["found"]:
+        return (
+            f"No match found for {signal} {op} {value} "
+            f"in range [{start_ns}ns, {end_ns or 'end'}]."
+        )
+
+    # Format context table
+    ctx = result["context"]
+    match_idx = result["match_row"]
+    cols = [signal] + context_signals
+
+    lines = [
+        f"Match at {result['match_time_ns']}ns: {signal} = {result['match_value']}",
+        "",
+        "Context:",
+    ]
+    header = "  time(ns)   | " + " | ".join(f"{c[-20:]}" for c in cols)
+    lines.append(header)
+    lines.append("  " + "-" * (len(header) - 2))
+
+    for i, row in enumerate(ctx):
+        prefix = "\u2605 " if i == match_idx else "  "
+        vals = " | ".join(row.get(c, "?") for c in cols)
+        lines.append(f"{prefix}{row.get('time', '?'):>10} | {vals}")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Tool registration
 # ---------------------------------------------------------------------------
 
@@ -269,7 +343,8 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         """
         if shm_path:
             # Mode A: SHM dump → CSV → in-memory search (P4-7)
-            return await bisect_signal_dump(
+            # Use module-level helper to avoid forward-reference into closure
+            return await _bisect_signal_dump_impl(
                 shm_path=shm_path,
                 signal=signal,
                 op=op,
@@ -349,7 +424,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
 
         # 4. Optional CSV analysis after stop
         if shm_path and watch_signal_path and watch_value:
-            csv_result = await bisect_signal_dump(
+            csv_result = await _bisect_signal_dump_impl(
                 shm_path=shm_path,
                 signal=watch_signal_path,
                 op="eq" if watch_op == "==" else watch_op,
@@ -494,65 +569,15 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             end_ns:          Search end time in nanoseconds (0 = to end).
             context_signals: Additional signals to include in CSV extract for context.
         """
-        if context_signals is None:
-            context_signals = []
-        all_signals = list({signal} | set(context_signals))
-
-        try:
-            csv_path = await csv_cache.extract(
-                shm_path=shm_path,
-                signals=all_signals,
-                start_ns=start_ns,
-                end_ns=end_ns,
-                missing_ok=True,
-            )
-        except RuntimeError as e:
-            return f"ERROR extracting CSV: {e}"
-
-        result = csv_cache.bisect_csv(
-            csv_path=csv_path,
+        return await _bisect_signal_dump_impl(
+            shm_path=shm_path,
             signal=signal,
             op=op,
             value=value,
             start_ns=start_ns,
             end_ns=end_ns,
-            context_rows=2,
+            context_signals=context_signals,
         )
-
-        if "error" in result:
-            # Signal not in SHM
-            return (
-                f"Signal '{signal}' not found in SHM.\n"
-                f"{result['error']}\n\n"
-                "Tip: Call request_additional_signals to re-run simulation with this signal probed."
-            )
-
-        if not result["found"]:
-            return (
-                f"No match found for {signal} {op} {value} "
-                f"in range [{start_ns}ns, {end_ns or 'end'}]."
-            )
-
-        # Format context table
-        ctx = result["context"]
-        match_idx = result["match_row"]
-        cols = [signal] + context_signals
-
-        lines = [
-            f"Match at {result['match_time_ns']}ns: {signal} = {result['match_value']}",
-            "",
-            "Context:",
-        ]
-        header = "  time(ns)   | " + " | ".join(f"{c[-20:]}" for c in cols)
-        lines.append(header)
-        lines.append("  " + "-" * (len(header) - 2))
-
-        for i, row in enumerate(ctx):
-            prefix = "\u2605 " if i == match_idx else "  "
-            vals = " | ".join(row.get(c, "?") for c in cols)
-            lines.append(f"{prefix}{row.get('time', '?'):>10} | {vals}")
-
-        return "\n".join(lines)
 
     @mcp.tool()
     async def request_additional_signals(

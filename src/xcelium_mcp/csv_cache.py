@@ -11,6 +11,7 @@ Architecture note:
 from __future__ import annotations
 
 import hashlib
+from collections import deque
 from pathlib import Path
 
 from xcelium_mcp.sim_runner import ssh_run
@@ -200,25 +201,63 @@ def bisect_csv(
     """
     import csv as _csv
 
-    rows: list[dict] = []
+    # Use a sliding window deque(maxlen=context_rows) for prefix rows to avoid
+    # loading the entire CSV into memory. Post-match suffix is read-ahead inline.
+    prefix: deque[dict] = deque(maxlen=context_rows)
+    first_row: dict | None = None
+    prev_value: str | None = None
+    abs_index = 0  # row index within filtered range
+
     with open(csv_path, newline="") as fh:
         reader = _csv.DictReader(fh)
-        # simvisdbutil uses "SimTime" column. With -timeunits ns, values are in ns.
         for row in reader:
+            # simvisdbutil uses "SimTime" column. With -timeunits ns, values are in ns.
             raw_time = row.get("SimTime") or row.get("time") or "0"
             ns = int(raw_time)
             row["_ns"] = ns
+
             if start_ns and ns < start_ns:
                 continue
             if end_ns and ns > end_ns:
                 break
-            rows.append(row)
 
-    if not rows:
+            if first_row is None:
+                first_row = row
+
+            cur_val = row.get(signal, "")
+            if _eval_condition(cur_val, op, value, prev_value):
+                # Build context: prefix rows + match row + read-ahead suffix
+                ctx: list[dict] = list(prefix) + [row]
+                match_row_idx = len(ctx) - 1  # index of match row in ctx
+                # Read-ahead up to context_rows more rows for suffix
+                suffix_needed = context_rows
+                for suffix_row in reader:
+                    raw_t = suffix_row.get("SimTime") or suffix_row.get("time") or "0"
+                    s_ns = int(raw_t)
+                    suffix_row["_ns"] = s_ns
+                    if end_ns and s_ns > end_ns:
+                        break
+                    ctx.append(suffix_row)
+                    suffix_needed -= 1
+                    if suffix_needed <= 0:
+                        break
+                return {
+                    "found": True,
+                    "match_time_ns": row["_ns"],
+                    "match_value": cur_val,
+                    "match_index": abs_index,
+                    "context": ctx,
+                    "match_row": match_row_idx,
+                }
+            prev_value = cur_val
+            prefix.append(row)
+            abs_index += 1
+
+    if first_row is None:
         return {"found": False, "match_time_ns": 0, "match_value": "", "context": []}
 
-    if signal not in rows[0]:
-        available = [k for k in rows[0].keys() if k not in ("time", "SimTime", "_ns")]
+    if signal not in first_row:
+        available = [k for k in first_row.keys() if k not in ("time", "SimTime", "_ns")]
         return {
             "found": False,
             "match_time_ns": 0,
@@ -226,22 +265,6 @@ def bisect_csv(
             "context": [],
             "error": f"Signal '{signal}' not in CSV. Available: {available[:10]}",
         }
-
-    prev_value: str | None = None
-    for i, row in enumerate(rows):
-        cur_val = row[signal]
-        if _eval_condition(cur_val, op, value, prev_value):
-            ctx_start = max(0, i - context_rows)
-            ctx_end = min(len(rows), i + context_rows + 1)
-            return {
-                "found": True,
-                "match_time_ns": row["_ns"],
-                "match_value": cur_val,
-                "match_index": i,
-                "context": rows[ctx_start:ctx_end],
-                "match_row": i - ctx_start,  # index of match within context slice
-            }
-        prev_value = cur_val
 
     return {"found": False, "match_time_ns": 0, "match_value": "", "context": []}
 
@@ -279,9 +302,19 @@ def _eval_condition(
 def clear_cache(shm_path: str | None = None) -> None:
     """Clear CSV cache entries.
 
+    Call this after sim_batch_run completes so that the next analysis
+    always re-extracts from the freshly written SHM file.
+
     Args:
         shm_path: If given, clear only entries for this SHM path.
                   If None, clear entire cache.
+
+    Usage:
+        # After sim_batch_run produces a new SHM:
+        import xcelium_mcp.csv_cache as csv_cache
+        csv_cache.clear_cache(shm_path)   # invalidate stale entries for this SHM
+        # or
+        csv_cache.clear_cache()            # clear all
     """
     global _cache
     if shm_path is None:

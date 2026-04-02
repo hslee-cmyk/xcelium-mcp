@@ -479,28 +479,30 @@ async def _resolve_eda_tools(shell_env: dict) -> dict[str, str]:
     """Resolve EDA tool absolute paths by sourcing detected EDA env.
 
     All tools come from the same Xcelium installation — version consistency guaranteed.
+    Queries each tool with a separate `which` call to avoid positional assignment errors.
     """
     tools = ["simvisdbutil", "xmsim", "xrun"]
     env_shell = shell_env.get("env_shell", shell_env.get("login_shell", "/bin/sh"))
     env_files = shell_env.get("env_files", [])
-
-    if shell_env.get("source_separately") and env_files:
-        source_cmd = " && ".join(f"source {f}" for f in env_files)
-        which_cmd = " && ".join(f"which {t}" for t in tools)
-        r = await ssh_run(
-            f"{env_shell} -c '{source_cmd} && {which_cmd}' 2>/dev/null",
-            timeout=15,
-        )
-    else:
-        login_shell = shell_env.get("login_shell", "/bin/sh")
-        which_cmd = " && ".join(f"which {t}" for t in tools)
-        r = await ssh_run(login_shell_cmd(login_shell, which_cmd), timeout=15)
+    login_shell = shell_env.get("login_shell", "/bin/sh")
 
     result: dict[str, str] = {}
-    lines = [l.strip() for l in r.strip().splitlines() if l.strip() and "/" in l]
-    for i, tool in enumerate(tools):
-        if i < len(lines):
-            result[tool] = lines[i]
+
+    for tool in tools:
+        if shell_env.get("source_separately") and env_files:
+            source_cmd = " && ".join(f"source {f}" for f in env_files)
+            r = await ssh_run(
+                f"{env_shell} -c '{source_cmd} && which {tool}' 2>/dev/null",
+                timeout=15,
+            )
+        else:
+            r = await ssh_run(
+                login_shell_cmd(login_shell, f"which {tool} 2>/dev/null"),
+                timeout=15,
+            )
+        path = r.strip()
+        if path and "/" in path:
+            result[tool] = path
 
     if "simvisdbutil" not in result:
         raise RuntimeError(

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Coroutine
-from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -10,58 +9,14 @@ from mcp.server.fastmcp import FastMCP
 from xcelium_mcp.bridge_manager import BridgeManager
 from xcelium_mcp.sim_runner import (
     UserInputRequired,
-    ssh_run,
     get_default_sim_dir,
     run_full_discovery,
 )
 from xcelium_mcp.registry import load_sim_config
 from xcelium_mcp.env_detection import _load_or_detect_runner
 from xcelium_mcp.batch_runner import _run_batch_single, _run_batch_regression, resolve_test_name
-
-
-# ---------------------------------------------------------------------------
-# Internal helper: prepare_dump_scope logic (used by sim_batch_run/regression)
-# ---------------------------------------------------------------------------
-
-async def _prepare_dump_scope_internal(
-    sim_dir: str,
-    additional_signals: list[str],
-    input_tcl: str = "",
-) -> str:
-    """Extend an existing setup Tcl file with additional probe signals.
-
-    Detects original Tcl from sim_dir if input_tcl is empty.
-    Returns path to the extended Tcl file (written as setup_rtl_debug.tcl).
-    """
-
-    # Auto-detect input Tcl if not provided
-    if not input_tcl:
-        for candidate in ("setup_rtl.tcl", "input.tcl", "setup.tcl"):
-            p = Path(sim_dir) / candidate
-            if p.exists():
-                input_tcl = str(p)
-                break
-        if not input_tcl:
-            # Search sim_dir for any .tcl file
-            r = await ssh_run(f"ls {sim_dir}/*.tcl 2>/dev/null | head -1")
-            input_tcl = r.strip()
-
-    output_tcl = str(Path(sim_dir) / "setup_rtl_debug.tcl")
-
-    if input_tcl and Path(input_tcl).exists():
-        original = Path(input_tcl).read_text()
-    else:
-        original = ""
-
-    # Append new probe commands for additional signals
-    sig_list = " ".join(f'"{s}"' for s in additional_signals)
-    extra = (
-        f"\n# === Added by xcelium-mcp prepare_dump_scope ===\n"
-        f"probe -create {{{sig_list}}} -shm -depth all\n"
-        f"# ================================================\n"
-    )
-    Path(output_tcl).write_text(original + extra)
-    return output_tcl
+from xcelium_mcp.tools.debug import _prepare_dump_scope_internal
+import xcelium_mcp.csv_cache as _csv_cache
 
 
 # Type alias for the restore_checkpoint callable passed from server.py
@@ -189,6 +144,9 @@ def register(
             )
         except Exception as e:
             return f"ERROR running simulation: {e}"
+
+        # Invalidate CSV cache for this sim_dir so next bisect_csv reads fresh SHM
+        _csv_cache.clear_cache()
 
         return f"sim_batch_run {test_name} completed.\n\n{log}"
 

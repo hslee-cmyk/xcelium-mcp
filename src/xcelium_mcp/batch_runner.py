@@ -34,10 +34,10 @@ def validate_extra_args(s: str) -> str:
     so we cannot quote it as a whole.  Instead we reject metacharacters that
     could chain/inject commands.
     """
-    if _re.search(r'[;|&$`]', s):
+    if _re.search(r'[;|&$`<>()\n\r]', s):
         raise ValueError(
             f"extra_args contains forbidden shell metacharacter: {s!r}  "
-            "Only flags and values are allowed (no ;|&$` characters)."
+            "Only flags and values are allowed (no ;|&$`<>()\\n\\r characters)."
         )
     return s
 
@@ -248,7 +248,15 @@ async def _run_batch_regression(
 
     needs_test_name=False → regression_script handles all tests → 1 cmd
     needs_test_name=True  → iterate test_list, per-test nohup + poll
+
+    Note: from_checkpoint raises NotImplementedError in regression mode (Phase 4).
     """
+    if from_checkpoint:
+        # TODO: Phase 4 — restore_checkpoint then per-test run
+        raise NotImplementedError(
+            "from_checkpoint not yet implemented in regression mode. "
+            "Use sim_batch_run for single-test restore-and-run."
+        )
     import time as _time
 
     from xcelium_mcp.sim_runner import get_user_tmp_dir

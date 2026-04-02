@@ -5,6 +5,8 @@ the MCP instance, BridgeManager, and registers all tool modules.
 """
 from __future__ import annotations
 
+import functools
+
 from mcp.server.fastmcp import FastMCP
 
 from xcelium_mcp.bridge_manager import BridgeManager
@@ -47,7 +49,11 @@ waveform_tools = waveform.register(mcp, bridges)
 debug_tools = debug.register(mcp, bridges)
 
 # Phase 3: batch needs restore_checkpoint
-batch.register(mcp, bridges, restore_checkpoint_fn=restore_checkpoint_impl)
+# functools.partial pre-fills `bridges` so batch.py can call fn(name, sim_dir)
+batch.register(
+    mcp, bridges,
+    restore_checkpoint_fn=functools.partial(restore_checkpoint_impl, bridges),
+)
 
 # Phase 4: simvision needs cross-tool references
 simvision.register(

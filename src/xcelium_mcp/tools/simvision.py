@@ -12,6 +12,7 @@ from xcelium_mcp.bridge_manager import BridgeManager
 from xcelium_mcp.tcl_bridge import TclBridge, TclError
 from xcelium_mcp.sim_runner import (
     ssh_run,
+    sq,
     login_shell_cmd,
     build_redirect,
     _parse_shm_path,
@@ -221,7 +222,8 @@ def register(
         else:
             shell_cmd = login_shell_cmd(login_shell, inner_cmd)
 
-        log_file = "/tmp/simvision_start.log"
+        user_tmp = await get_user_tmp_dir()
+        log_file = f"{user_tmp}/simvision_start.log"
         cmd = f"(nohup {shell_cmd} {build_redirect(log_file)} < /dev/null &)"
         await ssh_run(cmd, timeout=15)
 
@@ -434,7 +436,7 @@ def register(
 
         # 2. Launch SimVision (detached)
         await ssh_run(
-            f"DISPLAY={display} simvision {shm_path} &",
+            f"DISPLAY={sq(display)} simvision {sq(shm_path)} &",
             timeout=5.0,
         )
 
@@ -558,7 +560,7 @@ def register(
 
             # 2. Launch SimVision with shm_before as primary database (detached)
             await ssh_run(
-                f"DISPLAY={display} simvision {shm_before} &",
+                f"DISPLAY={sq(display)} simvision {sq(shm_before)} &",
                 timeout=5.0,
             )
 
@@ -646,7 +648,9 @@ def register(
             rows: dict[int, dict] = {}
             with open(path, newline="", encoding="utf-8") as f:
                 for row in csv.DictReader(f):
-                    rows[int(row.get("time", 0))] = row
+                    # Use SimTime (simvisdbutil default) or time column, consistent with bisect_csv
+                    raw_time = row.get("SimTime") or row.get("time") or "0"
+                    rows[int(raw_time)] = row
             return rows
 
         rows_b = _load_rows(csv_b)
