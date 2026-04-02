@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re as _re
 import shlex
 from dataclasses import dataclass
@@ -746,19 +747,28 @@ async def _run_batch_single(
     log_file = f"/tmp/mcp_batch_{ts}.log"
 
     # env VAR=val nohup ... — nohup treats first arg as command, so use env
-    run_cmd = f"env {env_prefix}stdbuf -oL {cmd}"
-    # Combine nohup + PID capture in single shell to reliably get $!
-    pid_output = await ssh_run(
-        f"cd {_sq(sim_dir)} && nohup {run_cmd} {_build_redirect(log_file)} < /dev/null & echo $!",
+    # Note: stdbuf removed — LD_PRELOAD incompatible with Xcelium binaries
+    run_cmd = f"env {env_prefix}{cmd}"
+    # B-0 fix: subshell wrapping to prevent PIPE fd inheritance.
+    # Without subshell, nohup child inherits asyncio PIPE fds → communicate()
+    # blocks until simulation ends → 15s timeout always fires.
+    pid_file = f"/tmp/mcp_batch_pid_{ts}"
+    await ssh_run(
+        f"cd {_sq(sim_dir)} && "
+        f"(nohup {run_cmd} {_build_redirect(log_file)} < /dev/null & echo $! > {pid_file}) "
+        f">& /dev/null",
         timeout=15.0,
     )
 
-    # Parse PID from output (last line should be the PID from echo $!)
-    pid_str = pid_output.strip().splitlines()[-1] if pid_output.strip() else ""
-    # $! fallback — use pgrep if echo $! didn't yield a number
-    if not pid_str.strip().isdigit():
-        pid_str = await ssh_run(f"pgrep -f {_sq('stdbuf.*' + test_name)} 2>/dev/null | tail -1")
+    # Read PID from file
+    pid_str = await ssh_run(f"cat {pid_file} 2>/dev/null", timeout=5)
+    pid_str = pid_str.strip()
+    # Fallback — use pgrep if pid file didn't yield a number
+    if not pid_str.isdigit():
+        pid_str = await ssh_run(f"pgrep -f {_sq(test_name)} 2>/dev/null | tail -1")
     pid = int(pid_str.strip()) if pid_str.strip().isdigit() else 0
+    # Cleanup pid file
+    await ssh_run(f"rm -f {pid_file}", timeout=5)
 
     if pid:
         from datetime import datetime
@@ -856,9 +866,12 @@ async def _run_batch_regression(
                 if params["extra_args"]
                 else info.cmd
             )
-            run_cmd = f"stdbuf -oL {cmd_with_extra}"
+            # B-0 fix: subshell wrapping, stdbuf removed (Xcelium incompatible)
+            run_cmd = cmd_with_extra
             await ssh_run(
-                f"cd {_sq(sim_dir)} && (nohup {run_cmd} {_build_redirect(log_file)} < /dev/null &)",
+                f"cd {_sq(sim_dir)} && "
+                f"(nohup {run_cmd} {_build_redirect(log_file)} < /dev/null &) "
+                f">& /dev/null",
                 timeout=15.0,
             )
         for _ in range(360):
@@ -893,15 +906,18 @@ async def _run_batch_regression(
             })
             await ssh_run(f"cat > {job_file} << 'MCPEOF'\n{job_info}\nMCPEOF", timeout=5)
 
-            run_cmd = f"env {env_prefix}stdbuf -oL {cmd}"
+            # B-0 fix: subshell wrapping, stdbuf removed (Xcelium incompatible)
+            run_cmd = f"env {env_prefix}{cmd}"
             await ssh_run(
-                f"cd {_sq(sim_dir)} && (nohup {run_cmd} {_build_redirect(test_log)} < /dev/null &)",
+                f"cd {_sq(sim_dir)} && "
+                f"(nohup {run_cmd} {_build_redirect(test_log)} < /dev/null &) "
+                f">& /dev/null",
                 timeout=15.0,
             )
 
             # Update PID in job file
             pid_str = await ssh_run(
-                f"pgrep -f {_sq('stdbuf.*' + test_name)} 2>/dev/null | tail -1"
+                f"pgrep -f {_sq(test_name)} 2>/dev/null | tail -1"
             )
             if pid_str.strip().isdigit():
                 job_update = json.dumps({
@@ -1209,6 +1225,10 @@ async def run_full_discovery(sim_dir: str = "", force: bool = False) -> str:
     if not sim_dir:
         envs = await _discover_sim_dir()
         sim_dir = envs[0]["sim_dir"]
+
+    # B-tilde fix: resolve ~ to absolute path before any _sq() calls.
+    # shlex.quote("~/path") → "'~/path'" which prevents shell tilde expansion.
+    sim_dir = os.path.expanduser(sim_dir)
 
     # Check existing (skip if force=False and v2 config exists)
     if not force:
