@@ -180,12 +180,14 @@ def rebuild_manifest(sim_dir: str, xmls_output: str) -> dict:
     return {"added": added, "existing": existing, "total": len(discovered)}
 
 
-def find_nearest_checkpoint(sim_dir: str, bug_time_ns: int, test_name: str = "") -> list[dict]:
+def find_nearest_checkpoint(sim_dir: str, bug_time_ns: int, shm_stem: str = "") -> list[dict]:
     """Find checkpoints saved before bug_time_ns, sorted by proximity.
 
-    When test_name is given, only returns checkpoints whose test_name matches
-    or whose name contains the test_name. No compile_hash filtering — user
-    may want to restore from a previous compile.
+    When shm_stem is given (e.g. "ci_top_VENEZIA_TOP015_i2c_8bit_offset_test"),
+    matches checkpoints whose test_name is contained in shm_stem. This avoids
+    hardcoded prefix assumptions — works regardless of SHM naming convention.
+
+    No compile_hash filtering — user may want to restore from a previous compile.
 
     Returns list sorted by (bug_time_ns - saved_time_ns) ascending,
     i.e. closest-before-bug first.
@@ -198,10 +200,14 @@ def find_nearest_checkpoint(sim_dir: str, bug_time_ns: int, test_name: str = "")
         t = info.get("saved_time_ns", 0)
         if t >= bug_time_ns:
             continue
-        # Filter by test_name if given
-        if test_name:
+        # Match: checkpoint test_name is contained in shm_stem
+        if shm_stem:
             chk_test = info.get("test_name", "")
-            if test_name not in chk_test and test_name not in chk_name:
+            if chk_test and chk_test in shm_stem:
+                pass  # match
+            elif chk_name in shm_stem or shm_stem in chk_name:
+                pass  # fallback: name substring match
+            else:
                 continue
         candidates.append({**info, "_key": chk_name, "_distance_ns": bug_time_ns - t})
 
