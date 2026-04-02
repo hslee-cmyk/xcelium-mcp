@@ -18,6 +18,7 @@ from xcelium_mcp.sim_runner import (
     _get_default_sim_dir,
     _resolve_test_name,
     _detect_vnc_display,
+    _get_user_tmp_dir,
     load_sim_config,
     load_registry,
     config_action,
@@ -31,7 +32,8 @@ from xcelium_mcp.sim_runner import (
 
 async def _find_ready_file(target: str) -> tuple[int, str]:
     """Find ready file matching target type."""
-    r = await ssh_run("cat /tmp/mcp_bridge_ready_* 2>/dev/null")
+    user_tmp = await _get_user_tmp_dir()
+    r = await ssh_run(f"cat {user_tmp}/bridge_ready_* 2>/dev/null")
     for line in r.strip().splitlines():
         parts = line.strip().split()
         if len(parts) >= 2 and parts[1] == target:
@@ -41,7 +43,8 @@ async def _find_ready_file(target: str) -> tuple[int, str]:
 
 async def _read_bridge_type(port: int) -> str:
     """Read bridge type from ready file for given port."""
-    r = await ssh_run(f"cat /tmp/mcp_bridge_ready_{port} 2>/dev/null")
+    user_tmp = await _get_user_tmp_dir()
+    r = await ssh_run(f"cat {user_tmp}/bridge_ready_{port} 2>/dev/null")
     parts = r.strip().split()
     if len(parts) >= 2:
         return parts[1]
@@ -56,7 +59,8 @@ async def _auto_connect_all(bridges: BridgeManager, host: str, timeout: float) -
     """Scan all ready files, connect to each, assign to appropriate slot."""
     results = []
 
-    r = await ssh_run("cat /tmp/mcp_bridge_ready_* 2>/dev/null")
+    user_tmp = await _get_user_tmp_dir()
+    r = await ssh_run(f"cat {user_tmp}/bridge_ready_* 2>/dev/null")
     if not r.strip():
         return "No bridges found. Run sim_start or simvision_start first."
 
@@ -363,6 +367,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         Args:
             target: "xmsim" (default) | "simvision". Which bridge to shutdown.
         """
+        user_tmp = await _get_user_tmp_dir()
         if target == "simvision":
             bridge = bridges.simvision
             port = bridge.port if hasattr(bridge, 'port') else 0
@@ -375,7 +380,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
                 bridges.set_simvision(None)
                 # Fallback: cleanup ready file from Python side
                 if port:
-                    await ssh_run(f"rm -f /tmp/mcp_bridge_ready_{port}")
+                    await ssh_run(f"rm -f {user_tmp}/bridge_ready_{port}")
         else:
             bridge = bridges.xmsim
             port = bridge.port if hasattr(bridge, 'port') else 0
@@ -388,6 +393,6 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
                 bridges.set_xmsim(None)
                 # Fallback: cleanup ready file from Python side
                 if port:
-                    await ssh_run(f"rm -f /tmp/mcp_bridge_ready_{port}")
+                    await ssh_run(f"rm -f {user_tmp}/bridge_ready_{port}")
 
     return {"connect_simulator": connect_simulator}

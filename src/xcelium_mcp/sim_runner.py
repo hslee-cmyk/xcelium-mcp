@@ -129,6 +129,25 @@ from xcelium_mcp.env_detection import (  # noqa: E402, F401
 # ===================================================================
 
 
+_USER_TMP: str = ""  # cached after first call
+
+
+async def _get_user_tmp_dir() -> str:
+    """Get per-user temp directory. Creates on first call.
+
+    Returns /tmp/xcelium_mcp_{uid}/ — unique per Unix user.
+    Python and Tcl must use the same path pattern for ready file sync.
+    """
+    global _USER_TMP
+    if _USER_TMP:
+        return _USER_TMP
+    r = await ssh_run("id -u", timeout=5)
+    uid = r.strip()
+    _USER_TMP = f"/tmp/xcelium_mcp_{uid}"
+    await ssh_run(f"mkdir -p {_USER_TMP}", timeout=5)
+    return _USER_TMP
+
+
 def _parse_shm_path(db_list_output: str) -> str:
     """Parse SHM path from xmsim 'database -list' output."""
     for line in db_list_output.strip().splitlines():
@@ -467,7 +486,9 @@ async def _start_bridge(
             f"Use shutdown_simulator or 'pkill -f xmsim' first."
         )
 
-    await ssh_run("rm -f /tmp/mcp_bridge_ready_*", timeout=5)
+    # P4: per-user temp directory
+    user_tmp = await _get_user_tmp_dir()
+    await ssh_run(f"rm -f {user_tmp}/bridge_ready_*", timeout=5)
 
     script_shell = runner.get("script_shell", runner.get("env_shell", "/bin/sh"))
     params = _resolve_sim_params(runner, sim_mode, extra_args=extra_args, timeout=timeout)
@@ -475,9 +496,9 @@ async def _start_bridge(
     if params["extra_args"]:
         test_args = f"{test_args} {params['extra_args']}"
     effective_timeout = params["timeout"]
-    log_file = f"/tmp/sim_start_{port}.log"
+    log_file = f"{user_tmp}/sim_start_{port}.log"
 
-    filtered_tcl = f"/tmp/mcp_setup_filtered_{port}.tcl"
+    filtered_tcl = f"{user_tmp}/setup_filtered_{port}.tcl"
     await ssh_run(
         f"sed '"
         f"/^[[:space:]]*run[[:space:]]*$/d; "
@@ -530,7 +551,7 @@ async def _start_bridge(
 
     for i in range(effective_timeout // 2):
         await asyncio.sleep(2)
-        r = await ssh_run("cat /tmp/mcp_bridge_ready_* 2>/dev/null")
+        r = await ssh_run(f"cat {user_tmp}/bridge_ready_* 2>/dev/null")
         for line in r.strip().splitlines():
             parts = line.strip().split()
             if len(parts) >= 2 and parts[1] == "xmsim":

@@ -43,6 +43,11 @@ namespace eval ::mcp_bridge {
     variable _checkpoint_name ""
     variable _init_snapshot_dir ""
     variable _shutdown_flag 0
+
+    # Per-user temp directory (matches Python side: /tmp/xcelium_mcp_{uid}/)
+    variable uid [exec id -u]
+    variable user_tmp "/tmp/xcelium_mcp_$uid"
+    catch {file mkdir $user_tmp}
 }
 
 # ---------------------------------------------------------------------------
@@ -91,7 +96,8 @@ proc ::mcp_bridge::init {} {
     }
 
     # P1-3: Ready file — "port type timestamp" format
-    set ready_file "/tmp/mcp_bridge_ready_$port"
+    variable user_tmp
+    set ready_file "$user_tmp/bridge_ready_$port"
     if {[catch {
         set f [open $ready_file w]
         puts $f "$port $bridge_type [clock seconds]"
@@ -257,7 +263,7 @@ proc ::mcp_bridge::dispatch {channel cmd} {
     }
 
     if {[string match "__SAVE__*" $cmd]} {
-        # Protocol: "__SAVE__ {name} {dir}"  — dir is optional, defaults to /tmp/mcp_checkpoints
+        # Protocol: "__SAVE__ {name} {dir}"  — dir is optional, defaults to $user_tmp/checkpoints
         set args [string trim [string range $cmd 8 end]]
         set parts [split $args " "]
         set name [lindex $parts 0]
@@ -328,7 +334,7 @@ proc ::mcp_bridge::send_error {channel body} {
 # ---------------------------------------------------------------------------
 proc ::mcp_bridge::do_screenshot {channel path} {
     if {$path eq ""} {
-        set path "/tmp/mcp_screenshot_[clock seconds].ps"
+        set path "$::mcp_bridge::user_tmp/screenshot_[clock seconds].ps"
     }
 
     # Try SimVision waveform print first
@@ -354,14 +360,16 @@ proc ::mcp_bridge::do_screenshot {channel path} {
 # ---------------------------------------------------------------------------
 proc ::mcp_bridge::init_snapshot {} {
     variable _init_snapshot_dir
-    set _init_snapshot_dir "/tmp/mcp_init"
+    variable user_tmp
+    set _init_snapshot_dir "$user_tmp/init_snapshot"
     file mkdir $_init_snapshot_dir
     catch {save -simulation mcp_init -path $_init_snapshot_dir -overwrite}
 }
 
 proc ::mcp_bridge::on_init {} {
     variable _init_snapshot_dir
-    set _init_snapshot_dir "/tmp/mcp_init"
+    variable user_tmp
+    set _init_snapshot_dir "$user_tmp/init_snapshot"
     if {[file exists $_init_snapshot_dir]} {
         catch {file delete -force $_init_snapshot_dir}
     }
@@ -440,7 +448,7 @@ proc ::mcp_bridge::do_shutdown {channel} {
     }
 
     # 2. Cleanup ready file
-    catch {file delete "/tmp/mcp_bridge_ready_$port"}
+    catch {file delete "$::mcp_bridge::user_tmp/bridge_ready_$port"}
 
     # 3. Notify client before termination
     ::mcp_bridge::send_ok $channel "shutdown:ok"
@@ -646,7 +654,7 @@ proc ::mcp_bridge::do_save {channel name {dir ""}} {
         set name "chk_[clock seconds]"
     }
     if {$dir eq ""} {
-        set dir "/tmp/mcp_checkpoints"
+        set dir "$::mcp_bridge::user_tmp/checkpoints"
     }
 
     # 1. Ensure simulator is stopped before save
@@ -687,7 +695,7 @@ proc ::mcp_bridge::do_restore {channel name {dir ""}} {
         if {[info exists _checkpoint_dir] && $_checkpoint_dir ne ""} {
             set dir $_checkpoint_dir
         } else {
-            set dir "/tmp/mcp_checkpoints"
+            set dir "$::mcp_bridge::user_tmp/checkpoints"
         }
     }
 
@@ -759,7 +767,7 @@ proc ::mcp_bridge::do_bisect {channel args_str} {
 
     lappend log_lines "bisect_start|range:${start_ns}-${end_ns}ns|precision:${precision}ns"
 
-    set chk_dir "/tmp/mcp_bisect"
+    set chk_dir "$::mcp_bridge::user_tmp/bisect"
     file mkdir $chk_dir
 
     # Save checkpoint at time 0

@@ -16,6 +16,7 @@ from xcelium_mcp.sim_runner import (
     _sq,
     _build_redirect,
     _login_shell_cmd,
+    _get_user_tmp_dir,
 )
 from xcelium_mcp.registry import load_sim_config, save_sim_config
 
@@ -143,7 +144,8 @@ async def _run_batch_single(
     # nohup + polling returns grep summary only.
 
     # --- nohup + stdbuf + job resume ---
-    job_file = "/tmp/mcp_batch_job.json"
+    user_tmp = await _get_user_tmp_dir()
+    job_file = f"{user_tmp}/batch_job.json"
 
     # Check for existing job (reconnection scenario)
     existing_job = await ssh_run(f"cat {job_file} 2>/dev/null")
@@ -167,7 +169,7 @@ async def _run_batch_single(
 
     # Start new batch job
     ts = int(_time.time())
-    log_file = f"/tmp/mcp_batch_{ts}.log"
+    log_file = f"{user_tmp}/batch_{ts}.log"
 
     # env VAR=val nohup ... — nohup treats first arg as command, so use env
     # Note: stdbuf removed — LD_PRELOAD incompatible with Xcelium binaries
@@ -175,7 +177,7 @@ async def _run_batch_single(
     # B-0 fix: subshell wrapping to prevent PIPE fd inheritance.
     # Without subshell, nohup child inherits asyncio PIPE fds → communicate()
     # blocks until simulation ends → 15s timeout always fires.
-    pid_file = f"/tmp/mcp_batch_pid_{ts}"
+    pid_file = f"{user_tmp}/batch_pid_{ts}"
     await ssh_run(
         f"cd {_sq(sim_dir)} && "
         f"(nohup {run_cmd} {_build_redirect(log_file)} < /dev/null & echo $! > {pid_file}) "
@@ -243,9 +245,10 @@ async def _run_batch_regression(
     """
     import time as _time
 
-    job_file = "/tmp/mcp_regression_job.json"
+    user_tmp = await _get_user_tmp_dir()
+    job_file = f"{user_tmp}/regression_job.json"
     ts = int(_time.time())
-    log_file = f"/tmp/mcp_regression_{ts}.log"
+    log_file = f"{user_tmp}/regression_{ts}.log"
 
     # v4.1: resolve sim_mode/extra_args for regression
     _validate_extra_args(extra_args)
@@ -308,7 +311,7 @@ async def _run_batch_regression(
         remaining = [t for t in test_list if t not in completed_tests]
 
         for test_name in remaining:
-            test_log = f"/tmp/mcp_regression_{ts}_{_sq(test_name)}.log"
+            test_log = f"{user_tmp}/regression_{ts}_{_sq(test_name)}.log"
             env_prefix = f"TEST_NAME={_sq(test_name)} "
 
             test_args = params["test_args_format"].format(test_name=_sq(test_name))

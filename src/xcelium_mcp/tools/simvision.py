@@ -18,6 +18,7 @@ from xcelium_mcp.sim_runner import (
     _parse_shm_path,
     _parse_time_ns,
     _resolve_test_name,
+    _get_user_tmp_dir,
     load_sim_config,
     _get_default_sim_dir,
 )
@@ -148,7 +149,8 @@ def register(
             bridges.set_simvision(None)
 
         # 1. Check existing SimVision bridge → auto-connect
-        r = await ssh_run("cat /tmp/mcp_bridge_ready_* 2>/dev/null")
+        user_tmp = await _get_user_tmp_dir()
+        r = await ssh_run(f"cat {user_tmp}/bridge_ready_* 2>/dev/null")
         for line in r.strip().splitlines():
             parts = line.strip().split()
             if len(parts) >= 2 and parts[1] == "simvision":
@@ -226,7 +228,7 @@ def register(
         # 7. Wait for bridge ready + auto-connect
         for i in range(30):
             await asyncio.sleep(2)
-            r = await ssh_run("cat /tmp/mcp_bridge_ready_* 2>/dev/null")
+            r = await ssh_run(f"cat {user_tmp}/bridge_ready_* 2>/dev/null")
             for line in r.strip().splitlines():
                 parts = line.strip().split()
                 if len(parts) >= 2 and parts[1] == "simvision":
@@ -437,10 +439,11 @@ def register(
         )
 
         # 3. Wait for SimVision bridge ready file (30s)
+        user_tmp = await _get_user_tmp_dir()
         bridge_ready = False
         for _i in range(15):
             await asyncio.sleep(2)
-            r = await ssh_run("cat /tmp/mcp_bridge_ready_* 2>/dev/null")
+            r = await ssh_run(f"cat {user_tmp}/bridge_ready_* 2>/dev/null")
             for line in r.strip().splitlines():
                 parts = line.strip().split()
                 if len(parts) >= 2 and parts[1] == "simvision":
@@ -560,10 +563,11 @@ def register(
             )
 
             # 3. Wait for SimVision bridge ready file (30s)
+            user_tmp = await _get_user_tmp_dir()
             bridge_ready = False
             for _i in range(15):
                 await asyncio.sleep(2)
-                r = await ssh_run("cat /tmp/mcp_bridge_ready_* 2>/dev/null")
+                r = await ssh_run(f"cat {user_tmp}/bridge_ready_* 2>/dev/null")
                 for line in r.strip().splitlines():
                     parts = line.strip().split()
                     if len(parts) >= 2 and parts[1] == "simvision":
