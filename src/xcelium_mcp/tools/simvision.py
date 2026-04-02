@@ -468,12 +468,9 @@ def register(
         await connect_simulator_fn(port=0, target="simvision")
         bridge = bridges.simvision
 
-        # 5. Add signals to AI_Debug group (duplicate skip via P5-2)
+        # 5. Add signals via waveform_add_signals_fn (auto-creates window + dedup)
         if signals:
-            sig_str = " ".join(signals)
-            await bridge.execute(
-                f"__WAVEFORM_ADD_GROUP__ {group_name} {sig_str}", timeout=30.0
-            )
+            await waveform_add_signals_fn(signals=signals, group_name=group_name)
 
         # 6. Zoom
         start_zoom = center_time_ns - zoom_range_ns
