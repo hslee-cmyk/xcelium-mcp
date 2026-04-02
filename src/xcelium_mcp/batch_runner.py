@@ -337,18 +337,18 @@ async def _run_batch_regression(
             await ssh_run(f"cat > {job_file} << 'MCPEOF'\n{job_info}\nMCPEOF", timeout=5)
 
             # B-0 fix: subshell wrapping, stdbuf removed (Xcelium incompatible)
+            # P6-5b: echo $! > pid_file inside subshell — aligns with _run_batch_single
             run_cmd = f"env {env_prefix}{cmd}"
+            pid_file = f"{test_log}.pid"
             await ssh_run(
                 f"cd {sq(sim_dir)} && "
-                f"(nohup {run_cmd} {build_redirect(test_log)} < /dev/null &) "
+                f"(nohup {run_cmd} {build_redirect(test_log)} < /dev/null & echo $! > {pid_file}) "
                 f">& /dev/null",
                 timeout=15.0,
             )
 
-            # Update PID in job file
-            pid_str = await ssh_run(
-                f"pgrep -f {sq(test_name)} 2>/dev/null | tail -1"
-            )
+            # Read PID from pid_file (pgrep -f {test_name} fails: xmsim cmdline has no test name)
+            pid_str = await ssh_run(f"cat {pid_file} 2>/dev/null; rm -f {pid_file}", timeout=5)
             if pid_str.strip().isdigit():
                 test_pid = int(pid_str.strip())
                 job_update = json.dumps({
