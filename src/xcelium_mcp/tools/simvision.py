@@ -192,7 +192,7 @@ def register(
                 "ERROR: No VNC display found.\n"
                 "Start VNC: 'vncserver'\nOr specify: simvision_start(display=':1')"
             )
-        display_check = await ssh_run(f"xdpyinfo -display {display} 2>/dev/null | head -1")
+        display_check = await ssh_run(f"xdpyinfo -display {sq(display)} | head -1")
         if not display_check.strip():
             return f"ERROR: Display {display} not accessible.\nCheck VNC: 'vncserver -list'"
 

@@ -913,9 +913,19 @@ proc ::mcp_bridge::do_status {channel} {
 # __RUN_AND_REPORT__ — run + where in 1 call (was 2 round-trips)
 proc ::mcp_bridge::do_run_and_report {channel duration} {
     if {$duration ne ""} {
-        run $duration
+        if {[catch {run $duration} err]} {
+            set pos "(run failed: $err)"
+            catch {set pos [where]}
+            ::mcp_bridge::send_ok $channel "RUN_ERROR:$err\n$pos"
+            return
+        }
     } else {
-        run
+        if {[catch {run} err]} {
+            set pos "(run failed: $err)"
+            catch {set pos [where]}
+            ::mcp_bridge::send_ok $channel "RUN_ERROR:$err\n$pos"
+            return
+        }
     }
     set pos "(unknown)"
     catch {set pos [where]}

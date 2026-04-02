@@ -144,7 +144,7 @@ async def _bisect_signal_dump_impl(
     for i, row in enumerate(ctx):
         prefix = "\u2605 " if i == match_idx else "  "
         vals = " | ".join(row.get(c, "?") for c in cols)
-        lines.append(f"{prefix}{row.get('time', '?'):>10} | {vals}")
+        lines.append(f"{prefix}{row.get('_ns', row.get('SimTime', row.get('time', '?'))):>10} | {vals}")
 
     return "\n".join(lines)
 
