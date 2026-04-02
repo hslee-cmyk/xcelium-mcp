@@ -180,24 +180,30 @@ def rebuild_manifest(sim_dir: str, xmls_output: str) -> dict:
     return {"added": added, "existing": existing, "total": len(discovered)}
 
 
-def find_nearest_checkpoint(sim_dir: str, bug_time_ns: int) -> list[dict]:
+def find_nearest_checkpoint(sim_dir: str, bug_time_ns: int, test_name: str = "") -> list[dict]:
     """Find checkpoints saved before bug_time_ns, sorted by proximity.
 
-    Resolves P3-3 (_find_nearest_checkpoint dependency).
-    Only returns checkpoints whose compile_hash matches current.
+    When test_name is given, only returns checkpoints whose test_name matches
+    or whose name contains the test_name. No compile_hash filtering — user
+    may want to restore from a previous compile.
 
     Returns list sorted by (bug_time_ns - saved_time_ns) ascending,
     i.e. closest-before-bug first.
     """
     manifest = _read_manifest(sim_dir)
-    current_hash = compute_compile_hash(sim_dir)
     checkpoints = manifest.get("checkpoints", {})
 
     candidates: list[dict] = []
     for chk_name, info in checkpoints.items():
         t = info.get("saved_time_ns", 0)
-        if t < bug_time_ns and info.get("compile_hash", "") == current_hash:
-            candidates.append({**info, "_key": chk_name, "_distance_ns": bug_time_ns - t})
+        if t >= bug_time_ns:
+            continue
+        # Filter by test_name if given
+        if test_name:
+            chk_test = info.get("test_name", "")
+            if test_name not in chk_test and test_name not in chk_name:
+                continue
+        candidates.append({**info, "_key": chk_name, "_distance_ns": bug_time_ns - t})
 
     candidates.sort(key=lambda x: x["_distance_ns"])
     return candidates

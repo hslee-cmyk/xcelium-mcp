@@ -618,7 +618,11 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         if not resolved_checkpoints and bug_time_ns:
             sim_dir = await get_default_sim_dir()
             if sim_dir:
-                nearest = checkpoint_manager.find_nearest_checkpoint(sim_dir, bug_time_ns)
+                # Extract test name from shm_path for checkpoint matching
+                shm_stem = Path(shm_path).stem  # ci_top_VENEZIA_TOP015_...
+                # Strip ci_top_ prefix if present
+                inferred_test = shm_stem.replace("ci_top_", "") if shm_stem.startswith("ci_top_") else shm_stem
+                nearest = checkpoint_manager.find_nearest_checkpoint(sim_dir, bug_time_ns, test_name=inferred_test)
                 resolved_checkpoints = [c["_key"] for c in nearest[:3]]
 
         lines = [
