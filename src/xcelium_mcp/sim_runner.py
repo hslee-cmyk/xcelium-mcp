@@ -1,69 +1,28 @@
-"""sim_runner.py — Script Discovery, Environment Detection, and Sim Lifecycle for xcelium-mcp v4.
+"""sim_runner.py — Core simulation lifecycle for xcelium-mcp v4.2.
 
-Architecture note:
-  xcelium-mcp server runs ON cloud0 via SSH stdio transport.
-  ssh_run() is a LOCAL asyncio subprocess on cloud0 — NOT a remote SSH hop.
-  All file paths in this module refer to cloud0 local filesystem.
+v4.2: Functions split into env_detection.py, registry.py, batch_runner.py.
+This file retains: ssh_run, shell helpers, start_simulation, _start_bridge,
+run_full_discovery orchestrator, and legacy script patching.
 
-v4 changes:
-  - ssh_run: log_file parameter + 2>&1 guard (tcsh safety)
-  - _build_redirect: tcsh-safe redirect helper
-  - run_full_discovery: unified environment detection (Single Source of Truth)
-  - _update_registry_from_config: replaces v3 _update_registry_env
-  - config_action: mcp_config dot-notation helper
-  - start_simulation: bridge/batch sim start via registry
+Re-exports from new modules are provided for backward compatibility with
+tools/*.py imports that reference sim_runner.
 """
-
 from __future__ import annotations
 
 import asyncio
-import json
 import os
-import re as _re
+import re
 import shlex
-from dataclasses import dataclass
-from pathlib import Path
+
+# ===================================================================
+# Core utilities (used by ALL modules)
+# ===================================================================
 
 
 def _sq(s: str) -> str:
     """Shell-quote a user-supplied string to prevent injection."""
     return shlex.quote(s)
 
-
-def _validate_extra_args(s: str) -> str:
-    """Validate extra_args: reject dangerous shell metacharacters.
-
-    extra_args intentionally contains multiple shell tokens (e.g. "--flag val"),
-    so we cannot quote it as a whole.  Instead we reject metacharacters that
-    could chain/inject commands.
-    """
-    if _re.search(r'[;|&$`]', s):
-        raise ValueError(
-            f"extra_args contains forbidden shell metacharacter: {s!r}  "
-            "Only flags and values are allowed (no ;|&$` characters)."
-        )
-    return s
-
-
-# ---------------------------------------------------------------------------
-# User-input exception (raised when auto-detection needs human decision)
-# ---------------------------------------------------------------------------
-
-class UserInputRequired(Exception):
-    """Raised when auto-detection fails and user input is needed.
-
-    Caller should surface `prompt` to the user via MCP tool response,
-    then call the appropriate function again with the user-provided value.
-    """
-
-    def __init__(self, prompt: str) -> None:
-        self.prompt = prompt
-        super().__init__(prompt)
-
-
-# ---------------------------------------------------------------------------
-# Local subprocess runner (cloud0-local commands)
-# ---------------------------------------------------------------------------
 
 def _build_redirect(log_path: str) -> str:
     """Build shell redirect suffix safe for both bash and tcsh.
@@ -74,19 +33,18 @@ def _build_redirect(log_path: str) -> str:
     return f">& {log_path}"
 
 
+class UserInputRequired(Exception):
+    """Raised when user input is needed to continue."""
+    def __init__(self, prompt: str):
+        self.prompt = prompt
+        super().__init__(prompt)
+
+
 async def ssh_run(cmd: str, timeout: float = 60.0, log_file: str = "") -> str:
     """Run a shell command as a local subprocess.
 
     Since xcelium-mcp runs on cloud0, this is a local asyncio subprocess —
     not an SSH call. Combined stdout+stderr is returned as a single string.
-
-    Args:
-        cmd:      Shell command string.
-        timeout:  Execution timeout in seconds.
-        log_file: If set, append '>& {log_file}' to cmd (tcsh-safe redirect).
-
-    Raises:
-        ValueError: if cmd contains '2>&1' (tcsh-unsafe).
     """
     if "2>&1" in cmd:
         raise ValueError(
@@ -111,1031 +69,129 @@ async def ssh_run(cmd: str, timeout: float = 60.0, log_file: str = "") -> str:
 
 
 def _login_shell_cmd(login_shell: str, cmd: str) -> str:
-    """Build a command that runs in login shell environment.
-
-    tcsh 6.18 (CentOS 7) does not support '-l -c' combination.
-    Workaround: source rc files explicitly before the command.
-    tcsh reads ~/.tcshrc (or ~/.cshrc if no .tcshrc), so try both.
-    For bash: '-l -c' works fine.
-    """
+    """Build a command that runs in login shell environment."""
     if "tcsh" in login_shell or "csh" in login_shell:
-        # tcsh/csh: source rc files in tcsh's native order
-        # tcsh reads ~/.tcshrc first; if absent, reads ~/.cshrc
         return (
             f"{login_shell} -c '"
             f"if (-f ~/.tcshrc) source ~/.tcshrc >& /dev/null; "
             f"if (-f ~/.cshrc) source ~/.cshrc >& /dev/null; "
             f"{cmd}'"
         )
-    # bash/sh/zsh: -l -c works
     return f"{login_shell} -l -c '{cmd}'"
 
 
-# ---------------------------------------------------------------------------
-# Registry and config file I/O
-# ---------------------------------------------------------------------------
-
-_REGISTRY_PATH = Path.home() / ".xcelium_mcp" / "mcp_registry.json"
-
-
-def load_registry() -> dict:
-    """Load mcp_registry.json. Returns empty structure if not found."""
-    if _REGISTRY_PATH.exists():
-        return json.loads(_REGISTRY_PATH.read_text())
-    return {"version": 1, "projects": {}}
-
-
-def save_registry(registry: dict) -> None:
-    """Save mcp_registry.json, creating parent directory as needed."""
-    _REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _REGISTRY_PATH.write_text(json.dumps(registry, indent=2))
-
-
-async def load_sim_config(sim_dir: str) -> dict | None:
-    """Load .mcp_sim_config.json from sim_dir. Returns None if not found."""
-    path = Path(sim_dir) / ".mcp_sim_config.json"
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text())
-    except json.JSONDecodeError:
-        return None
-
-
-async def save_sim_config(sim_dir: str, config: dict) -> None:
-    """Save .mcp_sim_config.json to sim_dir."""
-    path = Path(sim_dir) / ".mcp_sim_config.json"
-    path.write_text(json.dumps(config, indent=2))
-
-
-def _write_json(path, data: dict) -> None:
-    """Write JSON file. Works with both Path and str."""
-    Path(str(path)).write_text(json.dumps(data, indent=2))
-
-
-async def _update_registry_from_config(sim_dir: str, tb_type: str, config: dict) -> None:
-    """Register sim environment in mcp_registry.json.
-
-    This is the ONLY function that writes to mcp_registry.json
-    (besides mcp_config tool). Replaces v3's _update_registry_env().
-    """
-    proc = await asyncio.create_subprocess_exec(
-        "git", "rev-parse", "--show-toplevel",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        cwd=sim_dir,
-    )
-    stdout, _ = await proc.communicate()
-    project_root = stdout.decode().strip() if proc.returncode == 0 else str(Path.home())
-
-    registry = load_registry()
-    projects = registry.setdefault("projects", {})
-    project = projects.setdefault(project_root, {"environments": {}})
-    envs = project.setdefault("environments", {})
-
-    envs[sim_dir] = {
-        "tb_type": tb_type,
-        "is_default": len(envs) == 0 or envs.get(sim_dir, {}).get("is_default", False),
-        "config_version": config.get("version", 2),
-        "bridge_port": config.get("bridge", {}).get("port", 9876),
-    }
-
-    save_registry(registry)
-
-
-# ---------------------------------------------------------------------------
-# ExecInfo dataclass + _resolve_exec_cmd
-# ---------------------------------------------------------------------------
-
-@dataclass
-class ExecInfo:
-    cmd: str               # resolved execution command string
-    needs_test_name: bool  # True  → {test_name} substitution needed before exec
-                           # False → command complete as-is (regression_script builtin)
-
-
-def _resolve_exec_cmd(runner: dict, regression: bool = False) -> ExecInfo:
-    """Derive exec_cmd from runner fields at runtime.
-
-    exec_cmd is never stored in .mcp_sim_config.json — always derived here
-    so that changing `script` automatically updates the command.
-
-    Args:
-        runner: Runner sub-dict from .mcp_sim_config.json
-        regression: True → derive regression command
-    Returns:
-        ExecInfo with resolved cmd and needs_test_name flag
-    """
-    # 1. override field takes precedence
-    override_key = "regression_exec_cmd_override" if regression else "exec_cmd_override"
-    if override_key in runner:
-        return ExecInfo(cmd=runner[override_key], needs_test_name=False)
-
-    # 2. select script + determine needs_test_name
-    if regression:
-        if "regression_script" in runner:
-            # regression_script handles all tests internally → run once
-            script = runner["regression_script"]
-            needs_test_name = False
-        else:
-            # no regression_script → loop over test_list with single-test script
-            script = runner["script"]
-            needs_test_name = True
-    else:
-        script = runner["script"]
-        needs_test_name = True
-
-    # 3. build script_run (shebang-aware)
-    suffix = " {test_name}" if needs_test_name else ""
-    if runner.get("script_shell"):          # shebang present → OS handles interpreter
-        script_run = f"./{script}{suffix}"
-    else:                                   # no shebang → invoke via login_shell
-        script_run = f"{runner['login_shell']} ./{script}{suffix}"
-
-    # 4. build full cmd (env sourcing)
-    if runner.get("source_separately"):
-        sources = " && ".join(f"source {f}" for f in runner.get("env_files", []))
-        env_shell = runner.get("env_shell", runner["login_shell"])
-        cmd = f"{env_shell} -c '{sources} && {script_run}'"
-    else:
-        cmd = _login_shell_cmd(runner["login_shell"], script_run)
-
-    return ExecInfo(cmd=cmd, needs_test_name=needs_test_name)
-
-
-# ---------------------------------------------------------------------------
-# Shell and EDA environment detection
-# ---------------------------------------------------------------------------
-
-async def _detect_env_shell(env_file: str, login_shell: str) -> str:
-    """Detect the appropriate shell for sourcing an env file.
-
-    Priority: shebang → file extension → content patterns → login_shell fallback.
-    """
-    # 1. shebang
-    shebang = await ssh_run(f"head -1 {_sq(env_file)} 2>/dev/null")
-    if shebang.startswith("#!"):
-        return shebang[2:].strip().split()[0]
-
-    # 2. extension
-    ext_map = {
-        ".tcsh": "/bin/tcsh",
-        ".csh": "/bin/csh",
-        ".bash": "/bin/bash",
-        ".sh": "/bin/sh",
-        ".zsh": "/bin/zsh",
-        ".ksh": "/bin/ksh",
-    }
-    for ext, shell in ext_map.items():
-        if env_file.endswith(ext):
-            return shell
-
-    # 3. content patterns
-    content = await ssh_run(f"head -30 {_sq(env_file)} 2>/dev/null")
-    if "foreach" in content or "breaksw" in content:
-        return "/bin/tcsh"
-    if "setenv" in content:
-        return "/bin/csh"
-    if "[[ " in content:
-        return "/bin/bash"
-    if "typeset" in content or "autoload" in content:
-        return "/bin/zsh"
-    if "export " in content:
-        return "/bin/bash"
-
-    return login_shell
-
-
-async def _detect_eda_env(sim_dir: str, project_root: str, login_shell: str) -> dict:
-    """Detect EDA tool environment files.
-
-    Step 1: Test if login shell already has xrun (no sourcing needed).
-    Step 2: Search candidate env files by name pattern + EDA keyword grep.
-    Step 3: Validate each candidate by sourcing and checking xrun.
-    Step 4: If all fail, raise UserInputRequired.
-
-    Returns: dict with env_files, env_shell, source_separately.
-    """
-    # Step 1: login shell direct test
-    # Check for "/" to distinguish real path from "Command not found" stderr
-    r = await ssh_run(_login_shell_cmd(login_shell, "which xrun"), timeout=10)
-    if r.strip() and "/" in r.strip():
-        return {"env_files": [], "env_shell": login_shell, "source_separately": False}
-
-    # Step 2: candidate search
-    home = (await ssh_run("echo $HOME")).strip()
-    search_specs = [
-        (home,         r"\( -name '.cshrc' -o -name '.cadence' -o -name 'setup.csh' "
-                       r"-o -name 'setup.sh' -o -name 'sourceme.*' -o -name '*eda*' \)"),
-        (project_root, r"\( -name 'setup.*' -o -name 'sourceme.*' -o -name '*eda*' -o -name '*.env' \)"),
-        (sim_dir,      r"\( -name 'setup.*' -o -name 'sourceme.*' -o -name '*eda*' -o -name '*.env' \)"),
-        ("/etc/profile.d", r"\( -name 'cadence*' -o -name '*eda*' -o -name 'xcelium*' \)"),
-    ]
-
-    kw_grep = "XCELIUM_HOME|CDS_LIC_FILE|xrun|irun|setenv.*LIC"
-    candidates: list[str] = []
-
-    for search_dir, pat in search_specs:
-        r = await ssh_run(f"find {_sq(search_dir)} -maxdepth 1 \\( -type f -o -type l \\) {pat} 2>/dev/null")
-        for f in r.strip().splitlines():
-            if not f:
-                continue
-            r2 = await ssh_run(f"grep -lE '{kw_grep}' {_sq(f)} 2>/dev/null")
-            if r2.strip():
-                candidates.append(f)
-
-    # Step 3: validate
-    for candidate in candidates:
-        env_shell = await _detect_env_shell(candidate, login_shell)
-        # No '2>/dev/null' inside csh/tcsh -c — causes Ambiguous redirect error
-        r = await ssh_run(f"{env_shell} -c 'source {_sq(candidate)} && which xrun'")
-        if r.strip() and "/" in r.strip():
-            return {
-                "env_files": [candidate],
-                "env_shell": env_shell,
-                "source_separately": True,
-            }
-
-    # Step 4: not found
-    raise UserInputRequired(
-        "EDA env file not found. Enter path (or press Enter to skip):\n"
-        "  Example: ~/.cadence_setup.csh\n"
-        "  Example: /opt/cadence/etc/setup.csh"
-    )
-
-
-async def _detect_shell_and_env(sim_dir: str, script: str, project_root: str) -> dict:
-    """Detect script_shell, login_shell, and EDA env configuration.
-
-    Returns dict with: login_shell, script_shell (or None), env_files, env_shell,
-    source_separately.
-    """
-    # login_shell from $SHELL
-    login_shell = (await ssh_run("echo $SHELL")).strip() or "/bin/sh"
-
-    # script_shell from shebang
-    script_path = f"{sim_dir}/{script}"
-    shebang = await ssh_run(f"head -1 {_sq(script_path)} 2>/dev/null")
-    script_shell: str | None = None
-    if shebang.strip().startswith("#!"):
-        script_shell = shebang.strip()[2:].split()[0]
-
-    # EDA env detection — UserInputRequired propagates to caller
-    eda = await _detect_eda_env(sim_dir, project_root, login_shell)
-
-    return {
-        "login_shell": login_shell,
-        "script_shell": script_shell,
-        **eda,
-    }
-
-
-# ---------------------------------------------------------------------------
-# Runner auto-detection
-# ---------------------------------------------------------------------------
-
-async def _auto_detect_runner(sim_dir: str) -> dict:
-    """Detect simulation runner from sim_dir contents.
-
-    Priority: Makefile (score 3) > shell script (score 2) > xrun/irun (score 1) > python (score 1).
-    Returns dict with: runner, exec_cmd, score, confidence, candidates.
-    """
-    candidates: list[dict] = []
-
-    # 1. Makefile with sim/test/run target
-    r = await ssh_run(f"grep -lE 'sim:|test:|run:' {_sq(sim_dir + '/Makefile')} 2>/dev/null")
-    if r.strip():
-        targets = await ssh_run(
-            f"grep -oE '^(sim|test|run|simulate|regression)[^:]*:' {_sq(sim_dir + '/Makefile')} "
-            f"| tr -d ':'"
-        )
-        best_target = targets.strip().splitlines()[0] if targets.strip() else "sim"
-        candidates.append({
-            "runner": "make",
-            "exec_cmd": f"make {best_target} TEST={{test_name}}",
-            "score": 3,
-        })
-
-    # 2. Executable shell scripts with recognized names
-    r = await ssh_run(
-        f"find {_sq(sim_dir)} -maxdepth 1 -perm /111 "
-        r"\( -name 'run_sim*' -o -name 'run_test*' -o -name '*.sh' \) 2>/dev/null"
-    )
-    for script in r.strip().splitlines():
-        if not script:
-            continue
-        shebang = await ssh_run(f"head -1 {_sq(script)} 2>/dev/null")
-        if shebang.strip().startswith("#!"):
-            candidates.append({
-                "runner": "shell",
-                "exec_cmd": f"{script} {{test_name}}",
-                "score": 2,
-            })
-
-    # 3. *.f filelist + xrun/irun available
-    r = await ssh_run(f"ls {_sq(sim_dir)}/*.f 2>/dev/null | head -1")
-    if r.strip():
-        tool = await ssh_run("which xrun 2>/dev/null || which irun 2>/dev/null | head -1")
-        if tool.strip():
-            tool_name = tool.strip().split("/")[-1]
-            candidates.append({
-                "runner": "xrun",
-                "exec_cmd": f"{tool_name} -f {r.strip()} +define+TEST={{test_name}} -run",
-                "score": 1,
-            })
-
-    # 4. Python runner
-    r = await ssh_run(f"ls {_sq(sim_dir + '/run_sim.py')} {_sq(sim_dir + '/sim.py')} 2>/dev/null | head -1")
-    if r.strip():
-        py = await ssh_run("which python3 2>/dev/null || which python 2>/dev/null | head -1")
-        py_cmd = py.strip().split("/")[-1] if py.strip() else "python3"
-        candidates.append({
-            "runner": "python",
-            "exec_cmd": f"{py_cmd} {r.strip()} --test {{test_name}}",
-            "score": 1,
-        })
-
-    if not candidates:
-        return {"confidence": "none", "candidates": []}
-
-    best = max(candidates, key=lambda x: x["score"])
-    top_score = best["score"]
-    top_candidates = [c for c in candidates if c["score"] == top_score]
-    confidence = "high" if len(top_candidates) == 1 else "ambiguous"
-    return {**best, "confidence": confidence, "candidates": candidates}
-
-
-async def _ask_user_runner(sim_dir: str, candidates: list) -> dict:
-    """Surface runner selection/input request when auto-detection is insufficient.
-
-    Always raises UserInputRequired — caller captures and returns prompt to user.
-    """
-    if not candidates:
-        raise UserInputRequired(
-            f"Could not auto-detect simulation runner in:\n  {sim_dir}\n\n"
-            "Please enter the run command (use {test_name} as placeholder):\n"
-            "  Example: ./run_sim -test {test_name}\n"
-            "  Example: make sim TEST={test_name}\n"
-            "  Example: xrun -f sim.f +define+TEST={test_name} -run"
-        )
-
-    options = "\n".join(
-        f"{i+1}. [{c['runner']}] {c['exec_cmd']}" for i, c in enumerate(candidates)
-    )
-    raise UserInputRequired(
-        f"Multiple runners detected in {sim_dir}. Select one:\n{options}\n"
-        f"{len(candidates)+1}. Enter custom command"
-    )
-
-
-# ---------------------------------------------------------------------------
-# TB type analysis
-# ---------------------------------------------------------------------------
-
-async def _analyze_tb_type(sim_dir: str) -> str:
-    """Heuristic testbench type detection from sim_dir file contents.
-
-    Returns: "uvm" | "ncsim_legacy" | "sv_directed" | "mixed" | "unknown"
-    """
-    # UVM markers
-    _sd = _sq(sim_dir)
-    r_uvm = await ssh_run(
-        f"grep -rl 'uvm_component\\|uvm_test\\|UVM_TEST' {_sd} "
-        f"--include='*.sv' --include='*.svh' 2>/dev/null | head -1"
-    )
-    has_uvm = bool(r_uvm.strip())
-
-    # ncsim_legacy markers: run_sim script + *.f filelist
-    r_legacy = await ssh_run(f"ls {_sq(sim_dir + '/run_sim')} {_sq(sim_dir)}/*.f 2>/dev/null")
-    has_legacy = bool(r_legacy.strip())
-
-    if has_uvm and has_legacy:
-        return "mixed"
-    if has_uvm:
-        return "uvm"
-    if has_legacy:
-        return "ncsim_legacy"
-
-    # sv_directed: non-UVM SystemVerilog with interface/program
-    r = await ssh_run(
-        f"grep -rl 'interface\\|program ' {_sq(sim_dir)} --include='*.sv' 2>/dev/null | head -1"
-    )
-    if r.strip():
-        return "sv_directed"
-
-    return "unknown"
-
-
-# ---------------------------------------------------------------------------
-# Simulation directory discovery
-# ---------------------------------------------------------------------------
-
-async def _discover_sim_dir(hint: str = "") -> list[dict]:
-    """Discover all simulation environments under project root.
-
-    Args:
-        hint: explicit project root path; empty → git root → home fallback
-    Returns:
-        List of env dicts: {sim_dir, tb_type, runner, exec_cmd, confidence, candidates}
-    Raises:
-        UserInputRequired: if no environments found (user must provide path)
-    """
-    # 1. determine project root
-    if hint:
-        project_root = hint
-    else:
-        r = await ssh_run("git rev-parse --show-toplevel 2>/dev/null || echo ~")
-        project_root = r.strip()
-
-    # 2. find candidate directories by name pattern, maxdepth 3
-    patterns = (
-        r"-name 'sim*' -o -name 'test*' -o -name 'tb*' "
-        r"-o -name 'verif*' -o -name 'bench*' -o -name 'dv'"
-    )
-    r = await ssh_run(
-        f"find {_sq(project_root)} -maxdepth 3 -mindepth 1 -type d \\( {patterns} \\) 2>/dev/null | sort"
-    )
-    raw = r.strip().splitlines()
-
-    # 3. deduplicate: remove paths that are children of already-included paths
-    raw = sorted(set(raw), key=len)
-    deduped: list[str] = []
-    for path in raw:
-        if not any(path.startswith(p + "/") for p in deduped):
-            deduped.append(path)
-
-    # 4. analyze each candidate
-    envs: list[dict] = []
-    for sim_root in deduped:
-        r = await ssh_run(f"find {_sq(sim_root)} -maxdepth 1 -mindepth 1 -type d 2>/dev/null")
-        subdirs = [s for s in r.strip().splitlines() if s]
-        found_in_sub = False
-        for sub in subdirs:
-            tb_type = await _analyze_tb_type(sub)
-            if tb_type != "unknown":
-                runner_cfg = await _auto_detect_runner(sub)
-                envs.append({"sim_dir": sub, "tb_type": tb_type, **runner_cfg})
-                found_in_sub = True
-        if not found_in_sub:
-            tb_type = await _analyze_tb_type(sim_root)
-            if tb_type != "unknown":
-                runner_cfg = await _auto_detect_runner(sim_root)
-                envs.append({"sim_dir": sim_root, "tb_type": tb_type, **runner_cfg})
-
-    # 5. no environments found → ask user
-    if not envs:
-        raise UserInputRequired(
-            "Could not auto-detect simulation directory.\n"
-            "Please enter the simulation root folder path:\n"
-            "  (e.g., ~/git.clone/myproject/sim\n"
-            "         ~/git.clone/myproject/test/ncsim)"
-        )
-
-    return envs
-
-
-# ---------------------------------------------------------------------------
-# Main entry point: load or detect runner config
-# ---------------------------------------------------------------------------
-
-async def _load_or_detect_runner(sim_dir: str) -> dict:
-    """Return runner config for sim_dir.
-
-    v4: Tier 2 self-detection removed. Config not found -> sim_discover delegation.
-
-    Tier 1: load .mcp_sim_config.json (explicit config wins).
-    Tier 2: (removed) -> sim_discover auto-call.
-    """
-    # Tier 1: explicit config
-    cfg = await load_sim_config(sim_dir)
-    if cfg is not None:
-        return cfg.get("runner", cfg)
-
-    # v4: delegate to sim_discover instead of self-detecting
-    await run_full_discovery(sim_dir)
-    cfg = await load_sim_config(sim_dir)
-    if cfg is not None:
-        return cfg.get("runner", cfg)
-
-    raise RuntimeError(f"sim_discover failed for {sim_dir}")
-
-
-def _extract_script_name(exec_cmd: str) -> str:
-    """Extract bare script name from auto-detected exec_cmd string."""
-    # exec_cmd examples:
-    #   "make sim TEST={test_name}"     → "Makefile" is implied, return "sim"
-    #   "/abs/path/run_sim_mcp {test_name}" → "run_sim_mcp"
-    #   "xrun -f sim.f ..."             → "xrun"
-    parts = exec_cmd.split()
-    if not parts:
-        return "unknown"
-    name = parts[0].split("/")[-1]  # basename
-    # strip common prefixes for make targets
-    if name == "make" and len(parts) > 1:
-        return parts[1].split("=")[0]  # "sim" from "sim TEST=..."
-    return name
-
-
-# ---------------------------------------------------------------------------
-# Batch / Regression execution helpers (Phase 2)
-# ---------------------------------------------------------------------------
-
-async def _get_default_sim_dir() -> str:
-    """Return the default simulation directory from mcp_registry.json.
-
-    v4: Falls back to run_full_discovery() (not _discover_sim_dir directly)
-    to enforce single entry point for all environment detection.
-    Returns "" if nothing found.
-    """
-    registry = load_registry()
-    for project in registry.get("projects", {}).values():
-        for sim_dir, env in project.get("environments", {}).items():
-            if env.get("is_default"):
-                return sim_dir
-
-    # v4: delegate to run_full_discovery (single entry point for detection)
-    try:
-        await run_full_discovery()
-    except (UserInputRequired, RuntimeError):
-        return ""
-
-    # Re-read registry after discovery
-    registry = load_registry()
-    for project in registry.get("projects", {}).values():
-        for sim_dir, env in project.get("environments", {}).items():
-            if env.get("is_default"):
-                return sim_dir
+# ===================================================================
+# Re-exports from new modules (backward compatibility)
+# tools/*.py import these names from sim_runner
+# ===================================================================
+from xcelium_mcp.registry import (  # noqa: E402, F401
+    load_registry,
+    save_registry,
+    load_sim_config,
+    save_sim_config,
+    _update_registry_from_config,
+    config_action,
+)
+
+from xcelium_mcp.batch_runner import (  # noqa: E402, F401
+    ExecInfo,
+    _validate_extra_args,
+    _resolve_exec_cmd,
+    _run_batch_single,
+    _run_batch_regression,
+    _poll_batch_log,
+    _resolve_sim_params,
+    _resolve_test_name,
+)
+
+from xcelium_mcp.env_detection import (  # noqa: E402, F401
+    _detect_env_shell,
+    _detect_eda_env,
+    _detect_shell_and_env,
+    _auto_detect_runner,
+    _ask_user_runner,
+    _analyze_tb_type,
+    _discover_sim_dir,
+    _load_or_detect_runner,
+    _extract_script_name,
+    _detect_bridge_tcl,
+    _detect_setup_tcls,
+    _pick_default_mode,
+    _resolve_eda_tools,
+    _detect_bridge_port,
+    _detect_run_dir,
+    _detect_vnc_display,
+)
+
+
+# ===================================================================
+# Utility functions (used by tools)
+# ===================================================================
+
+
+def _parse_shm_path(db_list_output: str) -> str:
+    """Parse SHM path from xmsim 'database -list' output."""
+    for line in db_list_output.strip().splitlines():
+        line = line.strip().strip("'\"")
+        if ".shm" in line:
+            idx = line.index(".shm") + 4
+            return line[:idx]
     return ""
 
 
-async def _run_batch_single(
-    sim_dir: str,
-    test_name: str,
-    runner: dict,
-    rename_dump: bool = False,
-    run_duration: str = "",
-    timeout: int = 600,
-    sim_mode: str = "rtl",
-    extra_args: str = "",
-) -> str:
-    """Execute a single simulation test and return combined log output.
-
-    Strategy:
-      timeout <= 120 → direct ssh_run (synchronous, result returned immediately)
-      timeout  > 120 → nohup + stdbuf -oL + log polling (immediate flush, no screen)
-
-    SHM overwrite prevention:
-      Method 6-A (default): injects TEST_NAME env var so setup tcl uses
-          $env(TEST_NAME) to name the SHM file.
-      Method 6-B (rename_dump=True): moves dump/ci_top.shm to
-          dump/ci_top_{test_name}.shm after simulation completes.
-    """
-    import time as _time
-    from xcelium_mcp import checkpoint_manager as _ckpt_mgr
-
-    # P4-4: Recompile detection — invalidate stale checkpoints before run
-    stale_removed = _ckpt_mgr.invalidate_stale_checkpoints(
-        sim_dir, reason=f"pre-run recompile check for {test_name}"
-    )
-
-    # v4.1: _resolve_sim_params for mode-aware params
-    _validate_extra_args(extra_args)
-    params = _resolve_sim_params(runner, sim_mode, extra_args, timeout)
-    effective_timeout = params["timeout"]
-
-    # v4.1: use args_format from _resolve_sim_params
-    info = _resolve_exec_cmd(runner, regression=False)
-    # Format {test_name} placeholder with mode-specific args
-    # e.g. {test_name} → "-test VENEZIA_TOP015 --" instead of bare "VENEZIA_TOP015"
-    test_args = params["test_args_format"].format(test_name=_sq(test_name))
-    cmd = info.cmd.format(test_name=test_args) if info.needs_test_name else info.cmd
-    if params["extra_args"]:
-        cmd = f"{cmd} {params['extra_args']}"
-
-    # Method 6-A: inject TEST_NAME for SHM file naming
-    env_prefix = f"TEST_NAME={_sq(test_name)} "
-
-    # Always use nohup + stdbuf + polling (no direct ssh_run for batch)
-    # Direct ssh_run returns entire compile+sim log (1MB+) — unusable.
-    # nohup + polling returns grep summary only.
-
-    # --- nohup + stdbuf + job resume ---
-    job_file = "/tmp/mcp_batch_job.json"
-
-    # Check for existing job (reconnection scenario)
-    existing_job = await ssh_run(f"cat {job_file} 2>/dev/null")
-    if existing_job.strip():
-        try:
-            job = json.loads(existing_job)
-            pid = job.get("pid", 0)
-            pid_alive = await ssh_run(f"kill -0 {pid} 2>/dev/null && echo ALIVE || echo DEAD")
-            if "ALIVE" in pid_alive:
-                # Previous batch still running → resume polling
-                result = await _poll_batch_log(
-                    job["log_file"], effective_timeout,
-                    f"(Resumed monitoring existing batch PID {pid})\n"
-                )
-                await ssh_run(f"rm -f {job_file}", timeout=5)
-                return result
-            # PID dead → stale job file, remove and start fresh
-            await ssh_run(f"rm -f {job_file}", timeout=5)
-        except (json.JSONDecodeError, KeyError):
-            await ssh_run(f"rm -f {job_file}", timeout=5)
-
-    # Start new batch job
-    ts = int(_time.time())
-    log_file = f"/tmp/mcp_batch_{ts}.log"
-
-    # env VAR=val nohup ... — nohup treats first arg as command, so use env
-    # Note: stdbuf removed — LD_PRELOAD incompatible with Xcelium binaries
-    run_cmd = f"env {env_prefix}{cmd}"
-    # B-0 fix: subshell wrapping to prevent PIPE fd inheritance.
-    # Without subshell, nohup child inherits asyncio PIPE fds → communicate()
-    # blocks until simulation ends → 15s timeout always fires.
-    pid_file = f"/tmp/mcp_batch_pid_{ts}"
-    await ssh_run(
-        f"cd {_sq(sim_dir)} && "
-        f"(nohup {run_cmd} {_build_redirect(log_file)} < /dev/null & echo $! > {pid_file}) "
-        f">& /dev/null",
-        timeout=15.0,
-    )
-
-    # Read PID from file
-    pid_str = await ssh_run(f"cat {pid_file} 2>/dev/null", timeout=5)
-    pid_str = pid_str.strip()
-    # Fallback — use pgrep if pid file didn't yield a number
-    if not pid_str.isdigit():
-        pid_str = await ssh_run(f"pgrep -f {_sq(test_name)} 2>/dev/null | tail -1")
-    pid = int(pid_str.strip()) if pid_str.strip().isdigit() else 0
-    # Cleanup pid file
-    await ssh_run(f"rm -f {pid_file}", timeout=5)
-
-    if pid:
-        from datetime import datetime
-        job_info = json.dumps({
-            "pid": pid,
-            "log_file": log_file,
-            "test_name": test_name,
-            "started_at": datetime.now().isoformat(),
-        })
-        await ssh_run(f"cat > {job_file} << 'MCPEOF'\n{job_info}\nMCPEOF", timeout=5)
-
-    # Poll for completion
-    result = await _poll_batch_log(log_file, effective_timeout)
-
-    # Cleanup job file
-    await ssh_run(f"rm -f {job_file}", timeout=5)
-
-    # Method 6-B fallback
-    if rename_dump:
-        mv_cmd = (
-            f"cd {_sq(sim_dir)} && "
-            f"if [ -d dump/ci_top.shm ]; then "
-            f"mv dump/ci_top.shm dump/ci_top_{_sq(test_name)}.shm; fi"
-        )
-        await ssh_run(mv_cmd, timeout=30.0)
-
-    prefix = (
-        f"[Stale checkpoints removed: {stale_removed}]\n" if stale_removed else ""
-    )
-    return prefix + result
-
-
-async def _run_batch_regression(
-    sim_dir: str,
-    test_list: list[str],
-    runner: dict,
-    from_checkpoint: str = "",
-    rename_dump: bool = False,
-    sim_mode: str = "",
-    extra_args: str = "",
-) -> str:
-    """Execute regression tests via nohup + stdbuf with job resume.
-
-    nohup + stdbuf -oL: immediate log flush, no buffer delay.
-    Job resume: on reconnection, resumes from last completed test.
-
-    needs_test_name=False → regression_script handles all tests → 1 cmd
-    needs_test_name=True  → iterate test_list, per-test nohup + poll
-    """
-    import time as _time
-
-    job_file = "/tmp/mcp_regression_job.json"
-    ts = int(_time.time())
-    log_file = f"/tmp/mcp_regression_{ts}.log"
-
-    # v4.1: resolve sim_mode/extra_args for regression
-    _validate_extra_args(extra_args)
-    effective_sim_mode = sim_mode or runner.get("default_mode", "rtl")
-    params = _resolve_sim_params(runner, effective_sim_mode, extra_args=extra_args)
-    info = _resolve_exec_cmd(runner, regression=True)
-
-    # Check for existing regression job (reconnection scenario)
-    completed_tests: list[str] = []
-    existing_job = await ssh_run(f"cat {job_file} 2>/dev/null")
-    if existing_job.strip():
-        try:
-            job = json.loads(existing_job)
-            if job.get("type") == "regression":
-                pid = job.get("pid", 0)
-                pid_alive = await ssh_run(
-                    f"kill -0 {pid} 2>/dev/null && echo ALIVE || echo DEAD"
-                )
-                if "ALIVE" in pid_alive:
-                    # Current test still running → resume polling
-                    current = job.get("current", "")
-                    completed_tests = job.get("completed", [])
-                    log_file = job.get("log_file", log_file)
-                    current_log = job.get("current_log", "")
-                    if current_log:
-                        await _poll_batch_log(current_log, 600)
-                        completed_tests.append(current)
-                else:
-                    # PID dead — check what was completed
-                    completed_tests = job.get("completed", [])
-                    log_file = job.get("log_file", log_file)
-        except (json.JSONDecodeError, KeyError):
-            pass
-        await ssh_run(f"rm -f {job_file}", timeout=5)
-
-    if not info.needs_test_name:
-        # regression_script handles all tests internally → 1 cmd
-        if not completed_tests:  # only start if not resuming
-            cmd_with_extra = (
-                f"{info.cmd} {params['extra_args']}".strip()
-                if params["extra_args"]
-                else info.cmd
-            )
-            # B-0 fix: subshell wrapping, stdbuf removed (Xcelium incompatible)
-            run_cmd = cmd_with_extra
-            await ssh_run(
-                f"cd {_sq(sim_dir)} && "
-                f"(nohup {run_cmd} {_build_redirect(log_file)} < /dev/null &) "
-                f">& /dev/null",
-                timeout=15.0,
-            )
-        for _ in range(360):
-            log = await ssh_run(f"tail -5 {log_file} 2>/dev/null")
-            if "REGRESSION_COMPLETE" in log or "All tests done" in log:
-                break
-            await asyncio.sleep(10)
-
-    else:
-        # Per-test loop — skip completed tests (resume support)
-        remaining = [t for t in test_list if t not in completed_tests]
-
-        for test_name in remaining:
-            test_log = f"/tmp/mcp_regression_{ts}_{_sq(test_name)}.log"
-            env_prefix = f"TEST_NAME={_sq(test_name)} "
-
-            test_args = params["test_args_format"].format(test_name=_sq(test_name))
-            cmd = info.cmd.format(test_name=test_args) if info.needs_test_name else info.cmd
-            if params["extra_args"]:
-                cmd = f"{cmd} {params['extra_args']}"
-
-            # Save job state (for resume on reconnection)
-            from datetime import datetime
-            job_info = json.dumps({
-                "type": "regression",
-                "pid": 0,  # updated after nohup
-                "log_file": log_file,
-                "current": test_name,
-                "current_log": test_log,
-                "completed": completed_tests,
-                "started_at": datetime.now().isoformat(),
-            })
-            await ssh_run(f"cat > {job_file} << 'MCPEOF'\n{job_info}\nMCPEOF", timeout=5)
-
-            # B-0 fix: subshell wrapping, stdbuf removed (Xcelium incompatible)
-            run_cmd = f"env {env_prefix}{cmd}"
-            await ssh_run(
-                f"cd {_sq(sim_dir)} && "
-                f"(nohup {run_cmd} {_build_redirect(test_log)} < /dev/null &) "
-                f">& /dev/null",
-                timeout=15.0,
-            )
-
-            # Update PID in job file
-            pid_str = await ssh_run(
-                f"pgrep -f {_sq(test_name)} 2>/dev/null | tail -1"
-            )
-            if pid_str.strip().isdigit():
-                job_update = json.dumps({
-                    "type": "regression", "pid": int(pid_str.strip()),
-                    "log_file": log_file, "current": test_name,
-                    "current_log": test_log, "completed": completed_tests,
-                })
-                await ssh_run(f"cat > {job_file} << 'MCPEOF'\n{job_update}\nMCPEOF", timeout=5)
-
-            # Per-test poll
-            await _poll_batch_log(test_log, 600)
-
-            completed_tests.append(test_name)
-
-            # Method 6-B fallback
-            if rename_dump:
-                mv_cmd = (
-                    f"cd {_sq(sim_dir)} && "
-                    f"if [ -d dump/ci_top.shm ]; then "
-                    f"mv dump/ci_top.shm dump/ci_top_{_sq(test_name)}.shm; fi"
-                )
-                await ssh_run(mv_cmd, timeout=30.0)
-
-            # Append per-test result to main log
-            await ssh_run(
-                f"echo {_sq('=== ' + test_name + ' ===')} >> {log_file} && "
-                f"grep -E 'PASS|FAIL|Errors:' {test_log} 2>/dev/null >> {log_file}",
-                timeout=10.0,
-            )
-
-    # Cleanup job file
-    await ssh_run(f"rm -f {job_file}", timeout=5)
-
-    # Parse final results
-    raw = await ssh_run(
-        f"grep -E 'PASS|FAIL' {log_file} 2>/dev/null | tail -100"
-    )
-    pass_count = raw.count("PASS")
-    fail_count = raw.count("FAIL")
-    total = len(test_list)
-
-    summary = f"{pass_count}/{total} tests PASS, {fail_count} FAIL"
-    details = raw[:2000] if raw.strip() else "(no PASS/FAIL lines found in log)"
-    return f"{summary}\n\nLog ({log_file}):\n{details}"
-
-
-# ===========================================================================
-# v4: Unified Environment Detection Functions
-# ===========================================================================
-
-
-async def _detect_bridge_tcl() -> str:
-    """Find mcp_bridge.tcl from xcelium-mcp package installation path.
-
-    Search order:
-      1. Python package path: xcelium_mcp.__file__ -> {parent}/tcl/mcp_bridge.tcl
-      2. Standard install: /opt/xcelium-mcp/tcl/mcp_bridge.tcl
-      3. pip show location fallback
-    Raises RuntimeError if not found.
-    """
-    # 1. Package path (works for both regular and editable install)
-    pkg_init = await ssh_run(
-        "python3 -c \"import xcelium_mcp; print(xcelium_mcp.__file__)\" 2>/dev/null",
-        timeout=10,
-    )
-    if pkg_init.strip():
-        candidate = str(Path(pkg_init.strip()).parent.parent / "tcl" / "mcp_bridge.tcl")
-        exists = await ssh_run(f"test -f {candidate} && echo YES || echo NO", timeout=5)
-        if "YES" in exists:
-            return candidate
-
-    # 2. Standard path
-    exists = await ssh_run("test -f /opt/xcelium-mcp/tcl/mcp_bridge.tcl && echo YES || echo NO", timeout=5)
-    if "YES" in exists:
-        return "/opt/xcelium-mcp/tcl/mcp_bridge.tcl"
-
-    # 3. pip show fallback
-    r = await ssh_run("pip3 show xcelium-mcp 2>/dev/null | grep Location", timeout=10)
-    if r.strip():
-        loc = r.strip().split(":", 1)[-1].strip()
-        candidate = str(Path(loc).parent / "tcl" / "mcp_bridge.tcl")
-        exists = await ssh_run(f"test -f {candidate} && echo YES || echo NO", timeout=5)
-        if "YES" in exists:
-            return candidate
-
-    raise RuntimeError(
-        "mcp_bridge.tcl not found. Verify xcelium-mcp is installed: pip show xcelium-mcp"
-    )
-
-
-async def _detect_setup_tcls(sim_dir: str) -> dict[str, str]:
-    """Find setup*.tcl files and classify by simulation mode.
-
-    Classification rules:
-      filename contains 'gate' + 'ams' -> 'ams_gate'
-      filename contains 'ams' (no gate) -> 'ams_rtl'
-      filename contains 'gate' (no ams) -> 'gate'
-      otherwise -> 'rtl'
-
-    Returns: {"rtl": "scripts/setup_rtl.tcl", "gate": "scripts/setup_gate.tcl", ...}
-    """
-    r = await ssh_run(
-        f"find {_sq(sim_dir + '/scripts')} -maxdepth 1 -name 'setup*.tcl' 2>/dev/null | sort"
-    )
-    setup_tcls: dict[str, str] = {}
-    for line in r.strip().splitlines():
-        if not line.strip():
-            continue
-        fname = line.strip().split("/")[-1].lower()
-        rel_path = f"scripts/{line.strip().split('/')[-1]}"
-
-        if "ams" in fname and "gate" in fname:
-            mode = "ams_gate"
-        elif "ams" in fname:
-            mode = "ams_rtl"
-        elif "gate" in fname:
-            mode = "gate"
-        else:
-            mode = "rtl"
-
-        if mode not in setup_tcls:
-            setup_tcls[mode] = rel_path
-
-    return setup_tcls
-
-
-def _pick_default_mode(setup_tcls: dict[str, str]) -> str:
-    """Pick default sim mode. Priority: rtl > gate > ams_rtl > ams_gate."""
-    for pref in ["rtl", "gate", "ams_rtl", "ams_gate"]:
-        if pref in setup_tcls:
-            return pref
-    return next(iter(setup_tcls), "rtl")
-
-
-async def _resolve_eda_tools(shell_env: dict) -> dict[str, str]:
-    """Resolve EDA tool absolute paths by sourcing detected EDA env.
-
-    All tools come from the same Xcelium installation — version consistency guaranteed.
-    """
-    tools = ["simvisdbutil", "xmsim", "xrun"]
-    env_shell = shell_env.get("env_shell", shell_env.get("login_shell", "/bin/sh"))
-    env_files = shell_env.get("env_files", [])
-
-    if shell_env.get("source_separately") and env_files:
-        source_cmd = " && ".join(f"source {f}" for f in env_files)
-        which_cmd = " && ".join(f"which {t}" for t in tools)
-        r = await ssh_run(
-            f"{env_shell} -c '{source_cmd} && {which_cmd}' 2>/dev/null",
-            timeout=15,
-        )
-    else:
-        login_shell = shell_env.get("login_shell", "/bin/sh")
-        which_cmd = " && ".join(f"which {t}" for t in tools)
-        r = await ssh_run(_login_shell_cmd(login_shell, which_cmd), timeout=15)
-
-    result: dict[str, str] = {}
-    lines = [l.strip() for l in r.strip().splitlines() if l.strip() and "/" in l]
-    for i, tool in enumerate(tools):
-        if i < len(lines):
-            result[tool] = lines[i]
-
-    if "simvisdbutil" not in result:
-        raise RuntimeError(
-            "simvisdbutil not found after EDA env sourcing. "
-            "Check eda.env or Xcelium installation."
-        )
-
-    return result
-
-
-async def _detect_bridge_port(sim_dir: str, bridge_tcl: str) -> int:
-    """Parse bridge port from mcp_bridge.tcl. Default 9876."""
-    r = await ssh_run(
-        f"grep -oE 'variable port [0-9]+' {bridge_tcl} 2>/dev/null"
-    )
-    if r.strip():
-        try:
-            return int(r.strip().split()[-1])
-        except ValueError:
-            pass
-    return 9876
-
-
-# ---------------------------------------------------------------------------
-# v4: Legacy run script patching (D-10)
-# ---------------------------------------------------------------------------
+def _parse_time_ns(where_output: str) -> int:
+    """Parse simulation time from xmsim 'where' output into nanoseconds."""
+    m = re.search(r'(\d+)\s+MS\s*\+\s*(\d+)', where_output, re.IGNORECASE)
+    if m:
+        return int(m.group(1)) * 1_000_000 + int(m.group(2))
+    m = re.search(r'(\d+)\s+US\s*\+\s*(\d+)', where_output, re.IGNORECASE)
+    if m:
+        return int(m.group(1)) * 1000 + int(m.group(2))
+    m = re.search(r'(\d+)\s+NS\s*\+\s*(\d+)', where_output, re.IGNORECASE)
+    if m:
+        return int(m.group(1)) + int(m.group(2))
+    m = re.search(r'(\d+)', where_output)
+    if m:
+        return int(m.group(1))
+    return 0
+
+
+async def _get_default_sim_dir() -> str:
+    """Return the default simulation directory from mcp_registry.json."""
+    registry = load_registry()
+    projects = registry.get("projects", {})
+    for proj_key, proj in projects.items():
+        for env_key, env in proj.get("environments", {}).items():
+            if env.get("is_default"):
+                return env_key
+    return ""
+
+
+# ===================================================================
+# Legacy script patching
+# ===================================================================
+
+_SIMVISIONRC_MARKER = "# [xcelium-mcp] managed by sim_discover"
 
 
 async def _patch_legacy_run_script(sim_dir: str, runner_info: dict) -> str:
-    """Patch legacy run script to support MCP_INPUT_TCL env var override.
-
-    Replaces: xmsim -input <hardcoded.tcl> ...
-    With:     xmsim -input ${MCP_INPUT_TCL:-<hardcoded.tcl>} ...
-
-    Returns: patch status string.
-    """
-    import re
-
+    """Patch legacy run script to support MCP_INPUT_TCL env var override."""
     script_name = _extract_script_name(runner_info.get("exec_cmd", ""))
     script_path = f"{sim_dir}/{script_name}"
     _sp = _sq(script_path)
 
-    # Check if file exists
     exists = await ssh_run(f"test -f {_sp} && echo YES || echo NO", timeout=5)
     if "YES" not in exists:
         return "run script not found"
 
-    # Check if already patched
     r = await ssh_run(f"grep -c 'MCP_INPUT_TCL' {_sp} 2>/dev/null")
     if r.strip() and r.strip() != "0":
         return "already patched"
 
-    # Find xmsim -input line
     r = await ssh_run(f"grep -n 'xmsim.*-input' {_sp} 2>/dev/null")
     if not r.strip():
         return "no xmsim -input found — manual patch needed"
 
-    # Extract the hardcoded tcl path
     match = re.search(r'-input\s+(\S+)', r.strip())
     if not match:
         return "could not parse -input argument — manual patch needed"
@@ -1144,38 +200,24 @@ async def _patch_legacy_run_script(sim_dir: str, runner_info: dict) -> str:
     escaped_original = re.escape(original_tcl)
     replacement = f'${{MCP_INPUT_TCL:-{original_tcl}}}'
 
-    # Apply sed patch
     sed_cmd = f"sed -i 's|-input {escaped_original}|-input {replacement}|' {_sp}"
     await ssh_run(sed_cmd, timeout=10)
 
-    # Verify
     r = await ssh_run(f"grep -c 'MCP_INPUT_TCL' {_sp} 2>/dev/null")
     if r.strip() and r.strip() != "0":
         return f"patched: -input {original_tcl} -> -input {replacement}"
     return "patch failed — manual edit needed"
 
 
-# ---------------------------------------------------------------------------
-# v4: .simvisionrc management (P1-9)
-# ---------------------------------------------------------------------------
-
-_SIMVISIONRC_MARKER = "# [xcelium-mcp] managed by sim_discover"
-
-
 async def _update_simvisionrc(bridge_tcl: str) -> str:
-    """Update ~/.simvisionrc to source mcp_bridge.tcl from install path.
-
-    Returns status string.
-    """
+    """Update ~/.simvisionrc to source mcp_bridge.tcl from install path."""
     home = (await ssh_run("echo $HOME")).strip()
     rc_path = f"{home}/.simvisionrc"
     source_line = f"source {bridge_tcl}"
 
-    # Read existing
     content = await ssh_run(f"cat {rc_path} 2>/dev/null")
 
     if _SIMVISIONRC_MARKER in content:
-        # Update existing managed block — replace the source line after marker
         lines = content.splitlines()
         new_lines = []
         skip_next = False
@@ -1187,22 +229,19 @@ async def _update_simvisionrc(bridge_tcl: str) -> str:
                 continue
             if skip_next and line.strip().startswith("source") and "mcp_bridge" in line:
                 skip_next = False
-                continue  # replaced by new source_line above
+                continue
             skip_next = False
             new_lines.append(line)
         new_content = "\n".join(new_lines)
-        # Write back using heredoc
         await ssh_run(f"cat > {rc_path} << 'SIMVISIONRC_EOF'\n{new_content}\nSIMVISIONRC_EOF")
         return "updated (marker found)"
 
     if "mcp_bridge" in content:
-        # Replace existing unmanaged source line
         await ssh_run(
             f"sed -i '/mcp_bridge/c\\{_SIMVISIONRC_MARKER}\\n{source_line}' {rc_path}"
         )
         return "replaced unmanaged entry"
 
-    # Append new
     managed_block = f"{_SIMVISIONRC_MARKER}\n{source_line}"
     await ssh_run(f"echo '\\n{managed_block}' >> {rc_path}")
     if not content.strip():
@@ -1210,67 +249,43 @@ async def _update_simvisionrc(bridge_tcl: str) -> str:
     return "added"
 
 
-# ---------------------------------------------------------------------------
-# v4: Unified Discovery Orchestrator (P1-7)
-# ---------------------------------------------------------------------------
+# ===================================================================
+# Discovery orchestrator
+# ===================================================================
 
 
 async def run_full_discovery(sim_dir: str = "", force: bool = False) -> str:
-    """Main discovery orchestrator. Called by sim_discover MCP tool.
-
-    Detects all environment aspects and saves to registry + config.
-    Returns human-readable discovery result summary.
-    """
-    # D-1: sim_dir
+    """Main discovery orchestrator. Called by sim_discover MCP tool."""
     if not sim_dir:
         envs = await _discover_sim_dir()
         sim_dir = envs[0]["sim_dir"]
 
     # B-tilde fix: resolve ~ to absolute path before any _sq() calls.
-    # shlex.quote("~/path") → "'~/path'" which prevents shell tilde expansion.
     sim_dir = os.path.expanduser(sim_dir)
 
-    # Check existing (skip if force=False and v2 config exists)
     if not force:
         existing = await load_sim_config(sim_dir)
         if existing and existing.get("version", 1) >= 2:
             return f"Registry already exists for {sim_dir}. Use force=True to re-detect."
 
-    # D-2: TB type
     tb_type = await _analyze_tb_type(sim_dir)
-
-    # D-3: runner detection
     runner_info = await _auto_detect_runner(sim_dir)
 
-    # D-4 + D-5: shell + EDA env
     script_name = _extract_script_name(runner_info.get("exec_cmd", ""))
     r = await ssh_run("git rev-parse --show-toplevel 2>/dev/null || echo ~")
     project_root = r.strip()
     shell_env = await _detect_shell_and_env(sim_dir, script_name, project_root)
 
-    # D-6: mcp_bridge.tcl (install origin)
     bridge_tcl = await _detect_bridge_tcl()
-
-    # D-7: setup tcl scripts + mode classification
     setup_tcls = await _detect_setup_tcls(sim_dir)
-
-    # D-8: EDA tool paths (from D-5 env)
     eda_tools = await _resolve_eda_tools(shell_env)
-
-    # D-9: bridge port
     bridge_port = await _detect_bridge_port(sim_dir, bridge_tcl)
-
-    # D-10: legacy run script bridge patch
     patch_result = await _patch_legacy_run_script(sim_dir, runner_info)
-
-    # D-12 (v4.1): run_dir + script_has_cd detection
     run_info = await _detect_run_dir(sim_dir, runner_info)
     run_dir = run_info["run_dir"]
     script_has_cd = run_info["script_has_cd"]
 
-    # D-14 (v4.1): Generate args_format dict + mode_defaults + test_discovery
     default_mode = _pick_default_mode(setup_tcls)
-    # args_format: mode별 dict (기본 template — 환경에 따라 mcp_config로 override)
     args_format = {default_mode: "-test {test_name} --"}
     if "gate" in setup_tcls:
         args_format["gate"] = "-test {test_name} -gate post --"
@@ -1289,7 +304,6 @@ async def run_full_discovery(sim_dir: str = "", force: bool = False) -> str:
     if "ams_gate" in setup_tcls:
         mode_defaults["ams_gate"] = {"timeout": 3600, "probe_strategy": "selective"}
 
-    # test_discovery: tb_type 기반 command 생성
     _sd = _sq(sim_dir)
     if tb_type == "uvm":
         test_cmd = (
@@ -1301,10 +315,9 @@ async def run_full_discovery(sim_dir: str = "", force: bool = False) -> str:
             f"grep -rh '^\\s*program ' {_sd} --include='*.sv' 2>/dev/null "
             f"| grep -oE 'program \\w+' | sed 's/program //' | sort -u"
         )
-    else:  # ncsim_legacy, mixed
+    else:
         test_cmd = f"ls {_sd}/tb_tests/*.v 2>/dev/null | xargs -I{{}} basename {{}} .v"
 
-    # Run test_discovery command + cache results
     cached_tests = []
     try:
         r = await ssh_run(f"cd {_sd} && {test_cmd}", timeout=30)
@@ -1319,7 +332,6 @@ async def run_full_discovery(sim_dir: str = "", force: bool = False) -> str:
         "cached_at": datetime.now().isoformat(),
     }
 
-    # Assemble config v2.1
     config = {
         "version": 2,
         "runner": {
@@ -1341,14 +353,10 @@ async def run_full_discovery(sim_dir: str = "", force: bool = False) -> str:
         "test_discovery": test_discovery,
     }
     await save_sim_config(sim_dir, config)
-
-    # Registry registration
     await _update_registry_from_config(sim_dir, tb_type, config)
 
-    # P1-9: .simvisionrc update
     simvisionrc_result = await _update_simvisionrc(bridge_tcl)
 
-    # Format result
     return _format_discovery_result(sim_dir, tb_type, config, patch_result, simvisionrc_result)
 
 
@@ -1375,122 +383,14 @@ def _format_discovery_result(
         f"  simvisdbutil:   {eda.get('simvisdbutil', '?')}\n"
         f"  bridge_port:    {bridge.get('port', 9876)}\n"
         f"  .simvisionrc:   {simvisionrc_result}\n"
-        f"\nSaved to: {_REGISTRY_PATH}\n"
+        f"\nSaved to: ~/.xcelium_mcp/mcp_registry.json\n"
         f"          {sim_dir}/.mcp_sim_config.json"
     )
 
 
-# ===========================================================================
-# v4 Phase 2: mcp_config — dot-notation config editor
-# ===========================================================================
-
-_MISSING = object()
-
-
-def _dot_get(data: dict, key: str):
-    """Traverse dict by dot-separated key. Returns _MISSING if not found."""
-    parts = key.split(".")
-    cur = data
-    for p in parts:
-        if isinstance(cur, dict) and p in cur:
-            cur = cur[p]
-        else:
-            return _MISSING
-    return cur
-
-
-def _dot_set(data: dict, key: str, value) -> None:
-    """Set value at dot-separated key, creating intermediate dicts as needed."""
-    parts = key.split(".")
-    cur = data
-    for p in parts[:-1]:
-        if p not in cur or not isinstance(cur[p], dict):
-            cur[p] = {}
-        cur = cur[p]
-    cur[parts[-1]] = value
-
-
-def _dot_delete(data: dict, key: str) -> bool:
-    """Delete key at dot-separated path. Returns True if deleted."""
-    parts = key.split(".")
-    cur = data
-    for p in parts[:-1]:
-        if isinstance(cur, dict) and p in cur:
-            cur = cur[p]
-        else:
-            return False
-    if parts[-1] in cur:
-        del cur[parts[-1]]
-        return True
-    return False
-
-
-def _parse_json_value(value: str):
-    """Parse value string to appropriate Python type.
-
-    "9876" -> 9876 (int)
-    "true"/"false" -> True/False (bool)
-    "3.14" -> 3.14 (float)
-    Everything else -> str
-    """
-    if value.lower() == "true":
-        return True
-    if value.lower() == "false":
-        return False
-    try:
-        return int(value)
-    except ValueError:
-        pass
-    try:
-        return float(value)
-    except ValueError:
-        pass
-    return value
-
-
-async def config_action(action: str, file: str, key: str, value: str) -> str:
-    """Execute mcp_config action."""
-    # Load target file
-    if file == "registry":
-        data = load_registry()
-        path = _REGISTRY_PATH
-    else:
-        sim_dir = await _get_default_sim_dir()
-        if not sim_dir:
-            raise RuntimeError("No default sim_dir. Run sim_discover first.")
-        cfg = await load_sim_config(sim_dir)
-        if cfg is None:
-            raise RuntimeError(f"No .mcp_sim_config.json in {sim_dir}. Run sim_discover first.")
-        data = cfg
-        path = Path(sim_dir) / ".mcp_sim_config.json"
-
-    if action == "show":
-        return json.dumps(data, indent=2)
-
-    if action == "get":
-        val = _dot_get(data, key)
-        if val is _MISSING:
-            return f"Key '{key}' not found"
-        return json.dumps(val, indent=2) if isinstance(val, (dict, list)) else str(val)
-
-    if action == "set":
-        parsed = _parse_json_value(value)
-        _dot_set(data, key, parsed)
-        _write_json(path, data)
-        return f"Set {key} = {json.dumps(parsed)}"
-
-    if action == "delete":
-        if _dot_delete(data, key):
-            _write_json(path, data)
-            return f"Deleted {key}"
-        return f"Key '{key}' not found"
-
-    return f"Unknown action: {action}"
-
-
-# ===========================================================================
-# v4 Phase 2: sim_start — registry-based simulation lifecycle
-# ===========================================================================
+# ===================================================================
+# Simulation start
+# ===================================================================
 
 
 async def start_simulation(
@@ -1506,7 +406,6 @@ async def start_simulation(
     """Start simulation. Registry없으면 sim_discover 자동 호출."""
     _validate_extra_args(extra_args)
 
-    # S-1: registry 로드 (없으면 sim_discover 자동 호출)
     resolved_dir = sim_dir if sim_dir else await _get_default_sim_dir()
     if not resolved_dir:
         await run_full_discovery(sim_dir)
@@ -1522,9 +421,7 @@ async def start_simulation(
             raise RuntimeError(f"sim_discover failed for {resolved_dir}")
 
     runner = config.get("runner", {})
-    bridge = config.get("bridge", {})
 
-    # sim_mode 결정
     effective_mode = sim_mode or runner.get("default_mode", "rtl")
     setup_tcls = runner.get("setup_tcls", {})
     if effective_mode not in setup_tcls:
@@ -1563,7 +460,6 @@ async def _start_bridge(
     bridge_tcl = bridge.get("tcl_path", "")
     script = runner.get("script", "run_sim")
 
-    # S-2: Check existing xmsim
     ps = await ssh_run("pgrep -la xmsim 2>/dev/null", timeout=5)
     if ps.strip():
         return (
@@ -1571,13 +467,9 @@ async def _start_bridge(
             f"Use shutdown_simulator or 'pkill -f xmsim' first."
         )
 
-    # S-3: Clean stale ready files (all ports — auto port support)
     await ssh_run("rm -f /tmp/mcp_bridge_ready_*", timeout=5)
 
-    # S-4: Start via run script with env vars
-    # Use script_shell from registry
     script_shell = runner.get("script_shell", runner.get("env_shell", "/bin/sh"))
-    # v4.1: _resolve_sim_params — single point of change for schema params
     params = _resolve_sim_params(runner, sim_mode, extra_args=extra_args, timeout=timeout)
     test_args = params["test_args_format"].format(test_name=_sq(test_name))
     if params["extra_args"]:
@@ -1585,52 +477,44 @@ async def _start_bridge(
     effective_timeout = params["timeout"]
     log_file = f"/tmp/sim_start_{port}.log"
 
-    # Pre-filter setup TCL: remove run/exit/finish/database-close for bridge mode
-    # Uses POSIX sed (no \b) — matches 'run', 'run ', 'run 10ms' but not 'run_sim'
     filtered_tcl = f"/tmp/mcp_setup_filtered_{port}.tcl"
     await ssh_run(
         f"sed '"
-        f"/^[[:space:]]*run[[:space:]]*$/d; "       # 'run' alone
-        f"/^[[:space:]]*run[[:space:]]/d; "          # 'run ...' with args
-        f"/^[[:space:]]*exit[[:space:]]*$/d; "       # 'exit' alone
-        f"/^[[:space:]]*exit[[:space:]]/d; "         # 'exit ...'
-        f"/^[[:space:]]*finish[[:space:]]*$/d; "     # 'finish' alone
-        f"/^[[:space:]]*finish[[:space:]]/d; "       # 'finish ...'
-        f"/^[[:space:]]*database[[:space:]]*-close/d"  # 'database -close ...'
+        f"/^[[:space:]]*run[[:space:]]*$/d; "
+        f"/^[[:space:]]*run[[:space:]]/d; "
+        f"/^[[:space:]]*exit[[:space:]]*$/d; "
+        f"/^[[:space:]]*exit[[:space:]]/d; "
+        f"/^[[:space:]]*finish[[:space:]]*$/d; "
+        f"/^[[:space:]]*finish[[:space:]]/d; "
+        f"/^[[:space:]]*database[[:space:]]*-close/d"
         f"' {setup_tcl} > {filtered_tcl}",
         timeout=10,
     )
 
-    # Source EDA env before running script (xmvlog/xmsim need PATH)
     env_files = runner.get("env_files", [])
     env_shell = runner.get("env_shell", script_shell)
     login_shell = runner.get("login_shell", "/bin/sh")
-    # Build inner command: setenv MCP vars + source EDA + run script
     inner_parts = [
         f"setenv MCP_INPUT_TCL {bridge_tcl}",
         f"setenv MCP_SETUP_TCL {filtered_tcl}",
     ]
     if runner.get("source_separately") and env_files:
-        # EDA env from explicit env files
         for ef in env_files:
             inner_parts.append(f"source {ef}")
         inner_parts.append(f"./{script} {test_args}")
         inner_cmd = "; ".join(inner_parts)
         shell_cmd = f"{env_shell} -c '{inner_cmd}'"
     else:
-        # EDA env from login shell (source_separately=False)
-        # Must use login shell wrapper to get EDA PATH
         inner_parts.append(f"./{script} {test_args}")
         inner_cmd = "; ".join(inner_parts)
         shell_cmd = _login_shell_cmd(login_shell, inner_cmd)
-    # v4.1: run_dir / script_has_cd — cwd selection
+
     run_dir = runner.get("run_dir", "run")
     if runner.get("script_has_cd", False):
         cwd = sim_dir
     else:
         cwd = f"{sim_dir}/{run_dir}"
 
-    # Wrap in subshell + < /dev/null to fully detach from asyncio PIPE
     cmd = (
         f"cd {_sq(cwd)} && "
         f"(nohup {shell_cmd} "
@@ -1638,17 +522,14 @@ async def _start_bridge(
     )
     await ssh_run(cmd, timeout=15)
 
-    # S-5 v4.2: Poll for bridge ready + AUTO-CONNECT via BridgeManager
     from xcelium_mcp.tcl_bridge import TclBridge as _TB
 
-    # Disconnect existing xmsim bridge (max 1 constraint)
     if bridges is not None and bridges.xmsim_raw and bridges.xmsim_raw.connected:
         await bridges.xmsim_raw.disconnect()
         bridges.set_xmsim(None)
 
     for i in range(effective_timeout // 2):
         await asyncio.sleep(2)
-        # Scan ready files for xmsim type (auto port support)
         r = await ssh_run("cat /tmp/mcp_bridge_ready_* 2>/dev/null")
         for line in r.strip().splitlines():
             parts = line.strip().split()
@@ -1671,7 +552,6 @@ async def _start_bridge(
                 except Exception:
                     continue
 
-    # Timeout — return log tail
     log_tail = await ssh_run(f"tail -20 {log_file} 2>/dev/null", timeout=5)
     return f"ERROR: bridge not ready after {timeout}s.\nLog tail:\n{log_tail}"
 
@@ -1683,7 +563,7 @@ async def _start_batch(
     setup_tcl: str,
     run_duration: str,
 ) -> str:
-    """Start simulation in batch mode. Delegates to existing _run_batch_single()."""
+    """Start simulation in batch mode. Delegates to batch_runner."""
     runner = config.get("runner", {})
     return await _run_batch_single(
         sim_dir=sim_dir,
@@ -1692,265 +572,3 @@ async def _start_batch(
         run_duration=run_duration,
         timeout=600,
     )
-
-
-async def _poll_batch_log(log_file: str, timeout: float, prefix: str = "") -> str:
-    """Poll a batch log file until completion keywords found or timeout."""
-    import time as _time
-    deadline = _time.time() + timeout
-    while _time.time() < deadline:
-        log = await ssh_run(f"tail -5 {log_file} 2>/dev/null")
-        if any(kw in log for kw in ("$finish", "COMPLETE", "PASS", "FAIL", "Errors:")):
-            break
-        await asyncio.sleep(10)
-
-    result = await ssh_run(
-        f"grep -E 'PASS|FAIL|Errors:|\\$finish|COMPLETE' {log_file} 2>/dev/null | tail -30"
-    )
-    return prefix + result
-
-
-# ===========================================================================
-# v4.1 Phase 1b: _resolve_sim_params + _resolve_test_name
-# ===========================================================================
-
-
-def _resolve_sim_params(
-    runner: dict,
-    sim_mode: str = "rtl",
-    extra_args: str = "",
-    timeout: int = 600,
-) -> dict:
-    """Resolve simulation parameters from registry schema — Single Point of Change.
-
-    All tools (sim_start, sim_batch_run, sim_batch_regression) call this.
-    Schema changes → modify here only → all tools updated.
-
-    Returns:
-        {"test_args_format": str, "timeout": int,
-         "probe_strategy": str, "extra_args": str}
-    """
-    # 1. args_format: dict → mode선택, string → 전 mode 동일
-    args_raw = runner.get("args_format", "-test {test_name} --")
-    if isinstance(args_raw, dict):
-        test_args_format = args_raw.get(sim_mode, args_raw.get("rtl", "-test {test_name} --"))
-    else:
-        test_args_format = args_raw
-
-    # 2. mode_defaults: common + mode merge
-    mode_defaults = runner.get("mode_defaults", {})
-    common_cfg = mode_defaults.get("common", {})
-    mode_cfg = mode_defaults.get(sim_mode, {})
-    effective = {**common_cfg, **mode_cfg}
-
-    # 3. extra_args: config + 1회성 합침
-    cfg_extra = effective.get("extra_args", "")
-    all_extra = f"{cfg_extra} {extra_args}".strip()
-
-    return {
-        "test_args_format": test_args_format,
-        "timeout": effective.get("timeout", timeout),
-        "probe_strategy": effective.get("probe_strategy", "all"),
-        "extra_args": all_extra,
-    }
-
-
-async def _resolve_test_name(short_name: str, sim_dir: str = "") -> str:
-    """Short name → full test name via cached_tests.
-
-    "TOP015" → "VENEZIA_TOP015_i2c_8bit_offset_test"
-    Exact match → return. 1 substring match → return. 0 → error. 2+ → candidates.
-    Cache miss → triggers list_tests (mcp_config 경유 캐시 저장).
-    """
-    resolved_dir = sim_dir if sim_dir else await _get_default_sim_dir()
-    cfg = await load_sim_config(resolved_dir) if resolved_dir else None
-    cached = cfg.get("test_discovery", {}).get("cached_tests", []) if cfg else []
-
-    if not cached:
-        # Cache miss — run test_discovery.command + cache via mcp_config
-        if cfg:
-            discovery = cfg.get("test_discovery", {})
-            cmd = discovery.get("command", "")
-            if cmd:
-                r = await ssh_run(f"cd {_sq(resolved_dir)} && {cmd}", timeout=30)
-                cached = [t.strip() for t in r.strip().splitlines() if t.strip()]
-                if cached:
-                    # Cache via config_action (write centralization)
-                    from datetime import datetime
-                    cfg.setdefault("test_discovery", {})["cached_tests"] = cached
-                    cfg["test_discovery"]["cached_at"] = datetime.now().isoformat()
-                    await save_sim_config(resolved_dir, cfg)
-
-    if not cached:
-        return short_name  # No cache, no command → pass through
-
-    # Exact match
-    if short_name in cached:
-        return short_name
-
-    # Substring match
-    matches = [t for t in cached if short_name in t]
-    if len(matches) == 1:
-        return matches[0]
-    elif len(matches) == 0:
-        raise ValueError(f"No test matching '{short_name}'. Run list_tests() to see available.")
-    else:
-        raise ValueError(
-            f"Multiple tests match '{short_name}':\n"
-            + "\n".join(f"  {m}" for m in matches)
-            + "\nSpecify more precisely."
-        )
-
-
-# ===========================================================================
-# v4.1: Run directory + VNC display detection
-# ===========================================================================
-
-
-async def _detect_run_dir(sim_dir: str, runner_info: dict) -> dict:
-    """Detect simulation run directory and whether runner script has internal cd.
-
-    Returns: {"run_dir": str, "script_has_cd": bool}
-    """
-    candidates: list[str] = []
-    script_has_cd = False
-    _sd = _sq(sim_dir)
-
-    # 1. run*/ directories with cds.lib or hdl.var
-    r = await ssh_run(
-        f"find {_sd} -maxdepth 1 -type d -name 'run*' 2>/dev/null"
-    )
-    for d in r.strip().splitlines():
-        if not d.strip():
-            continue
-        has_cds = await ssh_run(
-            f"test -f {_sq(d + '/cds.lib')} -o -L {_sq(d + '/cds.lib')} -o -f {_sq(d + '/hdl.var')} && echo YES || echo NO"
-        )
-        if "YES" in has_cds:
-            candidates.append(d.split("/")[-1])
-
-    # 2. Parse 'cd' from runner script → detect script_has_cd
-    script_name = _extract_script_name(runner_info.get("exec_cmd", ""))
-    script_path = f"{sim_dir}/{script_name}"
-    cd_targets: list[str] = []
-    r = await ssh_run(f"grep -E '^[[:space:]]*cd[[:space:]]+' {_sq(script_path)} 2>/dev/null | head -3")
-    for line in r.strip().splitlines():
-        parts = line.strip().split()
-        if len(parts) >= 2 and '$' not in parts[1]:
-            cd_target = parts[1].strip("'\"").rstrip("/")
-            # Skip navigation-only targets (cd .., cd /, cd ~)
-            if cd_target and cd_target not in ("..", "/", "~"):
-                cd_targets.append(cd_target)
-                if cd_target not in candidates:
-                    candidates.append(cd_target)
-
-    script_has_cd = len(cd_targets) > 0
-
-    # 3. sim_dir itself — only if no cd targets found (script doesn't cd to subdirectory)
-    if not script_has_cd:
-        has_cds = await ssh_run(
-            f"test -f {_sq(sim_dir + '/cds.lib')} -o -L {_sq(sim_dir + '/cds.lib')} && echo YES || echo NO"
-        )
-        if "YES" in has_cds and "." not in candidates:
-            candidates.append(".")
-
-    # 4. Single candidate
-    if len(candidates) == 1:
-        return {"run_dir": candidates[0], "script_has_cd": script_has_cd}
-
-    # 5. Multiple → ask user
-    if len(candidates) > 1:
-        raise UserInputRequired(
-            f"Multiple run directories found. Select one:\n"
-            + "\n".join(f"  {i+1}. {c}" for i, c in enumerate(candidates))
-        )
-
-    # 6. None → ask user
-    raise UserInputRequired(
-        "Could not detect run directory.\n"
-        "Enter the directory where xmsim/simvision should run:\n"
-        f"  (relative to {sim_dir})\n"
-        "  Example: run\n"
-        "  Example: ."
-    )
-
-
-async def _detect_vnc_display() -> str:
-    """Detect current user's VNC display.
-
-    Search order:
-      1. vncserver -list → parse display number
-      2. ps -u $USER | grep Xvnc → extract :N
-      3. $DISPLAY env var (skip :0 = physical)
-    Returns: ":N" or "" if not found.
-    """
-    # 1. vncserver -list
-    r = await ssh_run("vncserver -list 2>/dev/null | grep -E '^:'")
-    if r.strip():
-        display = r.strip().splitlines()[0].split()[0]
-        return display
-
-    # 2. Xvnc process
-    r = await ssh_run("ps -u $(whoami) -o args 2>/dev/null | grep Xvnc | grep -v grep | grep -oE ':[0-9]+'")
-    if r.strip():
-        return r.strip().splitlines()[0]
-
-    # 3. $DISPLAY fallback (skip :0)
-    r = await ssh_run("echo $DISPLAY")
-    if r.strip() and r.strip() != ":0":
-        return r.strip()
-
-    return ""
-
-
-# ---------------------------------------------------------------------------
-# SimVision live helpers (§4.6)
-# ---------------------------------------------------------------------------
-
-def _parse_shm_path(db_list_output: str) -> str:
-    """Parse SHM path from xmsim 'database -list' output.
-
-    Typical output:
-      '../dump/ci_top.shm'  or  'dump/ci_top.shm'
-    May include multiple lines; return the first .shm path found.
-    Handles single/double quotes around the path.
-    """
-    for line in db_list_output.strip().splitlines():
-        line = line.strip()
-        # Remove leading/trailing quotes
-        line = line.strip("'\"")
-        if ".shm" in line:
-            # Extract path up to and including .shm suffix
-            idx = line.index(".shm") + 4
-            return line[:idx]
-    return ""
-
-
-def _parse_time_ns(where_output: str) -> int:
-    """Parse simulation time from xmsim 'where' output into nanoseconds.
-
-    Handles formats:
-      '5 MS + 0'    -> 5_000_000
-      '3 US + 500'  -> 3_500
-      '100 NS + 500' -> 100_500
-      '0 FS + 0'    -> 0  (sub-ns: return 0)
-      '5000000'     (raw number) -> 5_000_000
-    """
-    import re
-    # "X MS + Y"  (milliseconds)
-    m = re.search(r'(\d+)\s+MS\s*\+\s*(\d+)', where_output, re.IGNORECASE)
-    if m:
-        return int(m.group(1)) * 1_000_000 + int(m.group(2))
-    # "X US + Y"  (microseconds)
-    m = re.search(r'(\d+)\s+US\s*\+\s*(\d+)', where_output, re.IGNORECASE)
-    if m:
-        return int(m.group(1)) * 1000 + int(m.group(2))
-    # "X NS + Y"  (nanoseconds + sub-ns delta)
-    m = re.search(r'(\d+)\s+NS\s*\+\s*(\d+)', where_output, re.IGNORECASE)
-    if m:
-        return int(m.group(1)) + int(m.group(2))
-    # Standalone integer (raw ns fallback)
-    m = re.search(r'(\d+)', where_output)
-    if m:
-        return int(m.group(1))
-    return 0
