@@ -15,7 +15,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import shutil
 import time
 from pathlib import Path
 
@@ -195,10 +194,10 @@ def find_nearest_checkpoint(sim_dir: str, bug_time_ns: int) -> list[dict]:
     checkpoints = manifest.get("checkpoints", {})
 
     candidates: list[dict] = []
-    for info in checkpoints.values():
+    for chk_name, info in checkpoints.items():
         t = info.get("saved_time_ns", 0)
         if t < bug_time_ns and info.get("compile_hash", "") == current_hash:
-            candidates.append({**info, "_distance_ns": bug_time_ns - t})
+            candidates.append({**info, "_key": chk_name, "_distance_ns": bug_time_ns - t})
 
     candidates.sort(key=lambda x: x["_distance_ns"])
     return candidates

@@ -78,9 +78,9 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
     ) -> str:
         """Restore simulation to a previously saved checkpoint.
 
-        Verifies compile_hash before restore — rejects stale checkpoints created
-        before the last RTL recompile.  Stale breakpoints are cleared automatically
-        after restore to prevent spurious $finish.
+        No compile_hash verification — allows restoring from any checkpoint,
+        including those from previous compiles (useful for before/after comparison).
+        Use cleanup_checkpoints(mode="stale") to remove outdated checkpoints.
 
         Args:
             name:    Checkpoint name to restore. Empty = last saved checkpoint.
@@ -148,7 +148,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             # Create temp cds.lib pointing to checkpoints worklib
             user_tmp = await get_user_tmp_dir()
             cds_lib = f"{user_tmp}/rebuild_cds.lib"
-            abs_worklib = os.path.abspath(chk_dir)
+            abs_worklib = os.path.expanduser(chk_dir)
             await ssh_run(
                 f"echo 'DEFINE worklib {abs_worklib}' > {sq(cds_lib)}",
                 timeout=5,
@@ -225,7 +225,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             from xcelium_mcp.sim_runner import login_shell_cmd
             user_tmp = await get_user_tmp_dir()
             cds_lib = f"{user_tmp}/cleanup_cds.lib"
-            chk_worklib = os.path.join(resolved_dir, "checkpoints", "worklib")
+            chk_worklib = os.path.expanduser(os.path.join(resolved_dir, "checkpoints", "worklib"))
             await ssh_run(
                 f"echo 'DEFINE worklib {chk_worklib}' > {sq(cds_lib)}",
                 timeout=5,
@@ -233,7 +233,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             run_dir = os.path.join(resolved_dir, cfg.get("runner", {}).get("run_dir", "run")) if cfg else resolved_dir
             xmrm_errors: list[str] = []
             for name in result["removed"]:
-                xmrm_cmd = f"cd {sq(run_dir)} && {sq(xmrm_path)} -snapshot worklib.{name} -cdslib {sq(cds_lib)} -nolog -nocopyright -force"
+                xmrm_cmd = f"cd {sq(run_dir)} && {sq(xmrm_path)} -snapshot {sq(f'worklib.{name}')} -cdslib {sq(cds_lib)} -nolog -nocopyright -force"
                 out = await ssh_run(
                     login_shell_cmd(login_shell, xmrm_cmd),
                     timeout=15,

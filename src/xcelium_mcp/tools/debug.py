@@ -619,7 +619,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             sim_dir = await get_default_sim_dir()
             if sim_dir:
                 nearest = checkpoint_manager.find_nearest_checkpoint(sim_dir, bug_time_ns)
-                resolved_checkpoints = [c["name"] for c in nearest[:3]]
+                resolved_checkpoints = [c["_key"] for c in nearest[:3]]
 
         lines = [
             f"Signals not in SHM dump ({shm_path}):",

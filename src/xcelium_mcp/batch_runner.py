@@ -45,7 +45,6 @@ def validate_extra_args(s: str) -> str:
 
 def _parse_l1_time_ns(l1_time: str) -> int:
     """Convert l1_time string (e.g. "500us", "1ms") to nanoseconds."""
-    import re as _re
     m = _re.match(r'(\d+)\s*(us|ms|ns)?', l1_time.strip())
     if not m:
         return 0
@@ -73,9 +72,11 @@ def extract_setup_lines(tcl_content: str) -> str:
         # Skip database close (we control this ourselves)
         if "database" in stripped and "close" in stripped:
             continue
-        # Skip commented-out control commands
-        if stripped.startswith("#") and any(kw in stripped for kw in ("run", "exit", "finish")):
-            continue
+        # Skip commented-out control commands (# run, #exit, #finish as first word)
+        if stripped.startswith("#"):
+            words = stripped.lstrip("#").strip().split()
+            if words and words[0] in ("run", "exit", "finish"):
+                continue
         lines.append(line)
     return "\n".join(lines)
 
@@ -107,14 +108,12 @@ def _build_checkpoint_tcl(
     Uses setup_lines (extracted by extract_setup_lines) — no run/exit included.
     Injected via MCP_INPUT_TCL env var.
     """
-    if not l1_time:
-        l1_time = "500us"
-
+    l1_ns = _parse_l1_time_ns(l1_time) if l1_time else 500000
     l1_name = f"L1_{test_name}"
 
     return f"""\
 # Auto-generated checkpoint Tcl (Phase 4)
-# Probe setup + L1 at {l1_time}
+# Probe setup + L1 at {l1_ns}ns
 
 # 1. Probe/database setup (extracted from setup Tcl, run/exit stripped)
 {setup_lines}
@@ -123,7 +122,7 @@ def _build_checkpoint_tcl(
 file mkdir {chk_dir}
 
 # 3. Run to L1 time (common init completion) + save L1
-run {l1_time}
+run {l1_ns}ns
 catch {{save -simulation worklib.{l1_name}:module -path {chk_dir} -overwrite}}
 
 # 4. Continue simulation to $finish
@@ -544,7 +543,7 @@ async def _run_batch_regression(
     return f"{summary}\n\nLog ({log_file}):\n{details}"
 
 
-async def _poll_batch_log(log_file: str, timeout: float, prefix: str = "") -> str:
+async def _poll_batch_log(log_file: str, timeout: float, prefix: str = "") -> tuple[str, bool]:
     """Poll a batch log file until completion keywords found or timeout.
 
     P6-1: Adaptive polling interval — 2s → 3s → 4.5s → 6.75s → 10s cap.
