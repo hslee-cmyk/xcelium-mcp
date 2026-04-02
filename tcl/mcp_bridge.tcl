@@ -32,6 +32,8 @@ namespace eval ::mcp_bridge {
     variable server_socket ""
     variable client_channel ""
     variable port 9876
+    variable port_range 10
+    variable bridge_type "xmsim"
     variable cmd_buffer ""
     variable async_running 0
     variable async_done 0
@@ -39,6 +41,13 @@ namespace eval ::mcp_bridge {
     variable watch_ids [list]
     variable _checkpoint_dir ""
     variable _checkpoint_name ""
+    variable _init_snapshot_dir ""
+    variable _shutdown_flag 0
+
+    # Per-user temp directory (matches Python side: /tmp/xcelium_mcp_{uid}/)
+    variable uid [exec id -u]
+    variable user_tmp "/tmp/xcelium_mcp_$uid"
+    catch {file mkdir $user_tmp}
 }
 
 # ---------------------------------------------------------------------------
@@ -46,7 +55,17 @@ namespace eval ::mcp_bridge {
 # ---------------------------------------------------------------------------
 proc ::mcp_bridge::init {} {
     variable port
+    variable port_range
+    variable bridge_type
     variable server_socket
+
+    # P1-1: Detect bridge type (xmsim vs SimVision)
+    if {[info commands waveform] ne ""} {
+        set bridge_type "simvision"
+    } else {
+        set bridge_type "xmsim"
+    }
+    puts "MCP Bridge: type=$bridge_type"
 
     # Allow port override via environment variable
     if {[info exists ::env(MCP_BRIDGE_PORT)]} {
@@ -56,19 +75,57 @@ proc ::mcp_bridge::init {} {
     # Close existing server if re-sourced
     if {$server_socket ne ""} {
         catch {close $server_socket}
+        set server_socket ""
     }
 
-    set server_socket [socket -server ::mcp_bridge::accept $port]
-    puts "MCP Bridge: listening on port $port"
+    # P1-2: Auto port — try port_range ports starting from base
+    set found 0
+    for {set p $port} {$p < $port + $port_range} {incr p} {
+        if {![catch {socket -server ::mcp_bridge::accept $p} sock]} {
+            set server_socket $sock
+            set port $p
+            set found 1
+            puts "MCP Bridge: listening on port $p"
+            break
+        }
+        puts "MCP Bridge: port $p busy, trying next..."
+    }
+    if {!$found} {
+        puts "MCP Bridge: ERROR — all ports $port-[expr {$port + $port_range - 1}] busy"
+        return
+    }
 
-    # Signal readiness via file (avoids TCP client slot contention with ping loops)
-    set ready_file "/tmp/mcp_bridge_ready_$port"
+    # P1-3: Ready file — "port type timestamp" format
+    variable user_tmp
+    set ready_file "$user_tmp/bridge_ready_$port"
     if {[catch {
         set f [open $ready_file w]
-        puts $f [clock seconds]
+        puts $f "$port $bridge_type [clock seconds]"
         close $f
     } err]} {
         puts "MCP Bridge: WARNING: could not create ready file: $err"
+    }
+
+    # Save init snapshot for sim_restart fallback
+    ::mcp_bridge::on_init
+
+    # v4: Source project setup TCL via MCP_SETUP_TCL env var
+    # When sim_start sets MCP_SETUP_TCL, this sources the project's original
+    # setup.tcl (probe settings, dump scope, etc.) after bridge initialization.
+    # IMPORTANT: Intercept 'run', 'exit', 'finish' during source — these are
+    # batch commands that would block or terminate the bridge. Only probe/database
+    # setup should execute. Commands are restored after source completes.
+    if {[info exists ::env(MCP_SETUP_TCL)] && $::env(MCP_SETUP_TCL) ne ""} {
+        if {[file exists $::env(MCP_SETUP_TCL)]} {
+            # MCP_SETUP_TCL is pre-filtered by sim_start (Python side)
+            # to remove run/exit/finish/database-close lines.
+            # Only probe/database-open setup remains.
+            puts "MCP Bridge: sourcing setup TCL: $::env(MCP_SETUP_TCL)"
+            source $::env(MCP_SETUP_TCL)
+            puts "MCP Bridge: setup TCL loaded"
+        } else {
+            puts "MCP Bridge: WARNING — MCP_SETUP_TCL not found: $::env(MCP_SETUP_TCL)"
+        }
     }
 }
 
@@ -158,6 +215,17 @@ proc ::mcp_bridge::dispatch {channel cmd} {
         return
     }
 
+    if {$cmd eq "__RESTART__"} {
+        ::mcp_bridge::do_restart $channel
+        return
+    }
+
+    if {[string match "__EXECUTE_TCL__*" $cmd]} {
+        set tcl_cmd [string trim [string range $cmd 16 end]]
+        ::mcp_bridge::do_execute_tcl $channel $tcl_cmd
+        return
+    }
+
     if {[string match "__RUN_ASYNC__*" $cmd]} {
         set duration [string trim [string range $cmd 14 end]]
         ::mcp_bridge::do_run_async $channel $duration
@@ -195,14 +263,73 @@ proc ::mcp_bridge::dispatch {channel cmd} {
     }
 
     if {[string match "__SAVE__*" $cmd]} {
-        set path [string trim [string range $cmd 8 end]]
-        ::mcp_bridge::do_save $channel $path
+        # Protocol: "__SAVE__ {name} {dir}"  — dir is optional, defaults to $user_tmp/checkpoints
+        set args [string trim [string range $cmd 8 end]]
+        set parts [split $args " "]
+        set name [lindex $parts 0]
+        set dir  [lindex $parts 1]
+        ::mcp_bridge::do_save $channel $name $dir
         return
     }
 
     if {[string match "__RESTORE__*" $cmd]} {
-        set path [string trim [string range $cmd 11 end]]
-        ::mcp_bridge::do_restore $channel $path
+        # Protocol: "__RESTORE__ {name} {dir}"  — dir is optional
+        set args [string trim [string range $cmd 11 end]]
+        set parts [split $args " "]
+        set name [lindex $parts 0]
+        set dir  [lindex $parts 1]
+        ::mcp_bridge::do_restore $channel $name $dir
+        return
+    }
+
+    # --- Round-trip optimization meta commands ---
+
+    if {$cmd eq "__STATUS__"} {
+        ::mcp_bridge::do_status $channel
+        return
+    }
+
+    if {[string match "__RUN_AND_REPORT__*" $cmd]} {
+        # __RUN_AND_REPORT__ = 18 chars
+        set duration [string trim [string range $cmd 18 end]]
+        ::mcp_bridge::do_run_and_report $channel $duration
+        return
+    }
+
+    if {[string match "__DEPOSIT_AND_VERIFY__*" $cmd]} {
+        # __DEPOSIT_AND_VERIFY__ = 22 chars
+        set args [string trim [string range $cmd 22 end]]
+        set parts [split $args " "]
+        set signal [lindex $parts 0]
+        set val [lindex $parts 1]
+        ::mcp_bridge::do_deposit_and_verify $channel $signal $val
+        return
+    }
+
+    if {[string match "__RELEASE_AND_VERIFY__*" $cmd]} {
+        # __RELEASE_AND_VERIFY__ = 22 chars
+        set signal [string trim [string range $cmd 22 end]]
+        ::mcp_bridge::do_release_and_verify $channel $signal
+        return
+    }
+
+    if {$cmd eq "__DEBUG_SNAPSHOT__"} {
+        ::mcp_bridge::do_debug_snapshot $channel
+        return
+    }
+
+    # --- Phase 5 meta commands ---
+
+    if {[string match "__WAVEFORM_ADD_GROUP__*" $cmd]} {
+        # Protocol: "__WAVEFORM_ADD_GROUP__ {group_name_or_""} sig1 sig2 ..."
+        # __WAVEFORM_ADD_GROUP__ = 22 chars
+        set args [string trim [string range $cmd 22 end]]
+        set parts [split $args " "]
+        set group_name [lindex $parts 0]
+        # Normalize: "" placeholder → empty string (no group)
+        if {$group_name eq {""}} { set group_name "" }
+        set sig_list [lrange $parts 1 end]
+        ::mcp_bridge::do_waveform_add_group $channel $group_name $sig_list
         return
     }
 
@@ -246,7 +373,7 @@ proc ::mcp_bridge::send_error {channel body} {
 # ---------------------------------------------------------------------------
 proc ::mcp_bridge::do_screenshot {channel path} {
     if {$path eq ""} {
-        set path "/tmp/mcp_screenshot_[clock seconds].ps"
+        set path "$::mcp_bridge::user_tmp/screenshot_[clock seconds].ps"
     }
 
     # Try SimVision waveform print first
@@ -268,26 +395,110 @@ proc ::mcp_bridge::do_screenshot {channel path} {
 }
 
 # ---------------------------------------------------------------------------
+# F0: __RESTART__ — safe restart with run-clean → snapshot → plain fallback
+# ---------------------------------------------------------------------------
+proc ::mcp_bridge::init_snapshot {} {
+    variable _init_snapshot_dir
+    variable user_tmp
+    set _init_snapshot_dir "$user_tmp/init_snapshot"
+    file mkdir $_init_snapshot_dir
+    catch {save -simulation mcp_init -path $_init_snapshot_dir -overwrite}
+}
+
+proc ::mcp_bridge::on_init {} {
+    variable _init_snapshot_dir
+    variable user_tmp
+    set _init_snapshot_dir "$user_tmp/init_snapshot"
+    if {[file exists $_init_snapshot_dir]} {
+        catch {file delete -force $_init_snapshot_dir}
+    }
+    ::mcp_bridge::init_snapshot
+}
+
+proc ::mcp_bridge::do_restart {channel} {
+    variable _init_snapshot_dir
+
+    # Method 1: run -clean (full restart, cleanest)
+    set err_a ""
+    if {![catch {run -clean} err_a]} {
+        ::mcp_bridge::send_ok $channel "restarted:run-clean|time:0"
+        return
+    }
+
+    # Method 2: restore init snapshot (saved at bridge startup)
+    set err_b "(no init snapshot)"
+    if {[info exists _init_snapshot_dir] && $_init_snapshot_dir ne "" \
+            && [file exists $_init_snapshot_dir]} {
+        if {![catch {restart worklib.mcp_init:module -path $_init_snapshot_dir} err_b]} {
+            catch {stop -delete -all}
+            ::mcp_bridge::send_ok $channel "restarted:snapshot|time:0"
+            return
+        }
+    }
+
+    # Method 3: plain restart (SimVision built-in)
+    set err_c ""
+    if {![catch {restart} err_c]} {
+        ::mcp_bridge::send_ok $channel "restarted:plain|time:0"
+        return
+    }
+
+    ::mcp_bridge::send_error $channel \
+        "restart failed: run-clean='$err_a' snapshot='$err_b' plain='$err_c'"
+}
+
+# ---------------------------------------------------------------------------
+# F0b: __EXECUTE_TCL__ — execute arbitrary Tcl in global namespace
+# ---------------------------------------------------------------------------
+proc ::mcp_bridge::do_execute_tcl {channel cmd_str} {
+    if {[catch {uplevel #0 $cmd_str} result]} {
+        ::mcp_bridge::send_error $channel "TclError: $result"
+        return
+    }
+    ::mcp_bridge::send_ok $channel $result
+}
+
+# ---------------------------------------------------------------------------
 # F1: __SHUTDOWN__ — safe shutdown (database close + finish)
 # ---------------------------------------------------------------------------
 proc ::mcp_bridge::do_shutdown {channel} {
+    variable bridge_type
+    variable port
+    variable _shutdown_flag
+
     # 1. Close all SHM databases to flush data
-    if {[catch {
-        set dbs [database -list]
-        foreach db $dbs {
-            catch {database -close $db}
+    if {$bridge_type eq "simvision"} {
+        # SimVision uses "database close" (not "database -close")
+        catch {
+            set dbs [database find]
+            foreach db $dbs {
+                catch {database close $db}
+            }
         }
-    } err]} {
-        # database -list may not be available; try known default
-        catch {database -close ../dump/ci_top.shm}
+    } else {
+        if {[catch {
+            set dbs [database -list]
+            foreach db $dbs {
+                catch {database -close $db}
+            }
+        } err]} {
+            catch {database -close ../dump/ci_top.shm}
+        }
     }
 
-    # 2. Notify client before termination
+    # 2. Cleanup ready file
+    catch {file delete "$::mcp_bridge::user_tmp/bridge_ready_$port"}
+
+    # 3. Notify client before termination
     ::mcp_bridge::send_ok $channel "shutdown:ok"
 
-    # 3. Schedule finish after returning to event loop
-    #    (gives time for the OK response to be flushed)
-    after 100 {finish}
+    # 4. Set shutdown flag (unblocks vwait/event pump) + schedule exit
+    set _shutdown_flag 1
+    if {$bridge_type eq "simvision"} {
+        after 100 {exit}
+    } else {
+        after 100 {finish}
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -474,20 +685,32 @@ proc ::mcp_bridge::do_probe_control {channel args_str} {
 # ---------------------------------------------------------------------------
 # F5: __SAVE__ / __RESTORE__ — simulation checkpoint
 # ---------------------------------------------------------------------------
-proc ::mcp_bridge::do_save {channel name} {
+proc ::mcp_bridge::do_save {channel name {dir ""}} {
     variable _checkpoint_dir
     variable _checkpoint_name
 
     if {$name eq ""} {
         set name "chk_[clock seconds]"
     }
+    if {$dir eq ""} {
+        set dir "$::mcp_bridge::user_tmp/checkpoints"
+    }
 
-    set dir "/tmp/mcp_checkpoints"
+    # 1. Ensure simulator is stopped before save
+    if {[catch {set st [status]} err]} { set st "" }
+    if {![string match "*stopped*" $st]} { catch {stop} }
+
+    # 2. Create checkpoint directory
     file mkdir $dir
 
-    if {[catch {save -simulation $name -path $dir -overwrite} err]} {
-        ::mcp_bridge::send_error $channel "save failed: $err"
-        return
+    # 3. Execute save — use worklib.NAME:module format (consistent with do_restore)
+    set snapshot "worklib.$name:module"
+    if {[catch {save -simulation $snapshot -path $dir -overwrite} err]} {
+        # Fallback: some xmsim versions don't support -path for save
+        if {[catch {save -simulation $snapshot -overwrite} err2]} {
+            ::mcp_bridge::send_error $channel "save failed: $err2"
+            return
+        }
     }
 
     set _checkpoint_dir $dir
@@ -496,7 +719,7 @@ proc ::mcp_bridge::do_save {channel name} {
     ::mcp_bridge::send_ok $channel "saved:worklib.$name:module|dir:$dir"
 }
 
-proc ::mcp_bridge::do_restore {channel name} {
+proc ::mcp_bridge::do_restore {channel name {dir ""}} {
     variable _checkpoint_dir
     variable _checkpoint_name
 
@@ -507,18 +730,27 @@ proc ::mcp_bridge::do_restore {channel name} {
         }
         set name $_checkpoint_name
     }
-
-    set dir "/tmp/mcp_checkpoints"
-    if {[info exists _checkpoint_dir] && $_checkpoint_dir ne ""} {
-        set dir $_checkpoint_dir
+    if {$dir eq ""} {
+        if {[info exists _checkpoint_dir] && $_checkpoint_dir ne ""} {
+            set dir $_checkpoint_dir
+        } else {
+            set dir "$::mcp_bridge::user_tmp/checkpoints"
+        }
     }
 
     set snapshot "worklib.$name:module"
 
+    # 1. Restore simulation state
     if {[catch {restart $snapshot -path $dir} err]} {
         ::mcp_bridge::send_error $channel "restore failed: $err"
         return
     }
+
+    # 2. Clear stale breakpoints to prevent spurious $finish (P4-9)
+    catch {stop -delete -all}
+
+    set _checkpoint_dir $dir
+    set _checkpoint_name $name
 
     if {[catch {set w [where]} err]} {
         set w "unknown"
@@ -574,7 +806,7 @@ proc ::mcp_bridge::do_bisect {channel args_str} {
 
     lappend log_lines "bisect_start|range:${start_ns}-${end_ns}ns|precision:${precision}ns"
 
-    set chk_dir "/tmp/mcp_bisect"
+    set chk_dir "$::mcp_bridge::user_tmp/bisect"
     file mkdir $chk_dir
 
     # Save checkpoint at time 0
@@ -666,6 +898,151 @@ proc ::mcp_bridge::do_bisect {channel args_str} {
 }
 
 # ---------------------------------------------------------------------------
+# F8: Round-trip optimization meta commands
+# ---------------------------------------------------------------------------
+
+# __STATUS__ — where + scope in 1 call (was 2 round-trips)
+proc ::mcp_bridge::do_status {channel} {
+    set pos "(unknown)"
+    set sc "(unknown)"
+    catch {set pos [where]}
+    catch {set sc [scope]}
+    ::mcp_bridge::send_ok $channel "Position: $pos\nScope: $sc"
+}
+
+# __RUN_AND_REPORT__ — run + where in 1 call (was 2 round-trips)
+proc ::mcp_bridge::do_run_and_report {channel duration} {
+    if {$duration ne ""} {
+        if {[catch {run $duration} err]} {
+            set pos "(run failed: $err)"
+            catch {set pos [where]}
+            ::mcp_bridge::send_ok $channel "RUN_ERROR:$err\n$pos"
+            return
+        }
+    } else {
+        if {[catch {run} err]} {
+            set pos "(run failed: $err)"
+            catch {set pos [where]}
+            ::mcp_bridge::send_ok $channel "RUN_ERROR:$err\n$pos"
+            return
+        }
+    }
+    set pos "(unknown)"
+    catch {set pos [where]}
+    ::mcp_bridge::send_ok $channel $pos
+}
+
+# __DEPOSIT_AND_VERIFY__ — deposit + value readback in 1 call (was 2 round-trips)
+proc ::mcp_bridge::do_deposit_and_verify {channel signal val} {
+    deposit $signal $val
+    set readback "(unknown)"
+    catch {set readback [value $signal]}
+    ::mcp_bridge::send_ok $channel $readback
+}
+
+# __RELEASE_AND_VERIFY__ — release + value readback in 1 call (was 2 round-trips)
+proc ::mcp_bridge::do_release_and_verify {channel signal} {
+    release $signal
+    set readback "(unknown)"
+    catch {set readback [value $signal]}
+    ::mcp_bridge::send_ok $channel $readback
+}
+
+# __DEBUG_SNAPSHOT__ — where + scope + stop -show in 1 call (was 3+ round-trips)
+proc ::mcp_bridge::do_debug_snapshot {channel} {
+    set pos "(unknown)"
+    set sc "(unknown)"
+    set stops "(none)"
+    catch {set pos [where]}
+    catch {set sc [scope]}
+    catch {set stops [stop -show]}
+    ::mcp_bridge::send_ok $channel "POSITION:$pos\nSCOPE:$sc\nSTOPS:$stops"
+}
+
+# ---------------------------------------------------------------------------
+# F7: __WAVEFORM_ADD_GROUP__ — AI_Debug group with duplicate skip (P5-2)
+# ---------------------------------------------------------------------------
+proc ::mcp_bridge::do_waveform_add_group {channel group_name sig_list} {
+    # 0. Ensure a waveform window exists (auto-create if none)
+    if {[catch {waveform using}]} {
+        waveform new
+    }
+
+    # 1. Resolve DB prefix (SimVision requires db_name::signal_path)
+    set db_prefix ""
+    if {![catch {set db_name [database find]}]} {
+        set db_name [string trim $db_name]
+        if {$db_name ne ""} {
+            set db_prefix "${db_name}::"
+        }
+    }
+
+    # 2. Collect existing signals for duplicate detection
+    set existing {}
+    catch {set existing [waveform signals -format fullpath]}
+
+    # 3. Filter: resolve DB prefix + skip duplicates
+    set to_add {}
+    foreach sig $sig_list {
+        # Add db_prefix if signal doesn't already have ::
+        if {$db_prefix ne "" && [string first "::" $sig] < 0} {
+            set full "${db_prefix}${sig}"
+        } else {
+            set full $sig
+        }
+        if {[lsearch -exact $existing $full] < 0 && [lsearch -exact $existing $sig] < 0} {
+            lappend to_add $full
+        }
+    }
+
+    set skipped [expr {[llength $sig_list] - [llength $to_add]}]
+
+    if {[llength $to_add] == 0} {
+        set label [expr {$group_name ne "" ? $group_name : "default"}]
+        ::mcp_bridge::send_ok $channel \
+            "added:0|skipped:$skipped|group:$label (all signals already present)"
+        return
+    }
+
+    # 4. Add new signals (always -signals; SimVision groups are GUI-only,
+    #    unreliable via Tcl batch — group_name kept as label only)
+    if {[catch {waveform add -signals $to_add} err]} {
+        ::mcp_bridge::send_error $channel "waveform add failed: $err"
+        return
+    }
+
+    set label [expr {$group_name ne "" ? $group_name : "default"}]
+    ::mcp_bridge::send_ok $channel \
+        "added:[llength $to_add]|skipped:$skipped|group:$label"
+}
+
+# ---------------------------------------------------------------------------
 # Start the bridge
 # ---------------------------------------------------------------------------
 ::mcp_bridge::init
+
+# When run via nohup (stdin=/dev/null), xmsim exits after -input script
+# instead of entering interactive mode. vwait keeps the process alive
+# and processes fileevent (socket) callbacks.
+# Note: vwait in stopped state does NOT advance simulation.
+# SimVision has its own GUI event loop that processes fileevent callbacks,
+# so vwait would BLOCK it — only use vwait for xmsim.
+puts "MCP Bridge: ready (waiting for client)"
+if {![info exists ::mcp_bridge::_shutdown_flag]} {
+    set ::mcp_bridge::_shutdown_flag 0
+}
+if {$::mcp_bridge::bridge_type eq "xmsim"} {
+    vwait ::mcp_bridge::_shutdown_flag
+} else {
+    # SimVision's GUI event loop does not process Tcl socket events.
+    # Use periodic 'update' to force-process pending fileevent/after callbacks.
+    proc ::mcp_bridge::sv_event_pump {} {
+        if {[info exists ::mcp_bridge::_shutdown_flag] && $::mcp_bridge::_shutdown_flag} {
+            return
+        }
+        update
+        after 50 ::mcp_bridge::sv_event_pump
+    }
+    puts "MCP Bridge: SimVision mode — starting event pump (50ms)"
+    after 50 ::mcp_bridge::sv_event_pump
+}
