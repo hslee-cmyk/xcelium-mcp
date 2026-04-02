@@ -107,7 +107,6 @@ def register_checkpoint(
     manifest["compile_hash"] = compile_hash
 
     entry: dict = {
-        "name": name,
         "saved_at": datetime.now().isoformat(),
         "saved_time_ns": saved_time_ns,
         "compile_hash": compile_hash,
