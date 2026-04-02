@@ -66,8 +66,11 @@ def register(
                 existing = await bridge.execute("database find")
                 if existing.strip():
                     # Same DB? → skip.  Different DB? → close old, open new.
-                    # Compare: shm_path may contain full path, existing is just db name
-                    if existing.strip() in shm_path or shm_path in existing.strip():
+                    # Compare .shm directory stem against existing db name
+                    from pathlib import Path as _Path
+                    _shm_p = _Path(shm_path)
+                    _shm_stem = _shm_p.parent.stem if _shm_p.parent.suffix == ".shm" else _shm_p.stem
+                    if existing.strip() == _shm_stem:
                         return f"Database already open (SimVision): {existing.strip()}"
                     # Different DB — close existing first
                     try:

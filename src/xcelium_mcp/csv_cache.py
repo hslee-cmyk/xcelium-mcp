@@ -83,9 +83,11 @@ def _default_output_path(
       <shm_dir>/mcp_csv_<stem>_<sig_hash>[_<start>_<end>].csv
     """
     sig_hash = hashlib.md5(",".join(sorted(signals)).encode()).hexdigest()[:8]
-    stem = Path(shm_path).stem  # e.g. "ci_top_TOP015"
+    # Extract .shm directory stem (not inner .trn filename)
+    shm_p = Path(shm_path)
+    stem = shm_p.parent.stem if shm_p.parent.suffix == ".shm" else shm_p.stem
     suffix = f"_{start_ns}_{end_ns}" if (start_ns or end_ns) else ""
-    return str(Path(shm_path).parent / f"mcp_csv_{stem}_{sig_hash}{suffix}.csv")
+    return str(shm_p.parent / f"mcp_csv_{stem}_{sig_hash}{suffix}.csv")
 
 
 # ---------------------------------------------------------------------------
