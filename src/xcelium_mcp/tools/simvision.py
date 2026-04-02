@@ -12,13 +12,13 @@ from xcelium_mcp.bridge_manager import BridgeManager
 from xcelium_mcp.tcl_bridge import TclBridge, TclError
 from xcelium_mcp.sim_runner import (
     ssh_run,
-    _login_shell_cmd,
+    login_shell_cmd,
     _detect_vnc_display,
-    _build_redirect,
+    build_redirect,
     _parse_shm_path,
     _parse_time_ns,
-    _resolve_test_name,
-    _get_user_tmp_dir,
+    resolve_test_name,
+    get_user_tmp_dir,
     load_sim_config,
     _get_default_sim_dir,
 )
@@ -149,7 +149,7 @@ def register(
             bridges.set_simvision(None)
 
         # 1. Check existing SimVision bridge → auto-connect
-        user_tmp = await _get_user_tmp_dir()
+        user_tmp = await get_user_tmp_dir()
         r = await ssh_run(f"cat {user_tmp}/bridge_ready_* 2>/dev/null")
         for line in r.strip().splitlines():
             parts = line.strip().split()
@@ -173,7 +173,7 @@ def register(
         # 3. Resolve SHM (glob)
         if not shm_path:
             if test_name:
-                test_name = await _resolve_test_name(test_name, resolved_dir)
+                test_name = await resolve_test_name(test_name, resolved_dir)
             dump_dir = f"{resolved_dir}/dump"
             if test_name:
                 r2 = await ssh_run(f"ls -td {dump_dir}/*{test_name}*.shm 2>/dev/null | head -1")
@@ -219,10 +219,10 @@ def register(
         if runner.get("source_separately") and env_files:
             shell_cmd = f"{env_shell} -c '{inner_cmd}'"
         else:
-            shell_cmd = _login_shell_cmd(login_shell, inner_cmd)
+            shell_cmd = login_shell_cmd(login_shell, inner_cmd)
 
         log_file = "/tmp/simvision_start.log"
-        cmd = f"(nohup {shell_cmd} {_build_redirect(log_file)} < /dev/null &)"
+        cmd = f"(nohup {shell_cmd} {build_redirect(log_file)} < /dev/null &)"
         await ssh_run(cmd, timeout=15)
 
         # 7. Wait for bridge ready + auto-connect
@@ -439,7 +439,7 @@ def register(
         )
 
         # 3. Wait for SimVision bridge ready file (30s)
-        user_tmp = await _get_user_tmp_dir()
+        user_tmp = await get_user_tmp_dir()
         bridge_ready = False
         for _i in range(15):
             await asyncio.sleep(2)
@@ -563,7 +563,7 @@ def register(
             )
 
             # 3. Wait for SimVision bridge ready file (30s)
-            user_tmp = await _get_user_tmp_dir()
+            user_tmp = await get_user_tmp_dir()
             bridge_ready = False
             for _i in range(15):
                 await asyncio.sleep(2)

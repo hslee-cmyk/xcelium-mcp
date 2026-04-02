@@ -17,7 +17,7 @@ from xcelium_mcp.screenshot import ps_to_png
 from xcelium_mcp.sim_runner import (
     UserInputRequired,
     ssh_run,
-    _build_redirect,
+    build_redirect,
     _get_default_sim_dir,
     _parse_shm_path,
     _parse_time_ns,

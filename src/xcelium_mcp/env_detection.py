@@ -10,8 +10,8 @@ from pathlib import Path
 
 from xcelium_mcp.sim_runner import (
     ssh_run,
-    _sq,
-    _login_shell_cmd,
+    sq,
+    login_shell_cmd,
     UserInputRequired,
 )
 from xcelium_mcp.registry import load_sim_config
@@ -23,7 +23,7 @@ async def _detect_env_shell(env_file: str, login_shell: str) -> str:
     Priority: shebang → file extension → content patterns → login_shell fallback.
     """
     # 1. shebang
-    shebang = await ssh_run(f"head -1 {_sq(env_file)} 2>/dev/null")
+    shebang = await ssh_run(f"head -1 {sq(env_file)} 2>/dev/null")
     if shebang.startswith("#!"):
         return shebang[2:].strip().split()[0]
 
@@ -41,7 +41,7 @@ async def _detect_env_shell(env_file: str, login_shell: str) -> str:
             return shell
 
     # 3. content patterns
-    content = await ssh_run(f"head -30 {_sq(env_file)} 2>/dev/null")
+    content = await ssh_run(f"head -30 {sq(env_file)} 2>/dev/null")
     if "foreach" in content or "breaksw" in content:
         return "/bin/tcsh"
     if "setenv" in content:
@@ -68,7 +68,7 @@ async def _detect_eda_env(sim_dir: str, project_root: str, login_shell: str) -> 
     """
     # Step 1: login shell direct test
     # Check for "/" to distinguish real path from "Command not found" stderr
-    r = await ssh_run(_login_shell_cmd(login_shell, "which xrun"), timeout=10)
+    r = await ssh_run(login_shell_cmd(login_shell, "which xrun"), timeout=10)
     if r.strip() and "/" in r.strip():
         return {"env_files": [], "env_shell": login_shell, "source_separately": False}
 
@@ -86,11 +86,11 @@ async def _detect_eda_env(sim_dir: str, project_root: str, login_shell: str) -> 
     candidates: list[str] = []
 
     for search_dir, pat in search_specs:
-        r = await ssh_run(f"find {_sq(search_dir)} -maxdepth 1 \\( -type f -o -type l \\) {pat} 2>/dev/null")
+        r = await ssh_run(f"find {sq(search_dir)} -maxdepth 1 \\( -type f -o -type l \\) {pat} 2>/dev/null")
         for f in r.strip().splitlines():
             if not f:
                 continue
-            r2 = await ssh_run(f"grep -lE '{kw_grep}' {_sq(f)} 2>/dev/null")
+            r2 = await ssh_run(f"grep -lE '{kw_grep}' {sq(f)} 2>/dev/null")
             if r2.strip():
                 candidates.append(f)
 
@@ -98,7 +98,7 @@ async def _detect_eda_env(sim_dir: str, project_root: str, login_shell: str) -> 
     for candidate in candidates:
         env_shell = await _detect_env_shell(candidate, login_shell)
         # No '2>/dev/null' inside csh/tcsh -c — causes Ambiguous redirect error
-        r = await ssh_run(f"{env_shell} -c 'source {_sq(candidate)} && which xrun'")
+        r = await ssh_run(f"{env_shell} -c 'source {sq(candidate)} && which xrun'")
         if r.strip() and "/" in r.strip():
             return {
                 "env_files": [candidate],
@@ -125,7 +125,7 @@ async def _detect_shell_and_env(sim_dir: str, script: str, project_root: str) ->
 
     # script_shell from shebang
     script_path = f"{sim_dir}/{script}"
-    shebang = await ssh_run(f"head -1 {_sq(script_path)} 2>/dev/null")
+    shebang = await ssh_run(f"head -1 {sq(script_path)} 2>/dev/null")
     script_shell: str | None = None
     if shebang.strip().startswith("#!"):
         script_shell = shebang.strip()[2:].split()[0]
@@ -153,10 +153,10 @@ async def _auto_detect_runner(sim_dir: str) -> dict:
     candidates: list[dict] = []
 
     # 1. Makefile with sim/test/run target
-    r = await ssh_run(f"grep -lE 'sim:|test:|run:' {_sq(sim_dir + '/Makefile')} 2>/dev/null")
+    r = await ssh_run(f"grep -lE 'sim:|test:|run:' {sq(sim_dir + '/Makefile')} 2>/dev/null")
     if r.strip():
         targets = await ssh_run(
-            f"grep -oE '^(sim|test|run|simulate|regression)[^:]*:' {_sq(sim_dir + '/Makefile')} "
+            f"grep -oE '^(sim|test|run|simulate|regression)[^:]*:' {sq(sim_dir + '/Makefile')} "
             f"| tr -d ':'"
         )
         best_target = targets.strip().splitlines()[0] if targets.strip() else "sim"
@@ -168,13 +168,13 @@ async def _auto_detect_runner(sim_dir: str) -> dict:
 
     # 2. Executable shell scripts with recognized names
     r = await ssh_run(
-        f"find {_sq(sim_dir)} -maxdepth 1 -perm /111 "
+        f"find {sq(sim_dir)} -maxdepth 1 -perm /111 "
         r"\( -name 'run_sim*' -o -name 'run_test*' -o -name '*.sh' \) 2>/dev/null"
     )
     for script in r.strip().splitlines():
         if not script:
             continue
-        shebang = await ssh_run(f"head -1 {_sq(script)} 2>/dev/null")
+        shebang = await ssh_run(f"head -1 {sq(script)} 2>/dev/null")
         if shebang.strip().startswith("#!"):
             candidates.append({
                 "runner": "shell",
@@ -183,7 +183,7 @@ async def _auto_detect_runner(sim_dir: str) -> dict:
             })
 
     # 3. *.f filelist + xrun/irun available
-    r = await ssh_run(f"ls {_sq(sim_dir)}/*.f 2>/dev/null | head -1")
+    r = await ssh_run(f"ls {sq(sim_dir)}/*.f 2>/dev/null | head -1")
     if r.strip():
         tool = await ssh_run("which xrun 2>/dev/null || which irun 2>/dev/null | head -1")
         if tool.strip():
@@ -195,7 +195,7 @@ async def _auto_detect_runner(sim_dir: str) -> dict:
             })
 
     # 4. Python runner
-    r = await ssh_run(f"ls {_sq(sim_dir + '/run_sim.py')} {_sq(sim_dir + '/sim.py')} 2>/dev/null | head -1")
+    r = await ssh_run(f"ls {sq(sim_dir + '/run_sim.py')} {sq(sim_dir + '/sim.py')} 2>/dev/null | head -1")
     if r.strip():
         py = await ssh_run("which python3 2>/dev/null || which python 2>/dev/null | head -1")
         py_cmd = py.strip().split("/")[-1] if py.strip() else "python3"
@@ -248,7 +248,7 @@ async def _analyze_tb_type(sim_dir: str) -> str:
     Returns: "uvm" | "ncsim_legacy" | "sv_directed" | "mixed" | "unknown"
     """
     # UVM markers
-    _sd = _sq(sim_dir)
+    _sd = sq(sim_dir)
     r_uvm = await ssh_run(
         f"grep -rl 'uvm_component\\|uvm_test\\|UVM_TEST' {_sd} "
         f"--include='*.sv' --include='*.svh' 2>/dev/null | head -1"
@@ -256,7 +256,7 @@ async def _analyze_tb_type(sim_dir: str) -> str:
     has_uvm = bool(r_uvm.strip())
 
     # ncsim_legacy markers: run_sim script + *.f filelist
-    r_legacy = await ssh_run(f"ls {_sq(sim_dir + '/run_sim')} {_sq(sim_dir)}/*.f 2>/dev/null")
+    r_legacy = await ssh_run(f"ls {sq(sim_dir + '/run_sim')} {sq(sim_dir)}/*.f 2>/dev/null")
     has_legacy = bool(r_legacy.strip())
 
     if has_uvm and has_legacy:
@@ -268,7 +268,7 @@ async def _analyze_tb_type(sim_dir: str) -> str:
 
     # sv_directed: non-UVM SystemVerilog with interface/program
     r = await ssh_run(
-        f"grep -rl 'interface\\|program ' {_sq(sim_dir)} --include='*.sv' 2>/dev/null | head -1"
+        f"grep -rl 'interface\\|program ' {sq(sim_dir)} --include='*.sv' 2>/dev/null | head -1"
     )
     if r.strip():
         return "sv_directed"
@@ -303,7 +303,7 @@ async def _discover_sim_dir(hint: str = "") -> list[dict]:
         r"-o -name 'verif*' -o -name 'bench*' -o -name 'dv'"
     )
     r = await ssh_run(
-        f"find {_sq(project_root)} -maxdepth 3 -mindepth 1 -type d \\( {patterns} \\) 2>/dev/null | sort"
+        f"find {sq(project_root)} -maxdepth 3 -mindepth 1 -type d \\( {patterns} \\) 2>/dev/null | sort"
     )
     raw = r.strip().splitlines()
 
@@ -317,7 +317,7 @@ async def _discover_sim_dir(hint: str = "") -> list[dict]:
     # 4. analyze each candidate
     envs: list[dict] = []
     for sim_root in deduped:
-        r = await ssh_run(f"find {_sq(sim_root)} -maxdepth 1 -mindepth 1 -type d 2>/dev/null")
+        r = await ssh_run(f"find {sq(sim_root)} -maxdepth 1 -mindepth 1 -type d 2>/dev/null")
         subdirs = [s for s in r.strip().splitlines() if s]
         found_in_sub = False
         for sub in subdirs:
@@ -443,7 +443,7 @@ async def _detect_setup_tcls(sim_dir: str) -> dict[str, str]:
     Returns: {"rtl": "scripts/setup_rtl.tcl", "gate": "scripts/setup_gate.tcl", ...}
     """
     r = await ssh_run(
-        f"find {_sq(sim_dir + '/scripts')} -maxdepth 1 -name 'setup*.tcl' 2>/dev/null | sort"
+        f"find {sq(sim_dir + '/scripts')} -maxdepth 1 -name 'setup*.tcl' 2>/dev/null | sort"
     )
     setup_tcls: dict[str, str] = {}
     for line in r.strip().splitlines():
@@ -494,7 +494,7 @@ async def _resolve_eda_tools(shell_env: dict) -> dict[str, str]:
     else:
         login_shell = shell_env.get("login_shell", "/bin/sh")
         which_cmd = " && ".join(f"which {t}" for t in tools)
-        r = await ssh_run(_login_shell_cmd(login_shell, which_cmd), timeout=15)
+        r = await ssh_run(login_shell_cmd(login_shell, which_cmd), timeout=15)
 
     result: dict[str, str] = {}
     lines = [l.strip() for l in r.strip().splitlines() if l.strip() and "/" in l]
@@ -535,7 +535,7 @@ async def _detect_run_dir(sim_dir: str, runner_info: dict) -> dict:
     """
     candidates: list[str] = []
     script_has_cd = False
-    _sd = _sq(sim_dir)
+    _sd = sq(sim_dir)
 
     # 1. run*/ directories with cds.lib or hdl.var
     r = await ssh_run(
@@ -545,7 +545,7 @@ async def _detect_run_dir(sim_dir: str, runner_info: dict) -> dict:
         if not d.strip():
             continue
         has_cds = await ssh_run(
-            f"test -f {_sq(d + '/cds.lib')} -o -L {_sq(d + '/cds.lib')} -o -f {_sq(d + '/hdl.var')} && echo YES || echo NO"
+            f"test -f {sq(d + '/cds.lib')} -o -L {sq(d + '/cds.lib')} -o -f {sq(d + '/hdl.var')} && echo YES || echo NO"
         )
         if "YES" in has_cds:
             candidates.append(d.split("/")[-1])
@@ -554,7 +554,7 @@ async def _detect_run_dir(sim_dir: str, runner_info: dict) -> dict:
     script_name = _extract_script_name(runner_info.get("exec_cmd", ""))
     script_path = f"{sim_dir}/{script_name}"
     cd_targets: list[str] = []
-    r = await ssh_run(f"grep -E '^[[:space:]]*cd[[:space:]]+' {_sq(script_path)} 2>/dev/null | head -3")
+    r = await ssh_run(f"grep -E '^[[:space:]]*cd[[:space:]]+' {sq(script_path)} 2>/dev/null | head -3")
     for line in r.strip().splitlines():
         parts = line.strip().split()
         if len(parts) >= 2 and '$' not in parts[1]:
@@ -570,7 +570,7 @@ async def _detect_run_dir(sim_dir: str, runner_info: dict) -> dict:
     # 3. sim_dir itself — only if no cd targets found (script doesn't cd to subdirectory)
     if not script_has_cd:
         has_cds = await ssh_run(
-            f"test -f {_sq(sim_dir + '/cds.lib')} -o -L {_sq(sim_dir + '/cds.lib')} && echo YES || echo NO"
+            f"test -f {sq(sim_dir + '/cds.lib')} -o -L {sq(sim_dir + '/cds.lib')} && echo YES || echo NO"
         )
         if "YES" in has_cds and "." not in candidates:
             candidates.append(".")

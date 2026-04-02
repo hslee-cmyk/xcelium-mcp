@@ -15,7 +15,7 @@ from xcelium_mcp.sim_runner import (
     _load_or_detect_runner,
     _run_batch_single,
     _run_batch_regression,
-    _resolve_test_name,
+    resolve_test_name,
     load_sim_config,
     run_full_discovery,
 )
@@ -138,7 +138,7 @@ def register(
 
         # v4.1: resolve short test name → full name
         try:
-            test_name = await _resolve_test_name(test_name, resolved_sim_dir)
+            test_name = await resolve_test_name(test_name, resolved_sim_dir)
         except ValueError as e:
             return f"ERROR: {e}"
 
@@ -273,7 +273,7 @@ def register(
 
         # v4.1: resolve short test names → full names
         try:
-            test_list = [await _resolve_test_name(t, resolved_sim_dir) for t in test_list]
+            test_list = [await resolve_test_name(t, resolved_sim_dir) for t in test_list]
         except ValueError as e:
             return f"ERROR: {e}"
 

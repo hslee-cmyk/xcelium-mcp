@@ -136,7 +136,7 @@ async def extract(
 
     # simvisdbutil is a wrapper script that needs EDA env (cds_root in PATH).
     # Source env from registry before execution.
-    from xcelium_mcp.sim_runner import _get_default_sim_dir, load_sim_config, _login_shell_cmd
+    from xcelium_mcp.sim_runner import _get_default_sim_dir, load_sim_config, login_shell_cmd
     sim_dir = await _get_default_sim_dir()
     cfg = await load_sim_config(sim_dir) if sim_dir else None
     if cfg:
@@ -148,7 +148,7 @@ async def extract(
             cmd = f"{env_shell} -c '{source_cmd}; {svdb_cmd}'"
         else:
             login_shell = runner.get("login_shell", "/bin/sh")
-            cmd = _login_shell_cmd(login_shell, svdb_cmd)
+            cmd = login_shell_cmd(login_shell, svdb_cmd)
     else:
         cmd = svdb_cmd  # fallback: try direct
 

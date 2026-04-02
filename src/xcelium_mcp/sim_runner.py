@@ -19,18 +19,26 @@ import shlex
 # ===================================================================
 
 
-def _sq(s: str) -> str:
+def sq(s: str) -> str:
     """Shell-quote a user-supplied string to prevent injection."""
     return shlex.quote(s)
 
 
-def _build_redirect(log_path: str) -> str:
+# Backward-compat alias
+_sq = sq
+
+
+def build_redirect(log_path: str) -> str:
     """Build shell redirect suffix safe for both bash and tcsh.
 
     NEVER use '2>&1' — tcsh interprets '&1' as filename, creating file '1'.
     Use '>& file' which works in both bash and tcsh.
     """
     return f">& {log_path}"
+
+
+# Backward-compat alias
+_build_redirect = build_redirect
 
 
 class UserInputRequired(Exception):
@@ -49,10 +57,10 @@ async def ssh_run(cmd: str, timeout: float = 60.0, log_file: str = "") -> str:
     if "2>&1" in cmd:
         raise ValueError(
             "Do not use '2>&1' — tcsh interprets '&1' as filename. "
-            "Use log_file parameter or _build_redirect() instead."
+            "Use log_file parameter or build_redirect() instead."
         )
     if log_file:
-        cmd = f"{cmd} {_build_redirect(log_file)}"
+        cmd = f"{cmd} {build_redirect(log_file)}"
 
     proc = await asyncio.create_subprocess_shell(
         cmd,
@@ -68,7 +76,7 @@ async def ssh_run(cmd: str, timeout: float = 60.0, log_file: str = "") -> str:
     return (stdout + stderr).decode("utf-8", errors="replace").strip()
 
 
-def _login_shell_cmd(login_shell: str, cmd: str) -> str:
+def login_shell_cmd(login_shell: str, cmd: str) -> str:
     """Build a command that runs in login shell environment."""
     if "tcsh" in login_shell or "csh" in login_shell:
         return (
@@ -78,6 +86,10 @@ def _login_shell_cmd(login_shell: str, cmd: str) -> str:
             f"{cmd}'"
         )
     return f"{login_shell} -l -c '{cmd}'"
+
+
+# Backward-compat alias
+_login_shell_cmd = login_shell_cmd
 
 
 # ===================================================================
@@ -95,13 +107,16 @@ from xcelium_mcp.registry import (  # noqa: E402, F401
 
 from xcelium_mcp.batch_runner import (  # noqa: E402, F401
     ExecInfo,
-    _validate_extra_args,
+    validate_extra_args,
+    _validate_extra_args,  # backward compat
     _resolve_exec_cmd,
     _run_batch_single,
     _run_batch_regression,
     _poll_batch_log,
-    _resolve_sim_params,
-    _resolve_test_name,
+    resolve_sim_params,
+    _resolve_sim_params,  # backward compat
+    resolve_test_name,
+    _resolve_test_name,  # backward compat
 )
 
 from xcelium_mcp.env_detection import (  # noqa: E402, F401
@@ -132,7 +147,7 @@ from xcelium_mcp.env_detection import (  # noqa: E402, F401
 _USER_TMP: str = ""  # cached after first call
 
 
-async def _get_user_tmp_dir() -> str:
+async def get_user_tmp_dir() -> str:
     """Get per-user temp directory. Creates on first call.
 
     Returns /tmp/xcelium_mcp_{uid}/ — unique per Unix user.
@@ -146,6 +161,10 @@ async def _get_user_tmp_dir() -> str:
     _USER_TMP = f"/tmp/xcelium_mcp_{uid}"
     await ssh_run(f"mkdir -p {_USER_TMP}", timeout=5)
     return _USER_TMP
+
+
+# Backward-compat alias
+_get_user_tmp_dir = get_user_tmp_dir
 
 
 def _parse_shm_path(db_list_output: str) -> str:
@@ -197,7 +216,7 @@ async def _patch_legacy_run_script(sim_dir: str, runner_info: dict) -> str:
     """Patch legacy run script to support MCP_INPUT_TCL env var override."""
     script_name = _extract_script_name(runner_info.get("exec_cmd", ""))
     script_path = f"{sim_dir}/{script_name}"
-    _sp = _sq(script_path)
+    _sp = sq(script_path)
 
     exists = await ssh_run(f"test -f {_sp} && echo YES || echo NO", timeout=5)
     if "YES" not in exists:
@@ -279,7 +298,7 @@ async def run_full_discovery(sim_dir: str = "", force: bool = False) -> str:
         envs = await _discover_sim_dir()
         sim_dir = envs[0]["sim_dir"]
 
-    # B-tilde fix: resolve ~ to absolute path before any _sq() calls.
+    # B-tilde fix: resolve ~ to absolute path before any sq() calls.
     sim_dir = os.path.expanduser(sim_dir)
 
     if not force:
@@ -323,7 +342,7 @@ async def run_full_discovery(sim_dir: str = "", force: bool = False) -> str:
     if "ams_gate" in setup_tcls:
         mode_defaults["ams_gate"] = {"timeout": 3600, "probe_strategy": "selective"}
 
-    _sd = _sq(sim_dir)
+    _sd = sq(sim_dir)
     if tb_type == "uvm":
         test_cmd = (
             f"grep -rh 'extends uvm_test' {_sd} --include='*.sv' --include='*.svh' 2>/dev/null "
@@ -423,7 +442,7 @@ async def start_simulation(
     bridges=None,
 ) -> str:
     """Start simulation. Registry없으면 sim_discover 자동 호출."""
-    _validate_extra_args(extra_args)
+    validate_extra_args(extra_args)
 
     resolved_dir = sim_dir if sim_dir else await _get_default_sim_dir()
     if not resolved_dir:
@@ -487,12 +506,12 @@ async def _start_bridge(
         )
 
     # P4: per-user temp directory
-    user_tmp = await _get_user_tmp_dir()
+    user_tmp = await get_user_tmp_dir()
     await ssh_run(f"rm -f {user_tmp}/bridge_ready_*", timeout=5)
 
     script_shell = runner.get("script_shell", runner.get("env_shell", "/bin/sh"))
-    params = _resolve_sim_params(runner, sim_mode, extra_args=extra_args, timeout=timeout)
-    test_args = params["test_args_format"].format(test_name=_sq(test_name))
+    params = resolve_sim_params(runner, sim_mode, extra_args=extra_args, timeout=timeout)
+    test_args = params["test_args_format"].format(test_name=sq(test_name))
     if params["extra_args"]:
         test_args = f"{test_args} {params['extra_args']}"
     effective_timeout = params["timeout"]
@@ -528,7 +547,7 @@ async def _start_bridge(
     else:
         inner_parts.append(f"./{script} {test_args}")
         inner_cmd = "; ".join(inner_parts)
-        shell_cmd = _login_shell_cmd(login_shell, inner_cmd)
+        shell_cmd = login_shell_cmd(login_shell, inner_cmd)
 
     run_dir = runner.get("run_dir", "run")
     if runner.get("script_has_cd", False):
@@ -537,9 +556,9 @@ async def _start_bridge(
         cwd = f"{sim_dir}/{run_dir}"
 
     cmd = (
-        f"cd {_sq(cwd)} && "
+        f"cd {sq(cwd)} && "
         f"(nohup {shell_cmd} "
-        f"{_build_redirect(log_file)} < /dev/null &)"
+        f"{build_redirect(log_file)} < /dev/null &)"
     )
     await ssh_run(cmd, timeout=15)
 

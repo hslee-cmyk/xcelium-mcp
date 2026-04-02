@@ -13,9 +13,9 @@ from dataclasses import dataclass
 
 from xcelium_mcp.sim_runner import (
     ssh_run,
-    _sq,
-    _build_redirect,
-    _login_shell_cmd,
+    sq,
+    build_redirect,
+    login_shell_cmd,
 )
 from xcelium_mcp.registry import load_sim_config, save_sim_config
 
@@ -27,7 +27,7 @@ class ExecInfo:
                            # False → command complete as-is (regression_script builtin)
 
 
-def _validate_extra_args(s: str) -> str:
+def validate_extra_args(s: str) -> str:
     """Validate extra_args: reject dangerous shell metacharacters.
 
     extra_args intentionally contains multiple shell tokens (e.g. "--flag val"),
@@ -86,7 +86,7 @@ def _resolve_exec_cmd(runner: dict, regression: bool = False) -> ExecInfo:
         env_shell = runner.get("env_shell", runner["login_shell"])
         cmd = f"{env_shell} -c '{sources} && {script_run}'"
     else:
-        cmd = _login_shell_cmd(runner["login_shell"], script_run)
+        cmd = login_shell_cmd(runner["login_shell"], script_run)
 
     return ExecInfo(cmd=cmd, needs_test_name=needs_test_name)
 
@@ -122,29 +122,29 @@ async def _run_batch_single(
     )
 
     # v4.1: _resolve_sim_params for mode-aware params
-    _validate_extra_args(extra_args)
-    params = _resolve_sim_params(runner, sim_mode, extra_args, timeout)
+    validate_extra_args(extra_args)
+    params = resolve_sim_params(runner, sim_mode, extra_args, timeout)
     effective_timeout = params["timeout"]
 
     # v4.1: use args_format from _resolve_sim_params
     info = _resolve_exec_cmd(runner, regression=False)
     # Format {test_name} placeholder with mode-specific args
     # e.g. {test_name} → "-test VENEZIA_TOP015 --" instead of bare "VENEZIA_TOP015"
-    test_args = params["test_args_format"].format(test_name=_sq(test_name))
+    test_args = params["test_args_format"].format(test_name=sq(test_name))
     cmd = info.cmd.format(test_name=test_args) if info.needs_test_name else info.cmd
     if params["extra_args"]:
         cmd = f"{cmd} {params['extra_args']}"
 
     # Method 6-A: inject TEST_NAME for SHM file naming
-    env_prefix = f"TEST_NAME={_sq(test_name)} "
+    env_prefix = f"TEST_NAME={sq(test_name)} "
 
     # Always use nohup + stdbuf + polling (no direct ssh_run for batch)
     # Direct ssh_run returns entire compile+sim log (1MB+) — unusable.
     # nohup + polling returns grep summary only.
 
     # --- nohup + stdbuf + job resume ---
-    from xcelium_mcp.sim_runner import _get_user_tmp_dir
-    user_tmp = await _get_user_tmp_dir()
+    from xcelium_mcp.sim_runner import get_user_tmp_dir
+    user_tmp = await get_user_tmp_dir()
     job_file = f"{user_tmp}/batch_job.json"
 
     # Check for existing job (reconnection scenario)
@@ -179,8 +179,8 @@ async def _run_batch_single(
     # blocks until simulation ends → 15s timeout always fires.
     pid_file = f"{user_tmp}/batch_pid_{ts}"
     await ssh_run(
-        f"cd {_sq(sim_dir)} && "
-        f"(nohup {run_cmd} {_build_redirect(log_file)} < /dev/null & echo $! > {pid_file}) "
+        f"cd {sq(sim_dir)} && "
+        f"(nohup {run_cmd} {build_redirect(log_file)} < /dev/null & echo $! > {pid_file}) "
         f">& /dev/null",
         timeout=15.0,
     )
@@ -190,7 +190,7 @@ async def _run_batch_single(
     pid_str = pid_str.strip()
     # Fallback — use pgrep if pid file didn't yield a number
     if not pid_str.isdigit():
-        pid_str = await ssh_run(f"pgrep -f {_sq(test_name)} 2>/dev/null | tail -1")
+        pid_str = await ssh_run(f"pgrep -f {sq(test_name)} 2>/dev/null | tail -1")
     pid = int(pid_str.strip()) if pid_str.strip().isdigit() else 0
     # Cleanup pid file
     await ssh_run(f"rm -f {pid_file}", timeout=5)
@@ -214,9 +214,9 @@ async def _run_batch_single(
     # Method 6-B fallback
     if rename_dump:
         mv_cmd = (
-            f"cd {_sq(sim_dir)} && "
+            f"cd {sq(sim_dir)} && "
             f"if [ -d dump/ci_top.shm ]; then "
-            f"mv dump/ci_top.shm dump/ci_top_{_sq(test_name)}.shm; fi"
+            f"mv dump/ci_top.shm dump/ci_top_{sq(test_name)}.shm; fi"
         )
         await ssh_run(mv_cmd, timeout=30.0)
 
@@ -245,16 +245,16 @@ async def _run_batch_regression(
     """
     import time as _time
 
-    from xcelium_mcp.sim_runner import _get_user_tmp_dir
-    user_tmp = await _get_user_tmp_dir()
+    from xcelium_mcp.sim_runner import get_user_tmp_dir
+    user_tmp = await get_user_tmp_dir()
     job_file = f"{user_tmp}/regression_job.json"
     ts = int(_time.time())
     log_file = f"{user_tmp}/regression_{ts}.log"
 
     # v4.1: resolve sim_mode/extra_args for regression
-    _validate_extra_args(extra_args)
+    validate_extra_args(extra_args)
     effective_sim_mode = sim_mode or runner.get("default_mode", "rtl")
-    params = _resolve_sim_params(runner, effective_sim_mode, extra_args=extra_args)
+    params = resolve_sim_params(runner, effective_sim_mode, extra_args=extra_args)
     info = _resolve_exec_cmd(runner, regression=True)
 
     # Check for existing regression job (reconnection scenario)
@@ -296,8 +296,8 @@ async def _run_batch_regression(
             # B-0 fix: subshell wrapping, stdbuf removed (Xcelium incompatible)
             run_cmd = cmd_with_extra
             await ssh_run(
-                f"cd {_sq(sim_dir)} && "
-                f"(nohup {run_cmd} {_build_redirect(log_file)} < /dev/null &) "
+                f"cd {sq(sim_dir)} && "
+                f"(nohup {run_cmd} {build_redirect(log_file)} < /dev/null &) "
                 f">& /dev/null",
                 timeout=15.0,
             )
@@ -312,10 +312,10 @@ async def _run_batch_regression(
         remaining = [t for t in test_list if t not in completed_tests]
 
         for test_name in remaining:
-            test_log = f"{user_tmp}/regression_{ts}_{_sq(test_name)}.log"
-            env_prefix = f"TEST_NAME={_sq(test_name)} "
+            test_log = f"{user_tmp}/regression_{ts}_{sq(test_name)}.log"
+            env_prefix = f"TEST_NAME={sq(test_name)} "
 
-            test_args = params["test_args_format"].format(test_name=_sq(test_name))
+            test_args = params["test_args_format"].format(test_name=sq(test_name))
             cmd = info.cmd.format(test_name=test_args) if info.needs_test_name else info.cmd
             if params["extra_args"]:
                 cmd = f"{cmd} {params['extra_args']}"
@@ -336,15 +336,15 @@ async def _run_batch_regression(
             # B-0 fix: subshell wrapping, stdbuf removed (Xcelium incompatible)
             run_cmd = f"env {env_prefix}{cmd}"
             await ssh_run(
-                f"cd {_sq(sim_dir)} && "
-                f"(nohup {run_cmd} {_build_redirect(test_log)} < /dev/null &) "
+                f"cd {sq(sim_dir)} && "
+                f"(nohup {run_cmd} {build_redirect(test_log)} < /dev/null &) "
                 f">& /dev/null",
                 timeout=15.0,
             )
 
             # Update PID in job file
             pid_str = await ssh_run(
-                f"pgrep -f {_sq(test_name)} 2>/dev/null | tail -1"
+                f"pgrep -f {sq(test_name)} 2>/dev/null | tail -1"
             )
             if pid_str.strip().isdigit():
                 job_update = json.dumps({
@@ -362,15 +362,15 @@ async def _run_batch_regression(
             # Method 6-B fallback
             if rename_dump:
                 mv_cmd = (
-                    f"cd {_sq(sim_dir)} && "
+                    f"cd {sq(sim_dir)} && "
                     f"if [ -d dump/ci_top.shm ]; then "
-                    f"mv dump/ci_top.shm dump/ci_top_{_sq(test_name)}.shm; fi"
+                    f"mv dump/ci_top.shm dump/ci_top_{sq(test_name)}.shm; fi"
                 )
                 await ssh_run(mv_cmd, timeout=30.0)
 
             # Append per-test result to main log
             await ssh_run(
-                f"echo {_sq('=== ' + test_name + ' ===')} >> {log_file} && "
+                f"echo {sq('=== ' + test_name + ' ===')} >> {log_file} && "
                 f"grep -E 'PASS|FAIL|Errors:' {test_log} 2>/dev/null >> {log_file}",
                 timeout=10.0,
             )
@@ -408,11 +408,11 @@ async def _poll_batch_log(log_file: str, timeout: float, prefix: str = "") -> st
 
 
 # ===========================================================================
-# v4.1 Phase 1b: _resolve_sim_params + _resolve_test_name
+# v4.1 Phase 1b: resolve_sim_params + resolve_test_name
 # ===========================================================================
 
 
-def _resolve_sim_params(
+def resolve_sim_params(
     runner: dict,
     sim_mode: str = "rtl",
     extra_args: str = "",
@@ -452,7 +452,7 @@ def _resolve_sim_params(
     }
 
 
-async def _resolve_test_name(short_name: str, sim_dir: str = "") -> str:
+async def resolve_test_name(short_name: str, sim_dir: str = "") -> str:
     """Short name → full test name via cached_tests.
 
     "TOP015" → "VENEZIA_TOP015_i2c_8bit_offset_test"
@@ -471,7 +471,7 @@ async def _resolve_test_name(short_name: str, sim_dir: str = "") -> str:
             discovery = cfg.get("test_discovery", {})
             cmd = discovery.get("command", "")
             if cmd:
-                r = await ssh_run(f"cd {_sq(resolved_dir)} && {cmd}", timeout=30)
+                r = await ssh_run(f"cd {sq(resolved_dir)} && {cmd}", timeout=30)
                 cached = [t.strip() for t in r.strip().splitlines() if t.strip()]
                 if cached:
                     # Cache via config_action (write centralization)
@@ -499,3 +499,9 @@ async def _resolve_test_name(short_name: str, sim_dir: str = "") -> str:
             + "\n".join(f"  {m}" for m in matches)
             + "\nSpecify more precisely."
         )
+
+
+# Backward-compat aliases
+_validate_extra_args = validate_extra_args
+_resolve_sim_params = resolve_sim_params
+_resolve_test_name = resolve_test_name
