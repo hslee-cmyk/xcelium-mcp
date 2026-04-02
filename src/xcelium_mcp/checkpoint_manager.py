@@ -82,21 +82,37 @@ def _write_manifest(sim_dir: str, data: dict) -> None:
 # Public API
 # ---------------------------------------------------------------------------
 
-def register_checkpoint(sim_dir: str, name: str, saved_time_ns: int = 0) -> dict:
+def register_checkpoint(
+    sim_dir: str,
+    name: str,
+    saved_time_ns: int = 0,
+    origin: str = "bridge",
+    test_name: str = "",
+) -> dict:
     """Register a saved checkpoint in the manifest.
 
-    Called by server.py after bridge confirms save success.
+    Args:
+        sim_dir: Simulation directory.
+        name: Checkpoint name (e.g. "L1_TOP015").
+        saved_time_ns: Simulation time at checkpoint in nanoseconds.
+        origin: How the checkpoint was created — "regression", "bridge", or "single".
+        test_name: Associated test name (for pattern-based cleanup).
+
     Returns the new checkpoint entry dict.
     """
+    from datetime import datetime
+
     manifest = _read_manifest(sim_dir)
     compile_hash = compute_compile_hash(sim_dir)
     manifest["compile_hash"] = compile_hash
 
     entry: dict = {
         "name": name,
-        "saved_at": time.time(),
+        "saved_at": datetime.now().isoformat(),
         "saved_time_ns": saved_time_ns,
         "compile_hash": compile_hash,
+        "origin": origin,
+        "test_name": test_name,
         "path": str(Path(_checkpoint_base_dir(sim_dir)) / name),
     }
     manifest.setdefault("checkpoints", {})[name] = entry
@@ -233,20 +249,24 @@ def get_tb_analysis_cache(sim_dir: str, test_name: str) -> dict:
 def cleanup_checkpoints(
     sim_dir: str,
     mode: str = "stale",
-    project_filter: str = "",
+    filter_value: str = "",
     dry_run: bool = True,
 ) -> dict:
     """List or remove checkpoints.
 
     mode:
-      "list"    — list only, no deletion
-      "stale"   — checkpoints with mismatched compile_hash
-      "project" — checkpoints whose path contains project_filter
+      "list"    — list all with details (no deletion)
+      "stale"   — compile_hash differs from current
+      "hash"    — compile_hash == filter_value (remove a specific build's checkpoints)
+      "origin"  — origin == filter_value ("regression", "bridge", "single")
+      "pattern" — test_name or name contains filter_value (glob-like substring)
+      "before"  — saved_at < filter_value (ISO date, e.g. "2026-04-01")
+      "project" — path contains filter_value
       "all"     — every checkpoint
 
     dry_run=True (default): report only, no filesystem changes.
 
-    Returns: {"removed": [...], "kept": [...], "dry_run": bool, "mode": str}
+    Returns: {"removed": [...], "kept": [...], "details": [...], ...}
     """
     manifest = _read_manifest(sim_dir)
     current_hash = compute_compile_hash(sim_dir)
@@ -254,13 +274,39 @@ def cleanup_checkpoints(
 
     to_remove: list[str] = []
     to_keep: list[str] = []
+    details: list[dict] = []
 
     for name, info in checkpoints.items():
+        # Build detail entry for list mode
+        detail = {
+            "name": name,
+            "compile_hash": info.get("compile_hash", "?"),
+            "origin": info.get("origin", "?"),
+            "test_name": info.get("test_name", ""),
+            "saved_at": info.get("saved_at", "?"),
+            "saved_time_ns": info.get("saved_time_ns", 0),
+        }
+        details.append(detail)
+
+        # Determine remove/keep
+        remove = False
         if mode == "all":
-            to_remove.append(name)
-        elif mode == "stale" and info.get("compile_hash", "") != current_hash:
-            to_remove.append(name)
-        elif mode == "project" and project_filter and project_filter in info.get("path", ""):
+            remove = True
+        elif mode == "stale":
+            remove = info.get("compile_hash", "") != current_hash
+        elif mode == "hash" and filter_value:
+            remove = info.get("compile_hash", "") == filter_value
+        elif mode == "origin" and filter_value:
+            remove = info.get("origin", "") == filter_value
+        elif mode == "pattern" and filter_value:
+            remove = (filter_value in name or filter_value in info.get("test_name", ""))
+        elif mode == "before" and filter_value:
+            saved = info.get("saved_at", "")
+            remove = bool(saved and saved < filter_value)
+        elif mode == "project" and filter_value:
+            remove = filter_value in info.get("path", "")
+
+        if remove:
             to_remove.append(name)
         else:
             to_keep.append(name)
@@ -278,8 +324,10 @@ def cleanup_checkpoints(
     return {
         "removed": to_remove,
         "kept": to_keep,
+        "details": details,
         "dry_run": dry_run,
         "mode": mode,
+        "filter_value": filter_value,
         "sim_dir": sim_dir,
         "current_hash": current_hash,
     }

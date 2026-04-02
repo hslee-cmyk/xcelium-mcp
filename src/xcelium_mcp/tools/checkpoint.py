@@ -73,7 +73,10 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
                 except IndexError:
                     pass
             if actual_name:
-                checkpoint_manager.register_checkpoint(resolved_dir, actual_name, saved_time_ns)
+                checkpoint_manager.register_checkpoint(
+                    resolved_dir, actual_name, saved_time_ns,
+                    origin="bridge",
+                )
 
         return result
 
@@ -98,40 +101,57 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
     async def cleanup_checkpoints(
         sim_dir: str = "",
         mode: str = "stale",
-        project_filter: str = "",
+        filter_value: str = "",
         dry_run: bool = True,
     ) -> str:
         """List or remove checkpoints from {sim_dir}/checkpoints/.
 
         mode:
-          "list"    — list all checkpoints (no deletion)
+          "list"    — list all checkpoints with details (no deletion)
           "stale"   — checkpoints whose compile_hash no longer matches (default)
-          "project" — checkpoints whose path contains project_filter
+          "hash"    — checkpoints with compile_hash == filter_value
+          "origin"  — checkpoints with origin == filter_value ("regression"/"bridge"/"single")
+          "pattern" — checkpoints whose name or test_name contains filter_value
+          "before"  — checkpoints saved before filter_value (ISO date, e.g. "2026-04-01")
+          "project" — checkpoints whose path contains filter_value
           "all"     — every checkpoint
 
         dry_run=True (default): report candidates only, no deletion.
         Set dry_run=False to actually remove.
 
         Args:
-            sim_dir:        Simulation directory (auto-detected if empty).
-            mode:           Cleanup mode (list/stale/project/all).
-            project_filter: Path substring for "project" mode.
-            dry_run:        True = report only, False = delete.
+            sim_dir:      Simulation directory (auto-detected if empty).
+            mode:         Cleanup mode.
+            filter_value: Filter parameter for hash/origin/pattern/before/project modes.
+            dry_run:      True = report only, False = delete.
         """
         resolved_dir = sim_dir if sim_dir else await get_default_sim_dir()
         if not resolved_dir:
             return "ERROR: Could not determine sim_dir. Pass sim_dir explicitly."
 
         result = checkpoint_manager.cleanup_checkpoints(
-            resolved_dir, mode=mode, project_filter=project_filter, dry_run=dry_run
+            resolved_dir, mode=mode, filter_value=filter_value, dry_run=dry_run
         )
 
         lines = [
             f"sim_dir: {result['sim_dir']}",
             f"mode: {result['mode']}  dry_run: {result['dry_run']}",
             f"compile_hash (current): {result['current_hash']}",
-            "",
         ]
+        if result["filter_value"]:
+            lines.append(f"filter: {result['filter_value']}")
+        lines.append("")
+
+        # Show details in list mode
+        if mode == "list" and result["details"]:
+            for d in result["details"]:
+                lines.append(
+                    f"  {d['name']}\n"
+                    f"    hash: {d['compile_hash']}  origin: {d['origin']}  "
+                    f"saved_at: {d['saved_at']}  sim_time: {d['saved_time_ns']}ns"
+                )
+            lines.append("")
+
         if result["removed"]:
             verb = "Would remove" if dry_run else "Removed"
             lines.append(f"{verb} ({len(result['removed'])}):")

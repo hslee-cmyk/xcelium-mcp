@@ -508,7 +508,10 @@ async def _run_batch_regression(
             if save_checkpoints and not timed_out:
                 from xcelium_mcp import checkpoint_manager as _ckpt
                 l1_ns = _parse_l1_time_ns(l1_time)
-                _ckpt.register_checkpoint(sim_dir, f"L1_{test_name}", l1_ns)
+                _ckpt.register_checkpoint(
+                    sim_dir, f"L1_{test_name}", l1_ns,
+                    origin="regression", test_name=test_name,
+                )
 
             # Method 6-B fallback
             if rename_dump:
