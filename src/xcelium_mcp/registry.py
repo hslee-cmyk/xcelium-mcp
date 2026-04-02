@@ -153,6 +153,18 @@ async def config_action(action: str, file: str, key: str, value: str) -> str:
     if file == "registry":
         data = load_registry()
         path = _REGISTRY_PATH
+    elif file == "checkpoint":
+        sim_dir = await get_default_sim_dir()
+        if not sim_dir:
+            raise RuntimeError("No default sim_dir. Run sim_discover first.")
+        path = Path(sim_dir) / "checkpoints" / "manifest.json"
+        if path.exists():
+            try:
+                data = json.loads(path.read_text())
+            except json.JSONDecodeError:
+                data = {}
+        else:
+            data = {}
     else:
         sim_dir = await get_default_sim_dir()
         if not sim_dir:

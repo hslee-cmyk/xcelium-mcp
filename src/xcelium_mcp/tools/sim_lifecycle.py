@@ -165,8 +165,9 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
 
         Args:
             action: "show" (full dump), "get" (read key), "set" (write key), "delete" (remove key).
-            file:   "config" (.mcp_sim_config.json of default sim_dir) or "registry" (mcp_registry.json).
-            key:    Dot-notation path (e.g. "runner.default_mode", "bridge.port").
+            file:   "config" (.mcp_sim_config.json), "registry" (mcp_registry.json),
+                    or "checkpoint" (checkpoints/manifest.json).
+            key:    Dot-notation path (e.g. "runner.default_mode", "checkpoints.L1_TOP015").
             value:  Value for 'set' action. Auto-parsed: "9876" to int, "true" to bool.
         """
         try:
