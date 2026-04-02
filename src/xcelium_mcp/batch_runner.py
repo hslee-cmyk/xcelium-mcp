@@ -43,6 +43,21 @@ def validate_extra_args(s: str) -> str:
     return s
 
 
+def _parse_l1_time_ns(l1_time: str) -> int:
+    """Convert l1_time string (e.g. "500us", "1ms") to nanoseconds."""
+    import re as _re
+    m = _re.match(r'(\d+)\s*(us|ms|ns)?', l1_time.strip())
+    if not m:
+        return 0
+    val = int(m.group(1))
+    unit = m.group(2) or "ns"
+    if unit == "ms":
+        return val * 1_000_000
+    if unit == "us":
+        return val * 1_000
+    return val
+
+
 def extract_setup_lines(tcl_content: str) -> str:
     """Extract probe/database setup lines from a setup Tcl, stripping run/exit/finish.
 
@@ -489,6 +504,13 @@ async def _run_batch_regression(
                 )
 
             completed_tests.append(test_name)
+
+            # Phase 4: register L1/L2 in checkpoint manifest
+            if save_checkpoints and not timed_out:
+                from xcelium_mcp import checkpoint_manager as _ckpt
+                l1_ns = _parse_l1_time_ns(l1_time)
+                _ckpt.register_checkpoint(sim_dir, f"L1_{test_name}", l1_ns)
+                _ckpt.register_checkpoint(sim_dir, f"L2_{test_name}", 0)
 
             # Method 6-B fallback
             if rename_dump:
