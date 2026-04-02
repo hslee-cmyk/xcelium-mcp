@@ -200,13 +200,14 @@ def find_nearest_checkpoint(sim_dir: str, bug_time_ns: int, shm_stem: str = "") 
         t = info.get("saved_time_ns", 0)
         if t >= bug_time_ns:
             continue
-        # Match: checkpoint test_name is contained in shm_stem
+        # Match: checkpoint test_name appears in shm_stem with word boundary
         if shm_stem:
+            import re as _re
             chk_test = info.get("test_name", "")
-            if chk_test and chk_test in shm_stem:
-                pass  # match
-            elif chk_name in shm_stem or shm_stem in chk_name:
-                pass  # fallback: name substring match
+            if chk_test and _re.search(rf'(?:^|[_.]){_re.escape(chk_test)}(?:$|[_.])', shm_stem):
+                pass  # match with boundary
+            elif chk_name in shm_stem:
+                pass  # fallback: checkpoint name in shm_stem (one direction only)
             else:
                 continue
         candidates.append({**info, "_key": chk_name, "_distance_ns": bug_time_ns - t})
