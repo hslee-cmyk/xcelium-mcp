@@ -154,25 +154,30 @@ def register(
     async def sim_batch_regression(
         test_list: list[str],
         sim_dir: str = "",
-        from_checkpoint: str = "",
         dump_signals: list[str] | None = None,
         rename_dump: bool = False,
         sim_mode: str = "",
         extra_args: str = "",
+        save_checkpoints: bool = False,
+        l1_time: str = "",
     ) -> str:
         """Run regression over a list of tests.
 
-        Normal run (from_checkpoint=""): nohup per-test execution with adaptive log polling.
-        Restore run (from_checkpoint=name): not yet implemented (Phase 4).
+        Each test is compiled and run independently via nohup batch.
+        When save_checkpoints=True, L1/L2 checkpoints are auto-saved per test:
+          L1_{test}: at l1_time (common init completion, default 500us)
+          L2_{test}: just before $finish (test completion)
+        Use sim_batch_run(from_checkpoint="L1_{test}") later for fast debugging.
 
         Returns: regression summary table (N/M PASS, failures: [...]).
 
         Args:
             test_list: List of test names. Empty → auto-detect from mcp_sim_config.json.
             sim_dir: Simulation directory. Empty → default from mcp_registry.json.
-            from_checkpoint: Checkpoint for [A'] restore mode (not yet implemented).
             dump_signals: Additional dump signals.
             rename_dump: Enable Method 6-B SHM rename fallback.
+            save_checkpoints: Save L1/L2 checkpoints per test for later debugging.
+            l1_time: Time for L1 checkpoint (default "500us"). e.g. "1ms".
         """
         if dump_signals is None:
             dump_signals = []
@@ -231,11 +236,11 @@ def register(
                 sim_dir=resolved_sim_dir,
                 test_list=test_list,
                 runner=runner,
-                from_checkpoint=from_checkpoint,
-                restore_fn=restore_checkpoint_fn if from_checkpoint else None,
                 rename_dump=rename_dump,
                 sim_mode=sim_mode,
                 extra_args=extra_args,
+                save_checkpoints=save_checkpoints,
+                l1_time=l1_time,
             )
         except Exception as e:
             return f"ERROR running regression: {e}"

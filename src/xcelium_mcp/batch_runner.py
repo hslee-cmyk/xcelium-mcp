@@ -42,6 +42,58 @@ def validate_extra_args(s: str) -> str:
     return s
 
 
+def _build_checkpoint_tcl(
+    test_name: str, chk_dir: str, l1_time: str,
+    runner: dict, sim_dir: str,
+) -> str:
+    """Generate a Tcl wrapper that sources the original setup + saves L1/L2 checkpoints.
+
+    The wrapper:
+      1. Sources the original setup Tcl (probes, etc.)
+      2. Runs to l1_time → saves L1_{test_name}
+      3. Continues to $finish → L2 saved via stop callback before exit
+
+    Injected via MCP_INPUT_TCL env var.
+    """
+    # Resolve original setup Tcl
+    setup_tcls = runner.get("setup_tcls", {})
+    mode = runner.get("default_mode", "rtl")
+    original_tcl = setup_tcls.get(mode, "scripts/setup_rtl.tcl")
+
+    # Default l1_time: 500us (common init completion for venezia-t0)
+    if not l1_time:
+        l1_time = "500us"
+
+    l1_name = f"L1_{test_name}"
+    l2_name = f"L2_{test_name}"
+
+    return f"""\
+# Auto-generated checkpoint wrapper (Phase 4)
+# Sources original setup, saves L1 at {l1_time}, L2 before $finish
+
+# 1. Source original setup (probes, dump config)
+source {sim_dir}/{original_tcl}
+
+# 2. Ensure checkpoint directory exists
+file mkdir {chk_dir}
+
+# 3. Run to L1 time (common init completion)
+run {l1_time}
+save -simulation worklib.{l1_name}:module -path {chk_dir} -overwrite
+
+# 4. Set up L2 save before $finish (stop callback)
+stop -create -condition {{\\$finish}} -name _L2_save -silent
+proc _mcp_l2_save {{}} {{
+    catch {{save -simulation worklib.{l2_name}:module -path {chk_dir} -overwrite}}
+}}
+# When $finish stop triggers, save L2 then continue to exit
+stop -create -command {{_mcp_l2_save; stop -delete _L2_save; run}} -name _L2_trigger
+
+# 5. Continue simulation (run to $finish)
+run
+"""
+
+
 def _resolve_exec_cmd(runner: dict, regression: bool = False) -> ExecInfo:
     """Derive exec_cmd from runner fields at runtime.
 
@@ -234,13 +286,13 @@ async def _run_batch_regression(
     sim_dir: str,
     test_list: list[str],
     runner: dict,
-    from_checkpoint: str = "",
-    restore_fn=None,  # callable(name, sim_dir) -> str; needed for from_checkpoint
     rename_dump: bool = False,
     sim_mode: str = "",
     extra_args: str = "",
+    save_checkpoints: bool = False,
+    l1_time: str = "",
 ) -> str:
-    """Execute regression tests via nohup + stdbuf with job resume.
+    """Execute regression tests via nohup batch with job resume.
 
     nohup + PID watcher + adaptive log polling (P6-1/P6-2/P6-5).
     Job resume: on reconnection, resumes from last completed test.
@@ -248,9 +300,12 @@ async def _run_batch_regression(
     needs_test_name=False → regression_script handles all tests → 1 cmd
     needs_test_name=True  → iterate test_list, per-test nohup + poll
 
-    from_checkpoint mode (Phase 4):
-      restore L1 → per-test batch run → collect results.
-      Each test starts from L1 checkpoint instead of full compile+init.
+    Phase 4 — save_checkpoints:
+      When True, injects Tcl save commands into each test's xmsim input script.
+      L1_{test}: saved at l1_time (common init completion).
+      L2_{test}: saved just before $finish (test completion).
+      These checkpoints are used later by sim_batch_run(from_checkpoint=...)
+      for faster debugging (skip compile+init).
     """
     import time as _time
 
@@ -266,47 +321,10 @@ async def _run_batch_regression(
     params = resolve_sim_params(runner, effective_sim_mode, extra_args=extra_args)
     info = _resolve_exec_cmd(runner, regression=True)
 
-    # --- Phase 4: from_checkpoint mode ---
-    # Restore L1 before each test → reuse _run_batch_single per test
-    if from_checkpoint:
-        if not restore_fn:
-            raise RuntimeError(
-                "from_checkpoint requires restore_fn (restore_checkpoint_impl). "
-                "Pass it via tools/batch.py register()."
-            )
-        all_parts: list[str] = []
-        pass_count = 0
-        fail_count = 0
-        for test_name in test_list:
-            # Restore checkpoint before each test
-            restore_result = await restore_fn(from_checkpoint, sim_dir)
-            if "ERROR" in str(restore_result) or "failed" in str(restore_result):
-                all_parts.append(f"=== {test_name} ===\nRESTORE FAILED: {restore_result}")
-                fail_count += 1
-                continue
-            # Run single test from restored state
-            try:
-                result = await _run_batch_single(
-                    sim_dir=sim_dir,
-                    test_name=test_name,
-                    runner=runner,
-                    rename_dump=rename_dump,
-                    sim_mode=effective_sim_mode,
-                    extra_args=extra_args,
-                )
-            except Exception as e:
-                result = f"ERROR: {e}"
-            all_parts.append(f"=== {test_name} ===\n{result}")
-            pass_count += result.count("PASS")
-            fail_count += result.count("FAIL")
-
-        total = len(test_list)
-        raw = "\n".join(all_parts)
-        summary = f"{pass_count}/{total} tests PASS, {fail_count} FAIL"
-        details = raw[:4000] if raw.strip() else "(no results)"
-        return f"{summary}\n[from_checkpoint: {from_checkpoint}]\n\nLog:\n{details}"
-
-    # --- Normal mode (no checkpoint) ---
+    # Phase 4: generate checkpoint Tcl if requested
+    chk_dir = f"{sim_dir}/checkpoints"
+    if save_checkpoints:
+        await ssh_run(f"mkdir -p {sq(chk_dir)}", timeout=5)
 
     # Check for existing regression job (reconnection scenario)
     completed_tests: list[str] = []
@@ -362,6 +380,20 @@ async def _run_batch_regression(
         for test_name in remaining:
             test_log = f"{user_tmp}/regression_{ts}_{sq(test_name)}.log"
             env_prefix = f"TEST_NAME={sq(test_name)} "
+
+            # Phase 4: inject checkpoint save commands into xmsim Tcl
+            if save_checkpoints:
+                chk_tcl = _build_checkpoint_tcl(
+                    test_name, chk_dir, l1_time, runner, sim_dir,
+                )
+                chk_tcl_path = f"{user_tmp}/chk_{sq(test_name)}.tcl"
+                import base64 as _b64
+                b64 = _b64.b64encode(chk_tcl.encode()).decode()
+                await ssh_run(
+                    f"echo {sq(b64)} | base64 -d > {sq(chk_tcl_path)}",
+                    timeout=5,
+                )
+                env_prefix += f"MCP_INPUT_TCL={sq(chk_tcl_path)} "
 
             test_args = params["test_args_format"].format(test_name=sq(test_name))
             cmd = info.cmd.format(test_name=test_args) if info.needs_test_name else info.cmd
