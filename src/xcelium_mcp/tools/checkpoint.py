@@ -198,6 +198,43 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
                 )
             lines.append("")
 
+        # Remove snapshots from worklib via xmrm (only when actually deleting)
+        if result["removed"] and not dry_run:
+            cfg = None
+            try:
+                from xcelium_mcp.registry import load_sim_config
+                cfg = await load_sim_config(resolved_dir)
+            except Exception:
+                pass
+            xmrm_path = "xmrm"
+            login_shell = "/usr/bin/tcsh"
+            if cfg and "eda_tools" in cfg:
+                xrun = cfg["eda_tools"].get("xrun", "")
+                if xrun:
+                    xmrm_path = xrun.replace("/xrun", "/xmrm")
+            if cfg and "runner" in cfg:
+                login_shell = cfg["runner"].get("login_shell", login_shell)
+
+            from xcelium_mcp.sim_runner import login_shell_cmd
+            user_tmp = await get_user_tmp_dir()
+            cds_lib = f"{user_tmp}/cleanup_cds.lib"
+            chk_worklib = os.path.join(resolved_dir, "checkpoints", "worklib")
+            await ssh_run(
+                f"echo 'DEFINE worklib {chk_worklib}' > {sq(cds_lib)}",
+                timeout=5,
+            )
+            xmrm_errors: list[str] = []
+            for name in result["removed"]:
+                xmrm_cmd = f"{sq(xmrm_path)} -snapshot worklib.{name} -cdslib {sq(cds_lib)} -nolog -nocopyright -force"
+                out = await ssh_run(
+                    login_shell_cmd(login_shell, xmrm_cmd),
+                    timeout=15,
+                )
+                if "Removing" not in out and out.strip():
+                    xmrm_errors.append(f"{name}: {out.strip()}")
+            if xmrm_errors:
+                lines.append(f"xmrm errors: {'; '.join(xmrm_errors)}")
+
         if result["removed"]:
             verb = "Would remove" if dry_run else "Removed"
             lines.append(f"{verb} ({len(result['removed'])}):")

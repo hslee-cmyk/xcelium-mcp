@@ -320,13 +320,12 @@ def cleanup_checkpoints(
 
     if not dry_run and mode != "list":
         for name in to_remove:
-            info = checkpoints[name]
-            chk_path = Path(info.get("path", str(Path(_checkpoint_base_dir(sim_dir)) / name)))
-            shutil.rmtree(chk_path, ignore_errors=True)
             del checkpoints[name]
         if to_remove:
             manifest["compile_hash"] = current_hash
             _write_manifest(sim_dir, manifest)
+        # Note: actual worklib snapshot removal (xmrm) is done by the tool layer
+        # (tools/checkpoint.py) which has access to ssh_run + EDA environment.
 
     return {
         "removed": to_remove,
