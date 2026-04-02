@@ -597,7 +597,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         Called automatically by bisect_signal_dump when a signal is not in the SHM dump.
         Presents 3 options:
           [A]  Full re-run with extended probe scope (sim_batch_run + prepare_dump_scope)
-          [A'] Restore from nearest checkpoint + add probes + partial re-run (Phase 4)
+          [A'] Restore from nearest checkpoint + add probes + partial re-run
           [B]  Bridge mode: attach to simulator, add probes live (requires active connection)
 
         Args:

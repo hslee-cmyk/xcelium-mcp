@@ -235,6 +235,7 @@ async def _run_batch_regression(
     test_list: list[str],
     runner: dict,
     from_checkpoint: str = "",
+    restore_fn=None,  # callable(name, sim_dir) -> str; needed for from_checkpoint
     rename_dump: bool = False,
     sim_mode: str = "",
     extra_args: str = "",
@@ -247,14 +248,10 @@ async def _run_batch_regression(
     needs_test_name=False → regression_script handles all tests → 1 cmd
     needs_test_name=True  → iterate test_list, per-test nohup + poll
 
-    Note: from_checkpoint raises NotImplementedError (Phase 4 — not yet implemented).
+    from_checkpoint mode (Phase 4):
+      restore L1 → per-test batch run → collect results.
+      Each test starts from L1 checkpoint instead of full compile+init.
     """
-    if from_checkpoint:
-        # TODO: Phase 4 — restore_checkpoint then per-test run
-        raise NotImplementedError(
-            "from_checkpoint not yet implemented in regression mode. "
-            "Use sim_batch_run for single-test restore-and-run."
-        )
     import time as _time
 
     from xcelium_mcp.sim_runner import get_user_tmp_dir
@@ -268,6 +265,48 @@ async def _run_batch_regression(
     effective_sim_mode = sim_mode or runner.get("default_mode", "rtl")
     params = resolve_sim_params(runner, effective_sim_mode, extra_args=extra_args)
     info = _resolve_exec_cmd(runner, regression=True)
+
+    # --- Phase 4: from_checkpoint mode ---
+    # Restore L1 before each test → reuse _run_batch_single per test
+    if from_checkpoint:
+        if not restore_fn:
+            raise RuntimeError(
+                "from_checkpoint requires restore_fn (restore_checkpoint_impl). "
+                "Pass it via tools/batch.py register()."
+            )
+        all_parts: list[str] = []
+        pass_count = 0
+        fail_count = 0
+        for test_name in test_list:
+            # Restore checkpoint before each test
+            restore_result = await restore_fn(from_checkpoint, sim_dir)
+            if "ERROR" in str(restore_result) or "failed" in str(restore_result):
+                all_parts.append(f"=== {test_name} ===\nRESTORE FAILED: {restore_result}")
+                fail_count += 1
+                continue
+            # Run single test from restored state
+            try:
+                result = await _run_batch_single(
+                    sim_dir=sim_dir,
+                    test_name=test_name,
+                    runner=runner,
+                    rename_dump=rename_dump,
+                    sim_mode=effective_sim_mode,
+                    extra_args=extra_args,
+                )
+            except Exception as e:
+                result = f"ERROR: {e}"
+            all_parts.append(f"=== {test_name} ===\n{result}")
+            pass_count += result.count("PASS")
+            fail_count += result.count("FAIL")
+
+        total = len(test_list)
+        raw = "\n".join(all_parts)
+        summary = f"{pass_count}/{total} tests PASS, {fail_count} FAIL"
+        details = raw[:4000] if raw.strip() else "(no results)"
+        return f"{summary}\n[from_checkpoint: {from_checkpoint}]\n\nLog:\n{details}"
+
+    # --- Normal mode (no checkpoint) ---
 
     # Check for existing regression job (reconnection scenario)
     completed_tests: list[str] = []

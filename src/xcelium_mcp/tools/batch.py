@@ -232,6 +232,7 @@ def register(
                 test_list=test_list,
                 runner=runner,
                 from_checkpoint=from_checkpoint,
+                restore_fn=restore_checkpoint_fn if from_checkpoint else None,
                 rename_dump=rename_dump,
                 sim_mode=sim_mode,
                 extra_args=extra_args,
@@ -239,5 +240,4 @@ def register(
         except Exception as e:
             return f"ERROR running regression: {e}"
 
-        chk_note = "\n[Note: L1/L2 checkpoint auto-save requires Phase 4 — skipped]"
-        return f"sim_batch_regression completed.\n\n{summary}{chk_note}"
+        return f"sim_batch_regression completed.\n\n{summary}"
