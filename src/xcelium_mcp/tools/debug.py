@@ -199,23 +199,33 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         bridge = bridges.get_bridge(target)
         sections: list[str] = []
 
-        # 1. Simulation state
-        sections.append("## Simulation State")
-        for label, cmd in [("Position", "where"), ("Scope", "scope")]:
-            try:
-                val = await bridge.execute(cmd)
-                sections.append(f"- **{label}**: `{val}`")
-            except TclError as e:
-                sections.append(f"- **{label}**: error — {e}")
+        # 1. Simulation state + breakpoints (single round-trip)
+        try:
+            snapshot = await bridge.execute("__DEBUG_SNAPSHOT__")
+            # Parse: POSITION:...\nSCOPE:...\nSTOPS:...
+            pos = scope_val = stops = ""
+            for line in snapshot.splitlines():
+                if line.startswith("POSITION:"):
+                    pos = line[9:]
+                elif line.startswith("SCOPE:"):
+                    scope_val = line[6:]
+                elif line.startswith("STOPS:"):
+                    stops = line[6:]
+        except (TclError, ConnectionError) as e:
+            pos = scope_val = f"(error: {e})"
+            stops = "(unavailable)"
 
-        # 2. Signal values in current scope (up to 50)
+        sections.append("## Simulation State")
+        sections.append(f"- **Position**: `{pos}`")
+        sections.append(f"- **Scope**: `{scope_val}`")
+
+        # 2. Signal values in current scope (up to 50) — still needs per-signal loop
         sections.append("\n## Signal Values (current scope)")
         try:
             sig_list = await bridge.execute("describe *")
             lines = sig_list.strip().splitlines()[:50]
             if lines:
                 for line in lines:
-                    # Try to get the value of each signal
                     sig_name = line.split()[0] if line.split() else ""
                     if sig_name:
                         try:
@@ -228,13 +238,9 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         except TclError as e:
             sections.append(f"(could not list signals: {e})")
 
-        # 3. Active breakpoints
+        # 3. Active breakpoints (already fetched in snapshot)
         sections.append("\n## Active Breakpoints")
-        try:
-            bp_list = await bridge.execute("stop -show")
-            sections.append(f"```\n{bp_list}\n```")
-        except TclError:
-            sections.append("(no breakpoints or command not available)")
+        sections.append(f"```\n{stops}\n```")
 
         # 4. Hardware debugging checklist
         sections.append(textwrap.dedent("""

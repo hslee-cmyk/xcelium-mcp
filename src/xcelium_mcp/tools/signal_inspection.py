@@ -74,9 +74,8 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             value: Value to deposit (e.g. "1'b1", "8'hFF", "0").
         """
         bridge = bridges.xmsim
-        await bridge.execute(f"deposit {signal} {value}")
-        # Verify
-        readback = await bridge.execute(f"value {signal}")
+        # Single round-trip: deposit + value readback in Tcl
+        readback = await bridge.execute(f"__DEPOSIT_AND_VERIFY__ {signal} {value}")
         return f"Deposited {value} on {signal}. Readback: {readback}"
 
     @mcp.tool()
@@ -87,6 +86,6 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             signal: Full hierarchical signal path.
         """
         bridge = bridges.xmsim
-        await bridge.execute(f"release {signal}")
-        readback = await bridge.execute(f"value {signal}")
+        # Single round-trip: release + value readback in Tcl
+        readback = await bridge.execute(f"__RELEASE_AND_VERIFY__ {signal}")
         return f"Released {signal}. Current value: {readback}"

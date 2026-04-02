@@ -282,12 +282,8 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             timeout: MCP response timeout in seconds (default 600s for gate-level sim support).
         """
         bridge = bridges.xmsim
-        cmd = f"run {duration}" if duration else "run"
-        await bridge.execute(cmd, timeout=timeout)
-        try:
-            where = await bridge.execute("where")
-        except (TclError, asyncio.TimeoutError, ConnectionError):
-            where = "(position unknown)"
+        # Single round-trip: run + where combined in Tcl
+        where = await bridge.execute(f"__RUN_AND_REPORT__ {duration}", timeout=timeout)
         return f"Simulation advanced. Current position: {where}"
 
     @mcp.tool()
@@ -295,11 +291,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         """Stop a running simulation."""
         bridge = bridges.xmsim
         await bridge.execute("stop")
-        try:
-            where = await bridge.execute("where")
-        except (TclError, asyncio.TimeoutError, ConnectionError):
-            where = "(position unknown)"
-        return f"Simulation stopped at: {where}"
+        return f"Simulation stopped."
 
     @mcp.tool()
     async def sim_restart() -> str:
@@ -342,16 +334,8 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             target: "xmsim" | "simvision" | "auto" (default: auto).
         """
         bridge = bridges.get_bridge(target)
-        results: list[str] = []
-
-        for label, cmd in [("Position", "where"), ("Scope", "scope")]:
-            try:
-                val = await bridge.execute(cmd)
-                results.append(f"{label}: {val}")
-            except TclError as e:
-                results.append(f"{label}: (error: {e})")
-
-        return "\n".join(results)
+        # Single round-trip: where + scope combined in Tcl
+        return await bridge.execute("__STATUS__")
 
     @mcp.tool()
     async def shutdown_simulator(target: str = "xmsim") -> str:
