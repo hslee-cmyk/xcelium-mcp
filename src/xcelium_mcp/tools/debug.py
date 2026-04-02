@@ -24,7 +24,7 @@ from xcelium_mcp.sim_runner import (
 )
 from xcelium_mcp.registry import load_sim_config
 from xcelium_mcp.env_detection import _load_or_detect_runner
-from xcelium_mcp.batch_runner import _resolve_exec_cmd
+from xcelium_mcp.batch_runner import _resolve_exec_cmd, read_setup_tcl, extract_setup_lines
 import xcelium_mcp.csv_cache as csv_cache
 import xcelium_mcp.debug_tools as debug_tools
 import xcelium_mcp.checkpoint_manager as checkpoint_manager
@@ -41,28 +41,33 @@ async def _prepare_dump_scope_internal(
 ) -> str:
     """Extend an existing setup Tcl file with additional probe signals.
 
-    Detects original Tcl from sim_dir if input_tcl is empty.
+    Uses read_setup_tcl() from batch_runner for Tcl detection (registry-aware).
+    Falls back to manual detection if runner config not available.
     Returns path to the extended Tcl file (written as setup_rtl_debug.tcl).
     """
+    original = ""
 
-    # Auto-detect input Tcl if not provided
-    if not input_tcl:
-        for candidate in ("setup_rtl.tcl", "input.tcl", "setup.tcl"):
-            p = Path(sim_dir) / candidate
-            if p.exists():
-                input_tcl = str(p)
-                break
-        if not input_tcl:
-            # Search sim_dir for any .tcl file
-            r = await ssh_run(f"ls {sim_dir}/*.tcl 2>/dev/null | head -1")
-            input_tcl = r.strip()
+    if input_tcl:
+        # Explicit input Tcl
+        p = Path(input_tcl)
+        if p.exists():
+            original = p.read_text()
+    else:
+        # Try registry-based detection via read_setup_tcl
+        cfg = await load_sim_config(sim_dir)
+        runner = cfg.get("runner", {}) if cfg else {}
+        if runner:
+            original = read_setup_tcl(runner, sim_dir)
+
+        # Fallback: manual detection
+        if not original:
+            for candidate in ("setup_rtl.tcl", "input.tcl", "setup.tcl"):
+                p = Path(sim_dir) / candidate
+                if p.exists():
+                    original = p.read_text()
+                    break
 
     output_tcl = str(Path(sim_dir) / "setup_rtl_debug.tcl")
-
-    if input_tcl and Path(input_tcl).exists():
-        original = Path(input_tcl).read_text()
-    else:
-        original = ""
 
     # Append new probe commands for additional signals
     sig_list = " ".join(f'"{s}"' for s in additional_signals)

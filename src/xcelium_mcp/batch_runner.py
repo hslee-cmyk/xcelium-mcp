@@ -64,17 +64,19 @@ def extract_setup_lines(tcl_content: str) -> str:
     return "\n".join(lines)
 
 
-async def _read_setup_tcl(runner: dict, sim_dir: str) -> str:
-    """Read the content of the setup Tcl for the current sim_mode.
+def read_setup_tcl(runner: dict, sim_dir: str) -> str:
+    """Read the setup Tcl content for the current sim_mode.
 
-    Returns the raw file content, or empty string if not found.
+    MCP server runs on cloud0 — uses direct Path I/O (no ssh_run needed).
+    Returns raw file content, or empty string if not found.
     """
     setup_tcls = runner.get("setup_tcls", {})
     mode = runner.get("default_mode", "rtl")
     tcl_rel = setup_tcls.get(mode, "scripts/setup_rtl.tcl")
-    tcl_path = f"{sim_dir}/{tcl_rel}"
-    content = await ssh_run(f"cat {sq(tcl_path)}", timeout=10)
-    return content if content.strip() else ""
+    p = Path(f"{sim_dir}/{tcl_rel}")
+    if p.exists():
+        return p.read_text()
+    return ""
 
 
 def _build_checkpoint_tcl(
@@ -355,7 +357,7 @@ async def _run_batch_regression(
     setup_lines = ""
     if save_checkpoints:
         await ssh_run(f"mkdir -p {sq(chk_dir)}", timeout=5)
-        raw_tcl = await _read_setup_tcl(runner, sim_dir)
+        raw_tcl = read_setup_tcl(runner, sim_dir)
         setup_lines = extract_setup_lines(raw_tcl)
 
     # Check for existing regression job (reconnection scenario)
