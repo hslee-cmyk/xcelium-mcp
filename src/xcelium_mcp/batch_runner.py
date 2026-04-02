@@ -204,6 +204,12 @@ async def _run_batch_single(
             "started_at": datetime.now().isoformat(),
         })
         await ssh_run(f"cat > {job_file} << 'MCPEOF'\n{job_info}\nMCPEOF", timeout=5)
+        # P6-5: background watcher — touch {log}.done when PID exits
+        done_file = f"{log_file}.done"
+        await ssh_run(
+            f"(while kill -0 {pid} 2>/dev/null; do sleep 2; done; touch {done_file}) &",
+            timeout=5,
+        )
 
     # Poll for completion
     result = await _poll_batch_log(log_file, effective_timeout)
@@ -301,11 +307,8 @@ async def _run_batch_regression(
                 f">& /dev/null",
                 timeout=15.0,
             )
-        for _ in range(360):
-            log = await ssh_run(f"tail -5 {log_file} 2>/dev/null")
-            if "REGRESSION_COMPLETE" in log or "All tests done" in log:
-                break
-            await asyncio.sleep(10)
+        # P6-1/P6-2: adaptive polling via _poll_batch_log
+        await _poll_batch_log(log_file, timeout=3600,)
 
     else:
         # Per-test loop — skip completed tests (resume support)
@@ -347,14 +350,21 @@ async def _run_batch_regression(
                 f"pgrep -f {sq(test_name)} 2>/dev/null | tail -1"
             )
             if pid_str.strip().isdigit():
+                test_pid = int(pid_str.strip())
                 job_update = json.dumps({
-                    "type": "regression", "pid": int(pid_str.strip()),
+                    "type": "regression", "pid": test_pid,
                     "log_file": log_file, "current": test_name,
                     "current_log": test_log, "completed": completed_tests,
                 })
                 await ssh_run(f"cat > {job_file} << 'MCPEOF'\n{job_update}\nMCPEOF", timeout=5)
+                # P6-5: PID watcher for per-test done marker
+                test_done = f"{test_log}.done"
+                await ssh_run(
+                    f"(while kill -0 {test_pid} 2>/dev/null; do sleep 2; done; touch {test_done}) &",
+                    timeout=5,
+                )
 
-            # Per-test poll
+            # Per-test poll (P6-1/P6-2/P6-5 via _poll_batch_log)
             await _poll_batch_log(test_log, 600)
 
             completed_tests.append(test_name)
@@ -392,18 +402,36 @@ async def _run_batch_regression(
 
 
 async def _poll_batch_log(log_file: str, timeout: float, prefix: str = "") -> str:
-    """Poll a batch log file until completion keywords found or timeout."""
+    """Poll a batch log file until completion keywords found or timeout.
+
+    P6-1: Adaptive polling interval — 2s → 3s → 4.5s → 6.75s → 10s cap.
+          Short gap catches fast tests; longer gap reduces SSH overhead for slow ones.
+    P6-2: Single SSH call per poll — tail + done-file check in one round-trip.
+    P6-5: .done marker file — reliable completion signal even when keywords scroll past tail.
+    """
     import time as _time
     deadline = _time.time() + timeout
+    interval = 2.0          # P6-1: start at 2s
+    done_file = f"{log_file}.done"
+
     while _time.time() < deadline:
-        log = await ssh_run(f"tail -5 {log_file} 2>/dev/null")
-        if any(kw in log for kw in ("$finish", "COMPLETE", "PASS", "FAIL", "Errors:")):
+        # P6-2: single SSH call — tail for keyword scan + done-file sentinel
+        out = await ssh_run(
+            f"tail -10 {log_file} 2>/dev/null; "
+            f"test -f {done_file} && echo __DONE__"
+        )
+        if "__DONE__" in out or any(
+            kw in out for kw in ("$finish", "COMPLETE", "PASS", "FAIL", "Errors:")
+        ):
             break
-        await asyncio.sleep(10)
+        # P6-1: adaptive backoff (×1.5, cap 10s)
+        await asyncio.sleep(interval)
+        interval = min(interval * 1.5, 10.0)
 
     result = await ssh_run(
         f"grep -E 'PASS|FAIL|Errors:|\\$finish|COMPLETE' {log_file} 2>/dev/null | tail -30"
     )
+    await ssh_run(f"rm -f {done_file}", timeout=5)   # P6-5: cleanup marker
     return prefix + result
 
 
