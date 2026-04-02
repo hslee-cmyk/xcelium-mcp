@@ -147,9 +147,14 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
                 f"echo 'DEFINE worklib {abs_worklib}' > {sq(cds_lib)}",
                 timeout=5,
             )
-            # Run xmls
+            # Run xmls (needs EDA environment for library resolution)
+            from xcelium_mcp.sim_runner import login_shell_cmd
+            login_shell = "/usr/bin/tcsh"
+            if cfg and "runner" in cfg:
+                login_shell = cfg["runner"].get("login_shell", login_shell)
+            xmls_cmd = f"{sq(xmls_path)} -snapshot -all -cdslib {sq(cds_lib)} -nolog -nocopyright"
             xmls_out = await ssh_run(
-                f"{sq(xmls_path)} -snapshot -all -cdslib {sq(cds_lib)} -nolog -nocopyright",
+                login_shell_cmd(login_shell, xmls_cmd),
                 timeout=30,
             )
             result = checkpoint_manager.rebuild_manifest(resolved_dir, xmls_out)
