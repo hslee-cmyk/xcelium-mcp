@@ -862,6 +862,10 @@ proc ::mcp_bridge::do_bisect {channel args_str} {
 # F7: __WAVEFORM_ADD_GROUP__ — AI_Debug group with duplicate skip (P5-2)
 # ---------------------------------------------------------------------------
 proc ::mcp_bridge::do_waveform_add_group {channel group_name sig_list} {
+    # 0. Ensure a waveform window exists (auto-create if none)
+    if {[catch {waveform using}]} {
+        waveform new
+    }
     # 1. Create group if not exists (catch = no-op when already exists)
     catch {waveform create -group $group_name}
 
