@@ -59,7 +59,7 @@ batch.register(
 simvision.register(
     mcp,
     bridges,
-    waveform_add_signals_fn=waveform_tools["waveform_add_signals"],
+    waveform_add_signals_fn=waveform_tools["waveform_add"],
     connect_simulator_fn=lifecycle_tools["connect_simulator"],
     generate_debug_tcl_fn=debug_tools["generate_debug_tcl"],
     csv_cache=csv_cache,

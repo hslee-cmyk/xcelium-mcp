@@ -8,6 +8,20 @@ from xcelium_mcp.screenshot import ps_to_png
 from xcelium_mcp.tcl_bridge import TclBridge, TclError
 
 
+def _encode_group_arg(group_name: str) -> str:
+    """Encode group_name for Tcl protocol. Empty → '""', spaces → {braced}."""
+    if not group_name:
+        return '""'
+    return "{" + group_name + "}" if " " in group_name else group_name
+
+
+def _validate_group_name(group_name: str) -> str | None:
+    """Return error message if group_name contains invalid chars, else None."""
+    if group_name and ("{" in group_name or "}" in group_name):
+        return "ERROR: Group name cannot contain { or } characters"
+    return None
+
+
 async def _list_waveform_windows(bridge: TclBridge) -> str:
     """List available waveform windows."""
     try:
@@ -19,7 +33,7 @@ async def _list_waveform_windows(bridge: TclBridge) -> str:
 
 def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
     @mcp.tool()
-    async def waveform_add_signals(
+    async def waveform_add(
         signals: list[str],
         group_name: str = "",
         window_name: str = "",
@@ -33,6 +47,10 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         """
         bridge = bridges.simvision
 
+        err = _validate_group_name(group_name)
+        if err:
+            return err
+
         # Switch to specific window if requested
         if window_name:
             try:
@@ -41,23 +59,56 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
                 avail = await _list_waveform_windows(bridge)
                 return f"ERROR: Window '{window_name}' not found. Available: {avail}"
 
-        # Single round-trip: __WAVEFORM_ADD__ handles window auto-create,
-        # DB prefix resolution, dedup, and group creation — all in Tcl side.
-        # Protocol: "__WAVEFORM_ADD__ {group_name_or_empty} sig1 sig2 ..."
-        # Empty group_name → "" placeholder so Tcl parser doesn't eat first signal.
-        # Group names with spaces are wrapped in {} for Tcl list parsing.
-        # Brace characters would break Tcl quoting — reject them.
-        if group_name:
-            if "{" in group_name or "}" in group_name:
-                return "ERROR: Group name cannot contain { or } characters"
-            grp = "{" + group_name + "}" if " " in group_name else group_name
-        else:
-            grp = '""'
+        # Protocol: __WAVEFORM_ADD__ {group_or_""} sig1 sig2 ...
+        grp = _encode_group_arg(group_name)
         sig_str = " ".join(signals)
         result = await bridge.execute(
             f"__WAVEFORM_ADD__ {grp} {sig_str}", timeout=30.0
         )
         return result
+
+    @mcp.tool()
+    async def waveform_remove(
+        signals: list[str] | None = None,
+        group_name: str = "",
+    ) -> str:
+        """Remove signals or a group from the waveform. Mirrors waveform_add.
+
+        Modes:
+          - group_name + signals: remove matching signals within that group only.
+          - group_name only:      remove the entire group and its child signals.
+          - signals only:         remove matching signals from all groups/ungrouped.
+
+        Args:
+            signals:    Signal names (or suffixes) to remove.
+            group_name: Scope removal to this group. Empty = search all.
+        """
+        bridge = bridges.simvision
+
+        err = _validate_group_name(group_name)
+        if err:
+            return err
+
+        if not signals and not group_name:
+            return "ERROR: Provide signals to remove, or group_name to remove a group."
+
+        # Protocol: __WAVEFORM_REMOVE__ {group_or_""} sig1 sig2 ...
+        grp = _encode_group_arg(group_name)
+        sig_str = " ".join(signals) if signals else ""
+        result = await bridge.execute(
+            f"__WAVEFORM_REMOVE__ {grp} {sig_str}".strip(), timeout=30.0
+        )
+        return result
+
+    @mcp.tool()
+    async def waveform_clear() -> str:
+        """Remove all signals and groups from the waveform window."""
+        bridge = bridges.simvision
+        try:
+            await bridge.execute("waveform clearall")
+        except TclError:
+            return "ERROR: No waveform window open or clearall failed."
+        return "All signals and groups cleared."
 
     @mcp.tool()
     async def waveform_zoom(start_time: str, end_time: str) -> str:
@@ -93,7 +144,6 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
 
         Returns the screenshot as a PNG image that Claude can analyze.
         """
-        # Load config for external tool paths (gs/convert)
         from xcelium_mcp.sim_runner import get_default_sim_dir
         from xcelium_mcp.registry import load_sim_config
         cfg = None
@@ -106,48 +156,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         png_bytes = await ps_to_png(ps_path, config=cfg)
         return Image(data=png_bytes, format="png")
 
-    @mcp.tool()
-    async def waveform_remove_signals(
-        signals: list[str] | None = None,
-        group_name: str = "",
-    ) -> str:
-        """Remove signals from the waveform. Mirrors waveform_add_signals.
-
-        Modes:
-          - group_name + signals: remove matching signals within that group only.
-          - group_name only:      remove the entire group and its child signals.
-          - signals only:         remove matching signals from all groups/ungrouped.
-
-        Args:
-            signals:    Signal names (or suffixes) to remove.
-            group_name: Scope removal to this group. Empty = search all.
-        """
-        bridge = bridges.simvision
-
-        if group_name:
-            if "{" in group_name or "}" in group_name:
-                return "ERROR: Group name cannot contain { or } characters"
-
-        if not signals and not group_name:
-            return "ERROR: Provide signals to remove, or group_name to remove a group."
-
-        # Protocol: "__WAVEFORM_REMOVE__ {group_name_or_""} sig1 sig2 ..."
-        # Matches __WAVEFORM_ADD__ protocol structure.
-        if group_name:
-            grp = "{" + group_name + "}" if " " in group_name else group_name
-        else:
-            grp = '""'
-        sig_str = " ".join(signals) if signals else ""
-        result = await bridge.execute(
-            f"__WAVEFORM_REMOVE__ {grp} {sig_str}".strip(), timeout=30.0
-        )
-        return result
-
-    @mcp.tool()
-    async def waveform_clear() -> str:
-        """Remove all signals and groups from the waveform window."""
-        bridge = bridges.simvision
-        await bridge.execute("waveform clearall")
-        return "All signals and groups cleared."
-
-    return {"waveform_add_signals": waveform_add_signals}
+    return {
+        "waveform_add": waveform_add,
+        "waveform_remove": waveform_remove,
+    }
