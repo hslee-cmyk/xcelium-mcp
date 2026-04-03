@@ -97,28 +97,33 @@ def read_setup_tcl(runner: dict, sim_dir: str) -> str:
 
 
 def _replace_shm_stems(content: str, test_name: str) -> str:
-    """Replace <stem>.shm with <stem>_{test_name}.shm in database -open lines only.
+    """Replace <stem>.shm with <stem>_{test_name}.shm in Tcl SHM references.
+
+    Targets all Tcl lines that reference .shm paths:
+      - ``database -open <path>/<stem>.shm``
+      - ``database -close <path>/<stem>.shm``
+      - ``probe ... -database <path>/<stem>.shm``
 
     Generic: works with any SHM name. Skips if stem already contains test_name.
-    Uses re.sub to replace only within ``database -open`` lines — comments and
-    string literals are not affected.
     """
-    # Pattern: database -open [optional_path/]<stem>.shm
-    # Also matches bare "name.shm" without directory prefix.
-    pattern = r"(database\s+-open\s+(?:\S*/)?)(\S+)\.shm"
+    # Step 1: find SHM stems from database -open lines
+    pattern = r"database\s+-open\s+(?:\S*/)?(\S+)\.shm"
     matches = _re.findall(pattern, content)
 
     if not matches:
         return content
 
+    # Step 2: for each unique stem, replace in all Tcl command contexts
     replaced: set[str] = set()
-    for _, stem in matches:
+    for stem in matches:
         if stem in replaced or test_name in stem:
             continue
-        # Surgical replacement: only in database -open / -close lines
+        escaped = _re.escape(stem)
+        # Replace in: database -open, database -close, probe ... -database
         content = _re.sub(
-            r"(database\s+(?:-open|-close)\s+(?:\S*/)?)(" + _re.escape(stem) + r")\.shm",
-            rf"\1\2_{test_name}.shm",
+            r"((?:database\s+(?:-open|-close)|probe\s+.*-database)\s+(?:\S*/)?)"
+            + escaped + r"\.shm",
+            rf"\1{stem}_{test_name}.shm",
             content,
         )
         replaced.add(stem)
