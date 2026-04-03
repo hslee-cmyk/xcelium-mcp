@@ -139,4 +139,11 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         )
         return result
 
+    @mcp.tool()
+    async def waveform_clear() -> str:
+        """Remove all signals and groups from the waveform window."""
+        bridge = bridges.simvision
+        await bridge.execute("waveform clearall")
+        return "All signals and groups cleared."
+
     return {"waveform_add_signals": waveform_add_signals}
