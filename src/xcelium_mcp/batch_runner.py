@@ -104,6 +104,8 @@ def _replace_shm_stems(content: str, test_name: str) -> str:
       - ``database -close <path>/<stem>.shm``
       - ``probe ... -database <path>/<stem>.shm``
 
+    Stem discovery uses ``database -open`` lines only. If there is no
+    ``database -open`` line (e.g. probe-only content), no replacement is made.
     Generic: works with any SHM name. Skips if stem already contains test_name.
     """
     # Step 1: find SHM stems from database -open lines
@@ -121,7 +123,7 @@ def _replace_shm_stems(content: str, test_name: str) -> str:
         escaped = _re.escape(stem)
         # Replace in: database -open, database -close, probe ... -database
         content = _re.sub(
-            r"((?:database\s+(?:-open|-close)|probe\s+.*-database)\s+(?:\S*/)?)"
+            r"((?:database\s+(?:-open|-close)|probe\s+.*?-database)\s+(?:\S*/)?)"
             + escaped + r"\.shm",
             rf"\1{stem}_{test_name}.shm",
             content,
@@ -136,9 +138,10 @@ async def _preprocess_setup_tcl(
 ) -> str:
     """Preprocess setup_tcl to inject test_name into SHM paths.
 
-    Finds ``database -open ... <name>.shm`` lines, checks if <name> already
-    contains the test_name. If not, replaces ``<name>.shm`` with
-    ``<name>_{test_name}.shm``.  This is generic — works with any SHM name.
+    Replaces ``<stem>.shm`` with ``<stem>_{test_name}.shm`` in all SHM
+    references: ``database -open/-close`` and ``probe ... -database`` lines.
+    Skips if <stem> already contains test_name or if ``$env(TEST_NAME)``
+    is used. Generic — works with any SHM name.
 
     Returns temp file path for MCP_INPUT_TCL injection, or empty string
     if no replacement needed.
