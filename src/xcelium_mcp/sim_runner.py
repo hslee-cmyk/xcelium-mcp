@@ -137,6 +137,7 @@ from xcelium_mcp.env_detection import (  # noqa: E402, F401
     _detect_setup_tcls,
     _pick_default_mode,
     _resolve_eda_tools,
+    _resolve_external_tools,
     _detect_bridge_port,
     _detect_run_dir,
     _detect_vnc_display,
@@ -328,6 +329,7 @@ async def run_full_discovery(sim_dir: str = "", force: bool = False) -> str:
     bridge_tcl = await _detect_bridge_tcl()
     setup_tcls = await _detect_setup_tcls(sim_dir)
     eda_tools = await _resolve_eda_tools(shell_env)
+    external_tools = await _resolve_external_tools(shell_env)
     bridge_port = await _detect_bridge_port(sim_dir, bridge_tcl)
     patch_result = await _patch_legacy_run_script(sim_dir, runner_info)
     run_info = await _detect_run_dir(sim_dir, runner_info)
@@ -399,6 +401,7 @@ async def run_full_discovery(sim_dir: str = "", force: bool = False) -> str:
             "port": bridge_port,
         },
         "eda_tools": eda_tools,
+        "external_tools": external_tools,
         "test_discovery": test_discovery,
     }
     await save_sim_config(sim_dir, config)
@@ -417,7 +420,9 @@ def _format_discovery_result(
     runner = config["runner"]
     bridge = config["bridge"]
     eda = config.get("eda_tools", {})
+    ext = config.get("external_tools", {})
     setup_modes = ", ".join(f"{k}={v}" for k, v in runner.get("setup_tcls", {}).items())
+    ext_summary = ", ".join(f"{k}={v}" for k, v in ext.items()) if ext else "(none)"
 
     return (
         f"Simulation environment discovered:\n"
@@ -430,6 +435,7 @@ def _format_discovery_result(
         f"  setup_tcls:     {setup_modes}\n"
         f"  default_mode:   {runner.get('default_mode', 'rtl')}\n"
         f"  simvisdbutil:   {eda.get('simvisdbutil', '?')}\n"
+        f"  external_tools: {ext_summary}\n"
         f"  bridge_port:    {bridge.get('port', 9876)}\n"
         f"  .simvisionrc:   {simvisionrc_result}\n"
         f"\nSaved to: ~/.xcelium_mcp/mcp_registry.json\n"

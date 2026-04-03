@@ -513,6 +513,29 @@ async def _resolve_eda_tools(shell_env: dict) -> dict[str, str]:
     return result
 
 
+async def _resolve_external_tools(shell_env: dict) -> dict[str, str]:
+    """Resolve external utility paths (non-EDA tools).
+
+    Discovers ghostscript (gs), ImageMagick (convert/magick), etc.
+    These are optional — missing tools are silently skipped.
+    """
+    tools = ["gs", "gswin64c", "gswin32c", "convert", "magick"]
+    login_shell = shell_env.get("login_shell", "/bin/sh")
+
+    result: dict[str, str] = {}
+
+    for tool in tools:
+        r = await ssh_run(
+            login_shell_cmd(login_shell, f"which {tool} 2>/dev/null"),
+            timeout=10,
+        )
+        path = r.strip()
+        if path and "/" in path:
+            result[tool] = path
+
+    return result
+
+
 async def _detect_bridge_port(sim_dir: str, bridge_tcl: str) -> int:
     """Parse bridge port from mcp_bridge.tcl. Default 9876."""
     r = await ssh_run(

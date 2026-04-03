@@ -323,12 +323,12 @@ proc ::mcp_bridge::dispatch {channel cmd} {
     if {[string match "__WAVEFORM_ADD_GROUP__*" $cmd]} {
         # Protocol: "__WAVEFORM_ADD_GROUP__ {group_name_or_""} sig1 sig2 ..."
         # __WAVEFORM_ADD_GROUP__ = 22 chars
+        # Use Tcl list parsing (lindex/lrange) to handle {braced group names}
         set args [string trim [string range $cmd 22 end]]
-        set parts [split $args " "]
-        set group_name [lindex $parts 0]
+        set group_name [lindex $args 0]
         # Normalize: "" placeholder → empty string (no group)
         if {$group_name eq {""}} { set group_name "" }
-        set sig_list [lrange $parts 1 end]
+        set sig_list [lrange $args 1 end]
         ::mcp_bridge::do_waveform_add_group $channel $group_name $sig_list
         return
     }

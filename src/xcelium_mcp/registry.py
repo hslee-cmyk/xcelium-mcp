@@ -43,6 +43,20 @@ async def save_sim_config(sim_dir: str, config: dict) -> None:
     path.write_text(json.dumps(config, indent=2))
 
 
+def get_tool_path(config: dict | None, tool_name: str) -> str:
+    """Get tool path from config, searching both eda_tools and external_tools.
+
+    Returns empty string if not found.
+    """
+    if not config:
+        return ""
+    # Search eda_tools first, then external_tools
+    path = config.get("eda_tools", {}).get(tool_name, "")
+    if not path:
+        path = config.get("external_tools", {}).get(tool_name, "")
+    return path
+
+
 def _write_json(path, data: dict) -> None:
     """Write JSON file. Works with both Path and str."""
     Path(str(path)).write_text(json.dumps(data, indent=2))
