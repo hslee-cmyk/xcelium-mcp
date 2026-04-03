@@ -96,6 +96,36 @@ def read_setup_tcl(runner: dict, sim_dir: str) -> str:
     return ""
 
 
+def _replace_shm_stems(content: str, test_name: str) -> str:
+    """Replace <stem>.shm with <stem>_{test_name}.shm in database -open lines only.
+
+    Generic: works with any SHM name. Skips if stem already contains test_name.
+    Uses re.sub to replace only within ``database -open`` lines — comments and
+    string literals are not affected.
+    """
+    # Pattern: database -open [optional_path/]<stem>.shm
+    # Also matches bare "name.shm" without directory prefix.
+    pattern = r"(database\s+-open\s+(?:\S*/)?)(\S+)\.shm"
+    matches = _re.findall(pattern, content)
+
+    if not matches:
+        return content
+
+    replaced: set[str] = set()
+    for _, stem in matches:
+        if stem in replaced or test_name in stem:
+            continue
+        # Surgical replacement: only in database -open / -close lines
+        content = _re.sub(
+            r"(database\s+(?:-open|-close)\s+(?:\S*/)?)(" + _re.escape(stem) + r")\.shm",
+            rf"\1\2_{test_name}.shm",
+            content,
+        )
+        replaced.add(stem)
+
+    return content
+
+
 async def _preprocess_setup_tcl(
     sim_dir: str, runner: dict, test_name: str, sim_mode: str = "",
 ) -> str:
@@ -103,51 +133,24 @@ async def _preprocess_setup_tcl(
 
     Finds ``database -open ... <name>.shm`` lines, checks if <name> already
     contains the test_name. If not, replaces ``<name>.shm`` with
-    ``<name>_{test_name}.shm``.  This is generic — works with any SHM name,
-    not just ``ci_top.shm``.
+    ``<name>_{test_name}.shm``.  This is generic — works with any SHM name.
 
     Returns temp file path for MCP_INPUT_TCL injection, or empty string
     if no replacement needed.
     """
-    import re
-
-    setup_tcls = runner.get("setup_tcls", {})
-    mode = sim_mode or runner.get("default_mode", "rtl")
-    tcl_rel = setup_tcls.get(mode, "scripts/setup_rtl.tcl")
-    tcl_path = Path(f"{sim_dir}/{tcl_rel}")
-
-    if not tcl_path.exists():
+    # Validate test_name for filesystem/Tcl safety
+    if not _re.fullmatch(r"[A-Za-z0-9_\-]+", test_name):
         return ""
 
-    content = tcl_path.read_text()
+    content = read_setup_tcl(runner, sim_dir)
+    if not content:
+        return ""
 
     # Skip if already using $env(TEST_NAME) — dynamic naming, no preprocessing
     if "$env(TEST_NAME)" in content:
         return ""
 
-    # Find all SHM paths in "database -open <path>.shm" lines
-    # Capture: (prefix_path/)(stem).shm
-    pattern = r"(database\s+-open\s+\S*/)(\S+)\.shm"
-    matches = re.findall(pattern, content)
-
-    if not matches:
-        return ""
-
-    # Check if any SHM name already contains the test_name → skip
-    for _, stem in matches:
-        if test_name in stem:
-            return ""
-
-    # Replace: <stem>.shm → <stem>_{test_name}.shm (for all occurrences)
-    new_content = content
-    replaced_stems: set[str] = set()
-    for _, stem in matches:
-        if stem not in replaced_stems:
-            new_content = new_content.replace(
-                f"{stem}.shm", f"{stem}_{test_name}.shm"
-            )
-            replaced_stems.add(stem)
-
+    new_content = _replace_shm_stems(content, test_name)
     if new_content == content:
         return ""
 
@@ -172,11 +175,8 @@ def _build_checkpoint_tcl(
     Uses setup_lines (extracted by extract_setup_lines) — no run/exit included.
     Injected via MCP_INPUT_TCL env var.
     """
-    # Replace SHM paths with test-specific names (generic — any .shm stem)
-    import re as _re
-    for _, stem in _re.findall(r"(database\s+-open\s+\S*/)(\S+)\.shm", setup_lines):
-        if test_name not in stem:
-            setup_lines = setup_lines.replace(f"{stem}.shm", f"{stem}_{test_name}.shm")
+    # Replace SHM paths with test-specific names
+    setup_lines = _replace_shm_stems(setup_lines, test_name)
 
     l1_ns = _parse_l1_time_ns(l1_time) if l1_time else 500000
     l1_name = f"L1_{test_name}"
@@ -489,12 +489,15 @@ async def _run_batch_regression(
             test_log = f"{user_tmp}/regression_{ts}_{sq(test_name)}.log"
             env_prefix = f"TEST_NAME={sq(test_name)} "
 
-            # SHM naming: preprocess setup_tcl for test-specific SHM path
-            preprocessed_tcl = await _preprocess_setup_tcl(
-                sim_dir, runner, test_name, effective_sim_mode,
-            )
-            if preprocessed_tcl:
-                env_prefix += f"MCP_INPUT_TCL={sq(preprocessed_tcl)} "
+            # SHM naming: preprocess setup_tcl for test-specific SHM path.
+            # Skip when save_checkpoints — _build_checkpoint_tcl already handles
+            # SHM replacement via _replace_shm_stems and sets its own MCP_INPUT_TCL.
+            if not (save_checkpoints and setup_lines):
+                preprocessed_tcl = await _preprocess_setup_tcl(
+                    sim_dir, runner, test_name, effective_sim_mode,
+                )
+                if preprocessed_tcl:
+                    env_prefix += f"MCP_INPUT_TCL={sq(preprocessed_tcl)} "
 
             # Phase 4: inject checkpoint save commands into xmsim Tcl
             if save_checkpoints and setup_lines:
