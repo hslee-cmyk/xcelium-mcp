@@ -99,12 +99,15 @@ def read_setup_tcl(runner: dict, sim_dir: str) -> str:
 async def _preprocess_setup_tcl(
     sim_dir: str, runner: dict, test_name: str, sim_mode: str = "",
 ) -> str:
-    """Preprocess setup_tcl to replace hardcoded SHM paths with test-specific names.
+    """Preprocess setup_tcl to inject test_name into SHM paths.
 
-    Reads the original setup_tcl, replaces ``database -open .../ci_top.shm``
-    with ``database -open .../ci_top_{test_name}.shm``, writes to a temp file,
-    and returns the temp file path. Returns empty string if no replacement needed
-    (e.g. setup_tcl already uses $env(TEST_NAME) or file not found).
+    Finds ``database -open ... <name>.shm`` lines, checks if <name> already
+    contains the test_name. If not, replaces ``<name>.shm`` with
+    ``<name>_{test_name}.shm``.  This is generic — works with any SHM name,
+    not just ``ci_top.shm``.
+
+    Returns temp file path for MCP_INPUT_TCL injection, or empty string
+    if no replacement needed.
     """
     import re
 
@@ -118,26 +121,35 @@ async def _preprocess_setup_tcl(
 
     content = tcl_path.read_text()
 
-    # Skip if already using $env(TEST_NAME) — no preprocessing needed
+    # Skip if already using $env(TEST_NAME) — dynamic naming, no preprocessing
     if "$env(TEST_NAME)" in content:
         return ""
 
-    # Replace hardcoded SHM database path:
-    #   database -open ../dump/ci_top.shm -shm
-    # → database -open ../dump/ci_top_{test_name}.shm -shm
-    # Preserve all other options on the line.
-    pattern = r"(database\s+-open\s+\S*/)ci_top\.shm"
-    replacement = rf"\1ci_top_{test_name}.shm"
-    new_content, count = re.subn(pattern, replacement, content)
+    # Find all SHM paths in "database -open <path>.shm" lines
+    # Capture: (prefix_path/)(stem).shm
+    pattern = r"(database\s+-open\s+\S*/)(\S+)\.shm"
+    matches = re.findall(pattern, content)
 
-    if count == 0:
+    if not matches:
         return ""
 
-    # Also replace any database -close references to the same path
-    new_content = new_content.replace(
-        "ci_top.shm",
-        f"ci_top_{test_name}.shm",
-    )
+    # Check if any SHM name already contains the test_name → skip
+    for _, stem in matches:
+        if test_name in stem:
+            return ""
+
+    # Replace: <stem>.shm → <stem>_{test_name}.shm (for all occurrences)
+    new_content = content
+    replaced_stems: set[str] = set()
+    for _, stem in matches:
+        if stem not in replaced_stems:
+            new_content = new_content.replace(
+                f"{stem}.shm", f"{stem}_{test_name}.shm"
+            )
+            replaced_stems.add(stem)
+
+    if new_content == content:
+        return ""
 
     # Write preprocessed tcl to temp location
     from xcelium_mcp.sim_runner import get_user_tmp_dir
@@ -160,8 +172,11 @@ def _build_checkpoint_tcl(
     Uses setup_lines (extracted by extract_setup_lines) — no run/exit included.
     Injected via MCP_INPUT_TCL env var.
     """
-    # Replace hardcoded SHM path with test-specific name
-    setup_lines = setup_lines.replace("ci_top.shm", f"ci_top_{test_name}.shm")
+    # Replace SHM paths with test-specific names (generic — any .shm stem)
+    import re as _re
+    for _, stem in _re.findall(r"(database\s+-open\s+\S*/)(\S+)\.shm", setup_lines):
+        if test_name not in stem:
+            setup_lines = setup_lines.replace(f"{stem}.shm", f"{stem}_{test_name}.shm")
 
     l1_ns = _parse_l1_time_ns(l1_time) if l1_time else 500000
     l1_name = f"L1_{test_name}"
