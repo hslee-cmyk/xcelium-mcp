@@ -1004,8 +1004,11 @@ proc ::mcp_bridge::do_waveform_add_group {channel group_name sig_list} {
         return
     }
 
-    # 4. Add new signals (always -signals; SimVision groups are GUI-only,
-    #    unreliable via Tcl batch — group_name kept as label only)
+    # 4. Add group divider + signals
+    #    -cdivider creates a visual separator in the waveform panel
+    if {$group_name ne ""} {
+        catch {waveform add -cdivider $group_name}
+    }
     if {[catch {waveform add -signals $to_add} err]} {
         ::mcp_bridge::send_error $channel "waveform add failed: $err"
         return
