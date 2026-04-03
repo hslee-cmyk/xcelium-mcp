@@ -492,12 +492,13 @@ async def _resolve_eda_tools(shell_env: dict) -> dict[str, str]:
         if shell_env.get("source_separately") and env_files:
             source_cmd = " && ".join(f"source {f}" for f in env_files)
             r = await ssh_run(
-                f"{env_shell} -c '{source_cmd} && which {tool}' 2>/dev/null",
+                f"{env_shell} -c '{source_cmd} && which {tool}'",
                 timeout=15,
             )
         else:
+            # No '2>/dev/null' inside tcsh — causes Ambiguous redirect error
             r = await ssh_run(
-                login_shell_cmd(login_shell, f"which {tool} 2>/dev/null"),
+                login_shell_cmd(login_shell, f"which {tool}"),
                 timeout=15,
             )
         path = r.strip()
@@ -529,8 +530,9 @@ async def _resolve_external_tools(shell_env: dict) -> dict[str, str]:
     result: dict[str, str] = {}
 
     for tool in tools:
+        # No '2>/dev/null' inside tcsh — causes Ambiguous redirect error
         r = await ssh_run(
-            login_shell_cmd(login_shell, f"which {tool} 2>/dev/null"),
+            login_shell_cmd(login_shell, f"which {tool}"),
             timeout=10,
         )
         path = r.strip()
