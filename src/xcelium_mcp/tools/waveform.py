@@ -106,4 +106,37 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         png_bytes = await ps_to_png(ps_path, config=cfg)
         return Image(data=png_bytes, format="png")
 
+    @mcp.tool()
+    async def waveform_remove_signals(signals: list[str]) -> str:
+        """Remove specific signals from the waveform by name.
+
+        Matches signal names against the waveform's fullpath signal list.
+        Partial suffix matching is used (e.g. "test_id" matches "ci_top::top.sw.test.test_id[4:0]").
+
+        Args:
+            signals: Signal names (or suffixes) to remove.
+        """
+        bridge = bridges.simvision
+        sig_str = " ".join(signals)
+        result = await bridge.execute(
+            f"__WAVEFORM_REMOVE__ {sig_str}", timeout=30.0
+        )
+        return result
+
+    @mcp.tool()
+    async def waveform_remove_group(group_name: str) -> str:
+        """Remove an entire group and its signals from the waveform.
+
+        Args:
+            group_name: Name of the group to remove.
+        """
+        bridge = bridges.simvision
+        if "{" in group_name or "}" in group_name:
+            return "ERROR: Group name cannot contain { or } characters"
+        grp = "{" + group_name + "}" if " " in group_name else group_name
+        result = await bridge.execute(
+            f"__WAVEFORM_REMOVE_GROUP__ {grp}", timeout=30.0
+        )
+        return result
+
     return {"waveform_add_signals": waveform_add_signals}
