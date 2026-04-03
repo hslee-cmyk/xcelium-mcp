@@ -78,7 +78,14 @@ async def ssh_run(cmd: str, timeout: float = 60.0, log_file: str = "") -> str:
 
 
 def login_shell_cmd(login_shell: str, cmd: str) -> str:
-    """Build a command that runs in login shell environment."""
+    """Build a command that runs in login shell environment.
+
+    WARNING: Do not include '2>/dev/null' or '2>&1' in cmd.
+    tcsh has no stderr-only redirect syntax — '2>' causes 'Ambiguous redirect'.
+    If stderr suppression is needed, either:
+      - Filter results in Python (e.g. check '/' in path for 'which' output)
+      - Add ssh_run(stderr_mode="drop") parameter (implement when needed)
+    """
     # Escape single quotes in cmd to prevent shell injection:
     # replace ' with '\'' (end quote, literal apostrophe, reopen quote)
     safe_cmd = cmd.replace("'", "'\\''")
