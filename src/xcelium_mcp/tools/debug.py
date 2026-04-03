@@ -13,7 +13,7 @@ from mcp.server.fastmcp import FastMCP, Image
 
 from xcelium_mcp.bridge_manager import BridgeManager
 from xcelium_mcp.tcl_bridge import TclBridge, TclError
-from xcelium_mcp.screenshot import ps_to_png, configure_from_config as _configure_screenshot
+from xcelium_mcp.screenshot import ps_to_png
 from xcelium_mcp.sim_runner import (
     UserInputRequired,
     ssh_run,
@@ -270,9 +270,8 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
 
         # 5. Try to capture a screenshot
         try:
-            _configure_screenshot(config)
             ps_path = await bridge.screenshot()
-            png_bytes = await ps_to_png(ps_path)
+            png_bytes = await ps_to_png(ps_path, config=config)
             screenshot = Image(data=png_bytes, format="png")
             return [report, screenshot]
         except Exception as e:

@@ -518,6 +518,10 @@ async def _resolve_external_tools(shell_env: dict) -> dict[str, str]:
 
     Discovers ghostscript (gs), ImageMagick (convert/magick), etc.
     These are optional — missing tools are silently skipped.
+
+    Note: Unlike _resolve_eda_tools, this does NOT use source_separately env sourcing.
+    External tools like gs/convert are system-level utilities expected to be in the
+    default PATH, not behind EDA-specific environment setup.
     """
     tools = ["gs", "gswin64c", "gswin32c", "convert", "magick"]
     login_shell = shell_env.get("login_shell", "/bin/sh")

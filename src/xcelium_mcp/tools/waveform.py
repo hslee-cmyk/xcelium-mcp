@@ -4,7 +4,7 @@ from __future__ import annotations
 from mcp.server.fastmcp import FastMCP, Image
 
 from xcelium_mcp.bridge_manager import BridgeManager
-from xcelium_mcp.screenshot import ps_to_png, configure_from_config as _configure_screenshot
+from xcelium_mcp.screenshot import ps_to_png
 from xcelium_mcp.tcl_bridge import TclBridge, TclError
 
 
@@ -46,7 +46,10 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         # Protocol: "__WAVEFORM_ADD_GROUP__ {group_name_or_empty} sig1 sig2 ..."
         # Empty group_name → "" placeholder so Tcl parser doesn't eat first signal.
         # Group names with spaces are wrapped in {} for Tcl list parsing.
+        # Brace characters would break Tcl quoting — reject them.
         if group_name:
+            if "{" in group_name or "}" in group_name:
+                return "ERROR: Group name cannot contain { or } characters"
             grp = "{" + group_name + "}" if " " in group_name else group_name
         else:
             grp = '""'
@@ -90,17 +93,17 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
 
         Returns the screenshot as a PNG image that Claude can analyze.
         """
-        # Ensure screenshot module knows external tool paths from config
+        # Load config for external tool paths (gs/convert)
         from xcelium_mcp.sim_runner import get_default_sim_dir
         from xcelium_mcp.registry import load_sim_config
+        cfg = None
         sim_dir = await get_default_sim_dir()
         if sim_dir:
             cfg = await load_sim_config(sim_dir)
-            _configure_screenshot(cfg)
 
         bridge = bridges.simvision
         ps_path = await bridge.screenshot()
-        png_bytes = await ps_to_png(ps_path)
+        png_bytes = await ps_to_png(ps_path, config=cfg)
         return Image(data=png_bytes, format="png")
 
     return {"waveform_add_signals": waveform_add_signals}

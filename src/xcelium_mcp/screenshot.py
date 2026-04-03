@@ -13,28 +13,29 @@ import tempfile
 from pathlib import Path
 
 
-# Module-level cache for tool paths resolved from config
-_gs_path: str | None = None
-_convert_path: str | None = None
-
-
-def configure_from_config(config: dict | None) -> None:
-    """Pre-load tool paths from mcp_sim_config external_tools section."""
-    global _gs_path, _convert_path
+def _gs_from_config(config: dict | None) -> str | None:
+    """Extract ghostscript path from config external_tools."""
     if not config:
-        return
+        return None
     ext = config.get("external_tools", {})
-    # ghostscript: gs > gswin64c > gswin32c
-    _gs_path = ext.get("gs") or ext.get("gswin64c") or ext.get("gswin32c") or None
-    # ImageMagick: convert > magick
-    _convert_path = ext.get("convert") or ext.get("magick") or None
+    return ext.get("gs") or ext.get("gswin64c") or ext.get("gswin32c") or None
+
+
+def _convert_from_config(config: dict | None) -> str | None:
+    """Extract ImageMagick path from config external_tools."""
+    if not config:
+        return None
+    ext = config.get("external_tools", {})
+    return ext.get("convert") or ext.get("magick") or None
 
 
 async def ps_to_png(ps_path: str, png_path: str | None = None,
-                    resolution: int = 150) -> bytes:
+                    resolution: int = 150,
+                    config: dict | None = None) -> bytes:
     """Convert a PostScript file to PNG and return the PNG bytes.
 
     Tries ghostscript first, falls back to ImageMagick convert.
+    If config is provided, tool paths are resolved from external_tools section.
     """
     if png_path is None:
         fd, png_path = tempfile.mkstemp(suffix=".png")
@@ -44,9 +45,9 @@ async def ps_to_png(ps_path: str, png_path: str | None = None,
         cleanup = False
 
     try:
-        await _convert_gs(ps_path, png_path, resolution)
+        await _convert_gs(ps_path, png_path, resolution, config)
     except (FileNotFoundError, RuntimeError):
-        await _convert_imagemagick(ps_path, png_path, resolution)
+        await _convert_imagemagick(ps_path, png_path, resolution, config)
 
     png_bytes = Path(png_path).read_bytes()
     if cleanup:
@@ -54,9 +55,10 @@ async def ps_to_png(ps_path: str, png_path: str | None = None,
     return png_bytes
 
 
-async def _convert_gs(ps_path: str, png_path: str, resolution: int):
+async def _convert_gs(ps_path: str, png_path: str, resolution: int,
+                      config: dict | None = None):
     """Convert using ghostscript."""
-    gs_cmd = _find_gs()
+    gs_cmd = _gs_from_config(config) or _find_gs()
     if not gs_cmd:
         raise FileNotFoundError("ghostscript not found")
 
@@ -75,9 +77,10 @@ async def _convert_gs(ps_path: str, png_path: str, resolution: int):
         raise RuntimeError(f"ghostscript failed: {stderr.decode()}")
 
 
-async def _convert_imagemagick(ps_path: str, png_path: str, resolution: int):
+async def _convert_imagemagick(ps_path: str, png_path: str, resolution: int,
+                               config: dict | None = None):
     """Convert using ImageMagick."""
-    convert_cmd = _find_convert()
+    convert_cmd = _convert_from_config(config) or _find_convert()
     if not convert_cmd:
         raise FileNotFoundError(
             "Neither ghostscript nor ImageMagick found. "
@@ -98,9 +101,7 @@ async def _convert_imagemagick(ps_path: str, png_path: str, resolution: int):
 
 
 def _find_gs() -> str | None:
-    """Find ghostscript: config cache first, then PATH fallback."""
-    if _gs_path:
-        return _gs_path
+    """Find ghostscript via PATH fallback."""
     for name in ("gs", "gswin64c", "gswin32c"):
         path = shutil.which(name)
         if path:
@@ -109,7 +110,5 @@ def _find_gs() -> str | None:
 
 
 def _find_convert() -> str | None:
-    """Find ImageMagick: config cache first, then PATH fallback."""
-    if _convert_path:
-        return _convert_path
+    """Find ImageMagick via PATH fallback."""
     return shutil.which("convert") or shutil.which("magick")
