@@ -96,6 +96,58 @@ def read_setup_tcl(runner: dict, sim_dir: str) -> str:
     return ""
 
 
+async def _preprocess_setup_tcl(
+    sim_dir: str, runner: dict, test_name: str, sim_mode: str = "",
+) -> str:
+    """Preprocess setup_tcl to replace hardcoded SHM paths with test-specific names.
+
+    Reads the original setup_tcl, replaces ``database -open .../ci_top.shm``
+    with ``database -open .../ci_top_{test_name}.shm``, writes to a temp file,
+    and returns the temp file path. Returns empty string if no replacement needed
+    (e.g. setup_tcl already uses $env(TEST_NAME) or file not found).
+    """
+    import re
+
+    setup_tcls = runner.get("setup_tcls", {})
+    mode = sim_mode or runner.get("default_mode", "rtl")
+    tcl_rel = setup_tcls.get(mode, "scripts/setup_rtl.tcl")
+    tcl_path = Path(f"{sim_dir}/{tcl_rel}")
+
+    if not tcl_path.exists():
+        return ""
+
+    content = tcl_path.read_text()
+
+    # Skip if already using $env(TEST_NAME) — no preprocessing needed
+    if "$env(TEST_NAME)" in content:
+        return ""
+
+    # Replace hardcoded SHM database path:
+    #   database -open ../dump/ci_top.shm -shm
+    # → database -open ../dump/ci_top_{test_name}.shm -shm
+    # Preserve all other options on the line.
+    pattern = r"(database\s+-open\s+\S*/)ci_top\.shm"
+    replacement = rf"\1ci_top_{test_name}.shm"
+    new_content, count = re.subn(pattern, replacement, content)
+
+    if count == 0:
+        return ""
+
+    # Also replace any database -close references to the same path
+    new_content = new_content.replace(
+        "ci_top.shm",
+        f"ci_top_{test_name}.shm",
+    )
+
+    # Write preprocessed tcl to temp location
+    from xcelium_mcp.sim_runner import get_user_tmp_dir
+    user_tmp = await get_user_tmp_dir()
+    out_path = f"{user_tmp}/setup_batch_{test_name}.tcl"
+    Path(out_path).write_text(new_content)
+
+    return out_path
+
+
 def _build_checkpoint_tcl(
     test_name: str, chk_dir: str, l1_time: str,
     setup_lines: str,
@@ -108,6 +160,9 @@ def _build_checkpoint_tcl(
     Uses setup_lines (extracted by extract_setup_lines) — no run/exit included.
     Injected via MCP_INPUT_TCL env var.
     """
+    # Replace hardcoded SHM path with test-specific name
+    setup_lines = setup_lines.replace("ci_top.shm", f"ci_top_{test_name}.shm")
+
     l1_ns = _parse_l1_time_ns(l1_time) if l1_time else 500000
     l1_name = f"L1_{test_name}"
 
@@ -196,11 +251,10 @@ async def _run_batch_single(
 
     Strategy: nohup + PID watcher + adaptive log polling (P6-1/P6-2/P6-5).
 
-    SHM overwrite prevention:
-      Method 6-A (default): injects TEST_NAME env var so setup tcl uses
-          $env(TEST_NAME) to name the SHM file.
-      Method 6-B (rename_dump=True): moves dump/ci_top.shm to
-          dump/ci_top_{test_name}.shm after simulation completes.
+    SHM naming: Preprocesses setup_tcl to replace hardcoded SHM paths
+    (e.g. ``dump/ci_top.shm``) with test-specific names
+    (``dump/ci_top_{TEST_NAME}.shm``) before simulation runs.
+    Injected via MCP_INPUT_TCL env var so run_sim sources the modified tcl.
     """
     import time as _time
 
@@ -218,8 +272,13 @@ async def _run_batch_single(
     if params["extra_args"]:
         cmd = f"{cmd} {params['extra_args']}"
 
-    # Method 6-A: inject TEST_NAME for SHM file naming
+    # SHM naming: preprocess setup_tcl to inject test-specific SHM path.
+    # Replaces hardcoded "ci_top.shm" with "ci_top_{TEST_NAME}.shm"
+    # so the SHM is created with the correct name from the start.
     env_prefix = f"TEST_NAME={sq(test_name)} "
+    preprocessed_tcl = await _preprocess_setup_tcl(sim_dir, runner, test_name, sim_mode)
+    if preprocessed_tcl:
+        env_prefix += f"MCP_INPUT_TCL={sq(preprocessed_tcl)} "
 
     # Always use nohup + stdbuf + polling (no direct ssh_run for batch)
     # Direct ssh_run returns entire compile+sim log (1MB+) — unusable.
@@ -300,8 +359,9 @@ async def _run_batch_single(
     # Cleanup job file
     await ssh_run(f"rm -f {job_file}", timeout=5)
 
-    # Method 6-B fallback
-    if rename_dump:
+    # Method 6-B fallback (deprecated — kept for backward compat)
+    # Prefer preprocessed_tcl approach above which names SHM correctly from the start.
+    if rename_dump and not preprocessed_tcl:
         mv_cmd = (
             f"cd {sq(sim_dir)} && "
             f"if [ -d dump/ci_top.shm ]; then "
@@ -413,6 +473,13 @@ async def _run_batch_regression(
         for test_name in remaining:
             test_log = f"{user_tmp}/regression_{ts}_{sq(test_name)}.log"
             env_prefix = f"TEST_NAME={sq(test_name)} "
+
+            # SHM naming: preprocess setup_tcl for test-specific SHM path
+            preprocessed_tcl = await _preprocess_setup_tcl(
+                sim_dir, runner, test_name, effective_sim_mode,
+            )
+            if preprocessed_tcl:
+                env_prefix += f"MCP_INPUT_TCL={sq(preprocessed_tcl)} "
 
             # Phase 4: inject checkpoint save commands into xmsim Tcl
             if save_checkpoints and setup_lines:
