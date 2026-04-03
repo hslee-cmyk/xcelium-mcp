@@ -41,9 +41,9 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
                 avail = await _list_waveform_windows(bridge)
                 return f"ERROR: Window '{window_name}' not found. Available: {avail}"
 
-        # Single round-trip: __WAVEFORM_ADD_GROUP__ handles window auto-create,
+        # Single round-trip: __WAVEFORM_ADD__ handles window auto-create,
         # DB prefix resolution, dedup, and group creation — all in Tcl side.
-        # Protocol: "__WAVEFORM_ADD_GROUP__ {group_name_or_empty} sig1 sig2 ..."
+        # Protocol: "__WAVEFORM_ADD__ {group_name_or_empty} sig1 sig2 ..."
         # Empty group_name → "" placeholder so Tcl parser doesn't eat first signal.
         # Group names with spaces are wrapped in {} for Tcl list parsing.
         # Brace characters would break Tcl quoting — reject them.
@@ -55,7 +55,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             grp = '""'
         sig_str = " ".join(signals)
         result = await bridge.execute(
-            f"__WAVEFORM_ADD_GROUP__ {grp} {sig_str}", timeout=30.0
+            f"__WAVEFORM_ADD__ {grp} {sig_str}", timeout=30.0
         )
         return result
 
@@ -132,7 +132,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             return "ERROR: Provide signals to remove, or group_name to remove a group."
 
         # Protocol: "__WAVEFORM_REMOVE__ {group_name_or_""} sig1 sig2 ..."
-        # Matches __WAVEFORM_ADD_GROUP__ protocol structure.
+        # Matches __WAVEFORM_ADD__ protocol structure.
         if group_name:
             grp = "{" + group_name + "}" if " " in group_name else group_name
         else:

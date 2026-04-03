@@ -320,22 +320,22 @@ proc ::mcp_bridge::dispatch {channel cmd} {
 
     # --- Phase 5 meta commands ---
 
-    if {[string match "__WAVEFORM_ADD_GROUP__*" $cmd]} {
-        # Protocol: "__WAVEFORM_ADD_GROUP__ {group_name_or_""} sig1 sig2 ..."
-        # __WAVEFORM_ADD_GROUP__ = 22 chars
+    if {[string match "__WAVEFORM_ADD__*" $cmd]} {
+        # Protocol: "__WAVEFORM_ADD__ {group_name_or_""} sig1 sig2 ..."
+        # __WAVEFORM_ADD__ = 16 chars
         # Use Tcl list parsing (lindex/lrange) to handle {braced group names}
-        set args [string trim [string range $cmd 22 end]]
+        set args [string trim [string range $cmd 16 end]]
         set group_name [lindex $args 0]
         # Normalize: "" placeholder → empty string (no group)
         if {$group_name eq {""}} { set group_name "" }
         set sig_list [lrange $args 1 end]
-        ::mcp_bridge::do_waveform_add_group $channel $group_name $sig_list
+        ::mcp_bridge::do_waveform_add $channel $group_name $sig_list
         return
     }
 
     if {[string match "__WAVEFORM_REMOVE__*" $cmd]} {
         # Protocol: "__WAVEFORM_REMOVE__ {group_name_or_""} sig1 sig2 ..."
-        # Mirrors __WAVEFORM_ADD_GROUP__ protocol.
+        # Mirrors __WAVEFORM_ADD__ protocol.
         # __WAVEFORM_REMOVE__ = 19 chars
         set args [string trim [string range $cmd 19 end]]
         set group_name [lindex $args 0]
@@ -973,9 +973,9 @@ proc ::mcp_bridge::do_debug_snapshot {channel} {
 }
 
 # ---------------------------------------------------------------------------
-# F7: __WAVEFORM_ADD_GROUP__ — AI_Debug group with duplicate skip (P5-2)
+# F7: __WAVEFORM_ADD__ — Add signals/groups to waveform (P5-2)
 # ---------------------------------------------------------------------------
-proc ::mcp_bridge::do_waveform_add_group {channel group_name sig_list} {
+proc ::mcp_bridge::do_waveform_add {channel group_name sig_list} {
     # 0. Ensure a waveform window exists (auto-create if none)
     if {[catch {waveform using}]} {
         waveform new

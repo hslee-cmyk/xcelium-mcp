@@ -475,7 +475,7 @@ def register(
         if signals:
             sig_str = " ".join(signals)
             await bridge.execute(
-                f"__WAVEFORM_ADD_GROUP__ {group_name} {sig_str}", timeout=30.0
+                f"__WAVEFORM_ADD__ {group_name} {sig_str}", timeout=30.0
             )
 
         # 6. Zoom
@@ -607,7 +607,7 @@ def register(
             sig_str = " ".join(signals)
             try:
                 await bridge.execute(
-                    f"__WAVEFORM_ADD_GROUP__ BEFORE {sig_str}",
+                    f"__WAVEFORM_ADD__ BEFORE {sig_str}",
                     timeout=30.0,
                 )
             except Exception as e:
@@ -618,7 +618,7 @@ def register(
             after_signals = " ".join(f"cmp_after.{s}" for s in signals)
             try:
                 await bridge.execute(
-                    f"__WAVEFORM_ADD_GROUP__ AFTER {after_signals}",
+                    f"__WAVEFORM_ADD__ AFTER {after_signals}",
                     timeout=30.0,
                 )
             except Exception as e:
