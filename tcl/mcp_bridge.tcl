@@ -377,8 +377,9 @@ proc ::mcp_bridge::do_screenshot {channel path} {
     }
 
     # Try SimVision waveform print first
+    # -page_height_number 1 prevents "bad value 0" error when groups are collapsed
     if {[catch {
-        waveform print -file $path
+        waveform print -file $path -page_height_number 1
     } err1]} {
         # Fallback: try X11 window capture via 'import' (ImageMagick)
         if {[catch {
@@ -1004,14 +1005,24 @@ proc ::mcp_bridge::do_waveform_add_group {channel group_name sig_list} {
         return
     }
 
-    # 4. Add group divider + signals
-    #    -cdivider creates a visual separator in the waveform panel
+    # 4. Add signals — use SimVision group if group_name given
     if {$group_name ne ""} {
-        catch {waveform add -cdivider $group_name}
-    }
-    if {[catch {waveform add -signals $to_add} err]} {
-        ::mcp_bridge::send_error $channel "waveform add failed: $err"
-        return
+        # Create a named group containing the signals, then add group to waveform.
+        # group new -contents expects a Tcl list of signal paths.
+        if {[catch {group new -name $group_name -contents $to_add} err]} {
+            ::mcp_bridge::send_error $channel "group new failed: $err"
+            return
+        }
+        # waveform add -groups requires double-bracing for names with spaces
+        if {[catch {waveform add -groups [list $group_name]} err]} {
+            ::mcp_bridge::send_error $channel "waveform add -groups failed: $err"
+            return
+        }
+    } else {
+        if {[catch {waveform add -signals $to_add} err]} {
+            ::mcp_bridge::send_error $channel "waveform add failed: $err"
+            return
+        }
     }
 
     set label [expr {$group_name ne "" ? $group_name : "default"}]
