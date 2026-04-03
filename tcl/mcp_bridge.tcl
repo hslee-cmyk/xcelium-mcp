@@ -334,20 +334,14 @@ proc ::mcp_bridge::dispatch {channel cmd} {
     }
 
     if {[string match "__WAVEFORM_REMOVE__*" $cmd]} {
-        # Protocol: "__WAVEFORM_REMOVE__ sig1 sig2 ..."
+        # Protocol: "__WAVEFORM_REMOVE__ {group_name_or_""} sig1 sig2 ..."
+        # Mirrors __WAVEFORM_ADD_GROUP__ protocol.
         # __WAVEFORM_REMOVE__ = 19 chars
         set args [string trim [string range $cmd 19 end]]
-        set sig_list [lrange $args 0 end]
-        ::mcp_bridge::do_waveform_remove $channel $sig_list
-        return
-    }
-
-    if {[string match "__WAVEFORM_REMOVE_GROUP__*" $cmd]} {
-        # Protocol: "__WAVEFORM_REMOVE_GROUP__ {group_name}"
-        # __WAVEFORM_REMOVE_GROUP__ = 25 chars
-        set args [string trim [string range $cmd 25 end]]
         set group_name [lindex $args 0]
-        ::mcp_bridge::do_waveform_remove_group $channel $group_name
+        if {$group_name eq {""}} { set group_name "" }
+        set sig_list [lrange $args 1 end]
+        ::mcp_bridge::do_waveform_remove $channel $group_name $sig_list
         return
     }
 
@@ -1049,74 +1043,90 @@ proc ::mcp_bridge::do_waveform_add_group {channel group_name sig_list} {
 }
 
 # ---------------------------------------------------------------------------
-# F8: __WAVEFORM_REMOVE__ — Remove signals by name (suffix match)
+# F8: __WAVEFORM_REMOVE__ — Unified signal/group removal (mirrors ADD)
+#
+# Protocol: "__WAVEFORM_REMOVE__ {group_name_or_""} sig1 sig2 ..."
+#   group + signals → remove matching signals within that group only
+#   group + no sigs → remove entire group and its child signals
+#   "" + signals    → remove matching signals from all groups/ungrouped
 # ---------------------------------------------------------------------------
-proc ::mcp_bridge::do_waveform_remove {channel sig_list} {
-    # Get all signals with their IDs
-    set all_ids [waveform find -type signal]
-    set all_paths [waveform signals -format fullpath]
+proc ::mcp_bridge::do_waveform_remove {channel group_name sig_list} {
+    # Case 1: group_name + no signals → remove entire group
+    if {$group_name ne "" && [llength $sig_list] == 0} {
+        set grp_ids [waveform find -type group]
+        set found_id ""
+        foreach id $grp_ids {
+            set name ""
+            catch {set name [waveform signals $id]}
+            if {$name eq $group_name || $name eq "{$group_name}"} {
+                set found_id $id
+                break
+            }
+        }
+        if {$found_id eq ""} {
+            ::mcp_bridge::send_error $channel "Group '$group_name' not found"
+            return
+        }
+        catch {waveform clear $found_id}
+        catch {group delete $group_name}
+        ::mcp_bridge::send_ok $channel "removed group: $group_name"
+        return
+    }
+
+    # Case 2 & 3: remove matching signals (scoped to group or all)
+    # Build search set: either group children or all signals
+    if {$group_name ne ""} {
+        # Find group ID, then get its child signal IDs
+        set grp_ids [waveform find -type group]
+        set found_id ""
+        foreach id $grp_ids {
+            set name ""
+            catch {set name [waveform signals $id]}
+            if {$name eq $group_name || $name eq "{$group_name}"} {
+                set found_id $id
+                break
+            }
+        }
+        if {$found_id eq ""} {
+            ::mcp_bridge::send_error $channel "Group '$group_name' not found"
+            return
+        }
+        # Get child contents of the group
+        set search_ids [waveform hierarchy contents $found_id]
+        set search_paths {}
+        foreach cid $search_ids {
+            catch {lappend search_paths [waveform signals -format fullpath $cid]}
+        }
+    } else {
+        # Search all signals
+        set search_ids [waveform find -type signal]
+        set search_paths [waveform signals -format fullpath]
+    }
 
     set removed 0
     set not_found {}
 
     foreach target $sig_list {
         set found 0
-        set idx 0
-        foreach path $all_paths id $all_ids {
-            # Suffix match: "test_id" matches "ci_top::top.sw.test.test_id[4:0]"
+        foreach path $search_paths id $search_ids {
             if {[string match "*${target}*" $path]} {
                 catch {waveform clear $id}
                 incr removed
                 set found 1
                 break
             }
-            incr idx
         }
         if {!$found} {
             lappend not_found $target
         }
     }
 
-    set msg "removed:$removed"
+    set scope [expr {$group_name ne "" ? "group:$group_name" : "all"}]
+    set msg "removed:$removed|scope:$scope"
     if {[llength $not_found] > 0} {
         append msg "|not_found:[join $not_found ,]"
     }
     ::mcp_bridge::send_ok $channel $msg
-}
-
-# ---------------------------------------------------------------------------
-# F9: __WAVEFORM_REMOVE_GROUP__ — Remove group and its signals
-# ---------------------------------------------------------------------------
-proc ::mcp_bridge::do_waveform_remove_group {channel group_name} {
-    # Find group by name
-    set all_ids [waveform find -type group]
-    set found_id ""
-
-    foreach id $all_ids {
-        set name ""
-        catch {set name [waveform signals $id]}
-        # Match group name (may include braces in fullpath)
-        if {$name eq $group_name || $name eq "{$group_name}"} {
-            set found_id $id
-            break
-        }
-    }
-
-    if {$found_id eq ""} {
-        ::mcp_bridge::send_error $channel "Group '$group_name' not found in waveform"
-        return
-    }
-
-    # waveform clear on a group removes the group and its child signals
-    if {[catch {waveform clear $found_id} err]} {
-        ::mcp_bridge::send_error $channel "waveform clear failed: $err"
-        return
-    }
-
-    # Also delete the group definition to keep things clean
-    catch {group delete $group_name}
-
-    ::mcp_bridge::send_ok $channel "removed group: $group_name"
 }
 
 # ---------------------------------------------------------------------------

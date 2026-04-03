@@ -111,34 +111,37 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         signals: list[str] | None = None,
         group_name: str = "",
     ) -> str:
-        """Remove signals or a group from the waveform.
+        """Remove signals from the waveform. Mirrors waveform_add_signals.
 
-        Two modes (mirrors waveform_add_signals):
-          - group_name given: remove the entire group and its child signals.
-          - group_name empty: remove individual signals by name (suffix match).
+        Modes:
+          - group_name + signals: remove matching signals within that group only.
+          - group_name only:      remove the entire group and its child signals.
+          - signals only:         remove matching signals from all groups/ungrouped.
 
         Args:
-            signals:    Signal names (or suffixes) to remove. Ignored when group_name is set.
-            group_name: Group to remove. Empty = remove individual signals.
+            signals:    Signal names (or suffixes) to remove.
+            group_name: Scope removal to this group. Empty = search all.
         """
         bridge = bridges.simvision
 
         if group_name:
-            # Remove entire group
             if "{" in group_name or "}" in group_name:
                 return "ERROR: Group name cannot contain { or } characters"
-            grp = "{" + group_name + "}" if " " in group_name else group_name
-            return await bridge.execute(
-                f"__WAVEFORM_REMOVE_GROUP__ {grp}", timeout=30.0
-            )
 
-        # Remove individual signals
-        if not signals:
+        if not signals and not group_name:
             return "ERROR: Provide signals to remove, or group_name to remove a group."
-        sig_str = " ".join(signals)
-        return await bridge.execute(
-            f"__WAVEFORM_REMOVE__ {sig_str}", timeout=30.0
+
+        # Protocol: "__WAVEFORM_REMOVE__ {group_name_or_""} sig1 sig2 ..."
+        # Matches __WAVEFORM_ADD_GROUP__ protocol structure.
+        if group_name:
+            grp = "{" + group_name + "}" if " " in group_name else group_name
+        else:
+            grp = '""'
+        sig_str = " ".join(signals) if signals else ""
+        result = await bridge.execute(
+            f"__WAVEFORM_REMOVE__ {grp} {sig_str}".strip(), timeout=30.0
         )
+        return result
 
     @mcp.tool()
     async def waveform_clear() -> str:
