@@ -594,7 +594,11 @@ async def _run_batch_single(
         try:
             job = json.loads(existing_job)
             pid = job.get("pid", 0)
-            pid_alive = await ssh_run(f"kill -0 {pid} 2>/dev/null && echo ALIVE || echo DEAD")
+            # Guard: pid must be > 0 (kill -0 0 signals own process group → always ALIVE)
+            if pid > 0:
+                pid_alive = await ssh_run(f"kill -0 {pid} 2>/dev/null && echo ALIVE || echo DEAD")
+            else:
+                pid_alive = "DEAD"
             if "ALIVE" in pid_alive:
                 # Previous batch still running → resume polling
                 result, _ = await _poll_batch_log(
@@ -733,9 +737,13 @@ async def _run_batch_regression(
             job = json.loads(existing_job)
             if job.get("type") == "regression":
                 pid = job.get("pid", 0)
-                pid_alive = await ssh_run(
-                    f"kill -0 {pid} 2>/dev/null && echo ALIVE || echo DEAD"
-                )
+                # Guard: pid must be > 0 (kill -0 0 signals own process group → always ALIVE)
+                if pid > 0:
+                    pid_alive = await ssh_run(
+                        f"kill -0 {pid} 2>/dev/null && echo ALIVE || echo DEAD"
+                    )
+                else:
+                    pid_alive = "DEAD"
                 if "ALIVE" in pid_alive:
                     # Current test still running → resume polling
                     current = job.get("current", "")
@@ -745,10 +753,7 @@ async def _run_batch_regression(
                     if current_log:
                         _, _ = await _poll_batch_log(current_log, 600)
                         completed_tests.append(current)
-                else:
-                    # PID dead — check what was completed
-                    completed_tests = job.get("completed", [])
-                    log_file = job.get("log_file", log_file)
+                # else: PID dead → stale job, discard and start fresh
         except (json.JSONDecodeError, KeyError):
             pass
         await ssh_run(f"rm -f {job_file}", timeout=5)
