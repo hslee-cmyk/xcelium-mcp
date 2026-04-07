@@ -11,9 +11,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import logging
 import os
 import re
 import shlex
+
+logger = logging.getLogger(__name__)
 
 # ===================================================================
 # Core utilities (used by ALL modules)
@@ -25,10 +28,6 @@ def sq(s: str) -> str:
     return shlex.quote(s)
 
 
-# Backward-compat alias
-_sq = sq
-
-
 def build_redirect(log_path: str) -> str:
     """Build shell redirect suffix safe for both bash and tcsh.
 
@@ -36,10 +35,6 @@ def build_redirect(log_path: str) -> str:
     Use '>& file' which works in both bash and tcsh.
     """
     return f">& {log_path}"
-
-
-# Backward-compat alias
-_build_redirect = build_redirect
 
 
 class UserInputRequired(Exception):
@@ -99,8 +94,11 @@ def login_shell_cmd(login_shell: str, cmd: str) -> str:
     return f"{login_shell} -l -c '{safe_cmd}'"
 
 
-# Backward-compat alias
-_login_shell_cmd = login_shell_cmd
+def validate_path(path: str, label: str = "path") -> str | None:
+    """Reject paths with traversal components. Returns error string or None if OK."""
+    if ".." in path.split("/"):
+        return f"ERROR: {label} must not contain '..' (path traversal rejected): {path}"
+    return None
 
 
 # ===================================================================
@@ -119,15 +117,12 @@ from xcelium_mcp.registry import (  # noqa: E402, F401
 from xcelium_mcp.batch_runner import (  # noqa: E402, F401
     ExecInfo,
     validate_extra_args,
-    _validate_extra_args,  # backward compat
     _resolve_exec_cmd,
     _run_batch_single,
     _run_batch_regression,
     _poll_batch_log,
     resolve_sim_params,
-    _resolve_sim_params,  # backward compat
     resolve_test_name,
-    _resolve_test_name,  # backward compat
 )
 
 from xcelium_mcp.env_detection import (  # noqa: E402, F401
@@ -175,9 +170,6 @@ async def get_user_tmp_dir() -> str:
     return _USER_TMP
 
 
-# Backward-compat alias
-_get_user_tmp_dir = get_user_tmp_dir
-
 
 def _parse_shm_path(db_list_output: str) -> str:
     """Parse SHM path from xmsim 'database -list' output."""
@@ -216,9 +208,6 @@ async def get_default_sim_dir() -> str:
                 return env_key
     return ""
 
-
-# Backward-compat alias
-_get_default_sim_dir = get_default_sim_dir
 
 
 # ===================================================================
@@ -327,21 +316,29 @@ async def run_full_discovery(
         if existing and existing.get("version", 1) >= 2:
             return f"Registry already exists for {sim_dir}. Use force=True to re-detect."
 
-    tb_type = await _analyze_tb_type(sim_dir)
-    runner_info = await _auto_detect_runner(sim_dir)
+    # Phase A: independent detection (parallelized)
+    tb_type, runner_info, r_root, bridge_tcl = await asyncio.gather(
+        _analyze_tb_type(sim_dir),
+        _auto_detect_runner(sim_dir),
+        ssh_run("git rev-parse --show-toplevel 2>/dev/null || echo ~"),
+        _detect_bridge_tcl(),
+    )
 
     script_name = _extract_script_name(runner_info.get("exec_cmd", ""))
-    r = await ssh_run("git rev-parse --show-toplevel 2>/dev/null || echo ~")
-    project_root = r.strip()
+    project_root = r_root.strip()
     shell_env = await _detect_shell_and_env(sim_dir, script_name, project_root)
 
-    bridge_tcl = await _detect_bridge_tcl()
-    setup_tcls = await _detect_setup_tcls(sim_dir)
-    eda_tools = await _resolve_eda_tools(shell_env)
-    external_tools = await _resolve_external_tools(shell_env)
-    bridge_port = await _detect_bridge_port(sim_dir, bridge_tcl)
-    patch_result = await _patch_legacy_run_script(sim_dir, runner_info)
-    run_info = await _detect_run_dir(sim_dir, runner_info)
+    # Phase B: dependent on shell_env / bridge_tcl (parallelized)
+    setup_tcls, eda_tools, external_tools, bridge_port, patch_result, run_info = (
+        await asyncio.gather(
+            _detect_setup_tcls(sim_dir),
+            _resolve_eda_tools(shell_env),
+            _resolve_external_tools(shell_env),
+            _detect_bridge_port(sim_dir, bridge_tcl),
+            _patch_legacy_run_script(sim_dir, runner_info),
+            _detect_run_dir(sim_dir, runner_info),
+        )
+    )
     run_dir = run_info["run_dir"]
     script_has_cd = run_info["script_has_cd"]
 
@@ -383,8 +380,8 @@ async def run_full_discovery(
     try:
         r = await ssh_run(f"cd {_sd} && {test_cmd}", timeout=30)
         cached_tests = [t.strip() for t in r.strip().splitlines() if t.strip()]
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("test discovery failed (non-fatal): %s", e)
 
     from datetime import datetime
     test_discovery = {
@@ -810,7 +807,7 @@ async def _start_bridge(
     ]
     if runner.get("source_separately") and env_files:
         for ef in env_files:
-            inner_parts.append(f"source {ef}")
+            inner_parts.append(f"source {sq(ef)}")
         inner_parts.append(f"./{script} {test_args}")
         inner_cmd = "; ".join(inner_parts)
         shell_cmd = f"{env_shell} -c '{inner_cmd}'"
@@ -859,11 +856,9 @@ async def _start_bridge(
                         f"  log: {log_file}\n\n"
                         f"Ready. sim_run, get_signal_value etc. available immediately."
                     )
-                except Exception:
+                except Exception as e:
+                    logger.debug("bridge connect attempt failed: %s", e)
                     continue
 
     log_tail = await ssh_run(f"tail -20 {log_file} 2>/dev/null", timeout=5)
     return f"ERROR: bridge not ready after {timeout}s.\nLog tail:\n{log_tail}"
-
-
-    # _start_batch removed — use sim_batch_run tool directly for batch execution.

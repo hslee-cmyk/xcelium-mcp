@@ -364,6 +364,13 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             timeout: Response timeout in seconds.
             target:  "xmsim" | "simvision" | "auto" (default: auto).
         """
+        # Security: block dangerous Tcl commands that could execute arbitrary OS commands
+        _TCL_DENYLIST = ["exec ", "open ", "file delete", "file rename", "exit", "source "]
+        cmd_lower = tcl_cmd.strip().lower()
+        for denied in _TCL_DENYLIST:
+            if cmd_lower.startswith(denied) or f"\n{denied}" in cmd_lower or f"; {denied}" in cmd_lower:
+                return f"ERROR: Tcl command '{denied.strip()}' is blocked for security. Use dedicated MCP tools instead."
+
         bridge = bridges.get_bridge(target)
         return await bridge.execute(tcl_cmd, timeout=float(timeout))
 

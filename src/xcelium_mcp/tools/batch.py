@@ -11,6 +11,7 @@ from xcelium_mcp.sim_runner import (
     UserInputRequired,
     get_default_sim_dir,
     run_full_discovery,
+    validate_path,
 )
 from xcelium_mcp.registry import load_sim_config
 from xcelium_mcp.env_detection import _load_or_detect_runner
@@ -92,6 +93,12 @@ def register(
             probe_signals = []
         if dump_signals is None:
             dump_signals = []
+        # Security: path traversal validation
+        for p, label in [(sim_dir, "sim_dir"), (shm_path, "shm_path")]:
+            if p:
+                err = validate_path(p, label)
+                if err:
+                    return err
         # v4.3: enum validation
         if dump_depth and dump_depth not in ("boundary", "all"):
             return f"Invalid dump_depth='{dump_depth}'. Must be 'boundary', 'all', or '' (auto)."

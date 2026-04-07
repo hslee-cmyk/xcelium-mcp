@@ -11,6 +11,7 @@ Architecture note:
 from __future__ import annotations
 
 import hashlib
+import shlex
 from collections import deque
 from pathlib import Path
 
@@ -63,8 +64,10 @@ async def _resolve_simvisdbutil() -> str:
 
 # ---------------------------------------------------------------------------
 # In-memory cache: (shm_path, frozenset(signals), start_ns, end_ns) → CSV path
+# LRU-bounded to prevent unbounded memory growth in long sessions.
 # ---------------------------------------------------------------------------
 
+_MAX_CACHE_SIZE = 32
 _cache: dict[tuple, str] = {}
 
 
@@ -147,7 +150,7 @@ async def extract(
         env_files = runner.get("env_files", [])
         if runner.get("source_separately") and env_files:
             env_shell = runner.get("env_shell", "/bin/csh")
-            source_cmd = "; ".join(f"source {f}" for f in env_files)
+            source_cmd = "; ".join(f"source {shlex.quote(f)}" for f in env_files)
             cmd = f"{env_shell} -c '{source_cmd}; {svdb_cmd}'"
         else:
             login_shell = runner.get("login_shell", "/bin/sh")
@@ -165,6 +168,10 @@ async def extract(
             f"Output: {out}"
         )
 
+    # LRU eviction: remove oldest entry when cache is full
+    if len(_cache) >= _MAX_CACHE_SIZE:
+        oldest_key = next(iter(_cache))
+        del _cache[oldest_key]
     _cache[key] = output_path
     return output_path
 

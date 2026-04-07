@@ -486,24 +486,28 @@ async def _resolve_eda_tools(shell_env: dict) -> dict[str, str]:
     env_files = shell_env.get("env_files", [])
     login_shell = shell_env.get("login_shell", "/bin/sh")
 
-    result: dict[str, str] = {}
+    # Batch all which queries into a single subprocess call
+    which_cmds = " && ".join(f"echo __TOOL_{t}__=$(which {t})" for t in tools)
+    if shell_env.get("source_separately") and env_files:
+        source_cmd = " && ".join(f"source {sq(f)}" for f in env_files)
+        r = await ssh_run(
+            f"{env_shell} -c '{source_cmd} && {which_cmds}'",
+            timeout=15,
+        )
+    else:
+        r = await ssh_run(
+            login_shell_cmd(login_shell, which_cmds),
+            timeout=15,
+        )
 
-    for tool in tools:
-        if shell_env.get("source_separately") and env_files:
-            source_cmd = " && ".join(f"source {f}" for f in env_files)
-            r = await ssh_run(
-                f"{env_shell} -c '{source_cmd} && which {tool}'",
-                timeout=15,
-            )
-        else:
-            # No '2>/dev/null' inside tcsh — causes Ambiguous redirect error
-            r = await ssh_run(
-                login_shell_cmd(login_shell, f"which {tool}"),
-                timeout=15,
-            )
-        path = r.strip()
-        if path and "/" in path:
-            result[tool] = path
+    result: dict[str, str] = {}
+    for line in r.strip().splitlines():
+        for tool in tools:
+            marker = f"__TOOL_{tool}__="
+            if line.startswith(marker):
+                path = line[len(marker):].strip()
+                if path and "/" in path:
+                    result[tool] = path
 
     if "simvisdbutil" not in result:
         raise RuntimeError(
@@ -524,20 +528,25 @@ async def _resolve_external_tools(shell_env: dict) -> dict[str, str]:
     External tools like gs/convert are system-level utilities expected to be in the
     default PATH, not behind EDA-specific environment setup.
     """
-    tools = ["gs", "gswin64c", "gswin32c", "convert", "magick"]
+    # Only Linux tools — Windows variants (gswin64c/gswin32c) handled in screenshot.py local fallback
+    tools = ["gs", "convert", "magick"]
     login_shell = shell_env.get("login_shell", "/bin/sh")
 
-    result: dict[str, str] = {}
+    # Batch all which queries into a single subprocess call
+    which_cmds = " && ".join(f"echo __TOOL_{t}__=$(which {t})" for t in tools)
+    r = await ssh_run(
+        login_shell_cmd(login_shell, which_cmds),
+        timeout=10,
+    )
 
-    for tool in tools:
-        # No '2>/dev/null' inside tcsh — causes Ambiguous redirect error
-        r = await ssh_run(
-            login_shell_cmd(login_shell, f"which {tool}"),
-            timeout=10,
-        )
-        path = r.strip()
-        if path and "/" in path:
-            result[tool] = path
+    result: dict[str, str] = {}
+    for line in r.strip().splitlines():
+        for tool in tools:
+            marker = f"__TOOL_{tool}__="
+            if line.startswith(marker):
+                path = line[len(marker):].strip()
+                if path and "/" in path:
+                    result[tool] = path
 
     return result
 

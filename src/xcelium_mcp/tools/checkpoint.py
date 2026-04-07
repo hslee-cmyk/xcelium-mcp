@@ -1,7 +1,10 @@
 """Checkpoint management tools."""
 from __future__ import annotations
 
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 from mcp.server.fastmcp import FastMCP
 
@@ -123,8 +126,8 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             try:
                 from xcelium_mcp.registry import load_sim_config
                 cfg = await load_sim_config(resolved_dir)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("config load for checkpoint cleanup failed: %s", e)
             xmls_path = "xmls"
             if cfg and "eda_tools" in cfg:
                 xrun = cfg["eda_tools"].get("xrun", "")
@@ -194,8 +197,8 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             try:
                 from xcelium_mcp.registry import load_sim_config
                 cfg = await load_sim_config(resolved_dir)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("config load for xmrm cleanup failed: %s", e)
             xmrm_path = "xmrm"
             login_shell = "/usr/bin/tcsh"
             if cfg and "eda_tools" in cfg:
@@ -238,7 +241,3 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             for n in result["kept"]:
                 lines.append(f"  - {n}")
         return "\n".join(lines)
-
-
-# Backward-compat alias
-_restore_checkpoint_impl = restore_checkpoint_impl

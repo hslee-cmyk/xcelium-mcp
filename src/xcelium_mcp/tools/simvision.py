@@ -192,7 +192,7 @@ def register(
         inner_parts = [f"setenv DISPLAY {display}"]
         if runner.get("source_separately") and env_files:
             for ef in env_files:
-                inner_parts.append(f"source {ef}")
+                inner_parts.append(f"source {sq(ef)}")
         inner_parts.append(f"cd {run_dir_path}")
         inner_parts.append(f"simvision{shm_arg}")
         inner_cmd = "; ".join(inner_parts)

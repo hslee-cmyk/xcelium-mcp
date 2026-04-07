@@ -384,19 +384,23 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         - [ ] **FIFO**: Check for overflow/underflow conditions
 
         ## Suggested Next Steps
-        - `get_signal_value` — read specific signals of interest
+        - `inspect_signal(action="value")` — read specific signals of interest
         - `inspect_signal(action="drivers")` — trace X/Z values to their source
         - `waveform(action="add")` — add signals to waveform for visual inspection
         - `sim_run` with duration — step the simulation forward
-        - `watch_signal` — set conditional breakpoints on suspicious signals
+        - `watch(action="set")` — set conditional breakpoints on suspicious signals
         """))
 
         report = "\n".join(sections)
 
         # 5. Try to capture a screenshot
         try:
+            cfg = None
+            sim_dir = await get_default_sim_dir()
+            if sim_dir:
+                cfg = await load_sim_config(sim_dir)
             ps_path = await bridge.screenshot()
-            png_bytes = await ps_to_png(ps_path, config=config)
+            png_bytes = await ps_to_png(ps_path, config=cfg)
             screenshot = Image(data=png_bytes, format="png")
             return [report, screenshot]
         except Exception as e:
@@ -458,10 +462,6 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         )
 
         Path(output_path).write_text(content, encoding="utf-8")
-
-        if not Path(output_path).exists():
-            return f"ERROR: Failed to write debug context to {output_path}"
-
         return f"Debug context exported to: {output_path}"
 
     return {"generate_debug_tcl": debug_snapshot}

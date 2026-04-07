@@ -508,7 +508,7 @@ def _resolve_exec_cmd(runner: dict, regression: bool = False) -> ExecInfo:
 
     # 4. build full cmd (env sourcing)
     if runner.get("source_separately"):
-        sources = " && ".join(f"source {f}" for f in runner.get("env_files", []))
+        sources = " && ".join(f"source {sq(f)}" for f in runner.get("env_files", []))
         env_shell = runner.get("env_shell", runner["login_shell"])
         cmd = f"{env_shell} -c '{sources} && {script_run}'"
     else:
@@ -638,13 +638,15 @@ async def _run_batch_single(
 
     if pid:
         from datetime import datetime
+        import base64 as _b64
         job_info = json.dumps({
             "pid": pid,
             "log_file": log_file,
             "test_name": test_name,
             "started_at": datetime.now().isoformat(),
         })
-        await ssh_run(f"cat > {job_file} << 'MCPEOF'\n{job_info}\nMCPEOF", timeout=5)
+        b64 = _b64.b64encode(job_info.encode()).decode()
+        await ssh_run(f"echo {b64} | base64 -d > {job_file}", timeout=5)
         # P6-5: background watcher — touch {log}.done when PID exits
         done_file = f"{log_file}.done"
         await ssh_run(
@@ -814,6 +816,7 @@ async def _run_batch_regression(
 
             # Save job state (for resume on reconnection)
             from datetime import datetime
+            import base64 as _b64
             job_info = json.dumps({
                 "type": "regression",
                 "pid": 0,  # updated after nohup
@@ -823,7 +826,8 @@ async def _run_batch_regression(
                 "completed": completed_tests,
                 "started_at": datetime.now().isoformat(),
             })
-            await ssh_run(f"cat > {job_file} << 'MCPEOF'\n{job_info}\nMCPEOF", timeout=5)
+            b64 = _b64.b64encode(job_info.encode()).decode()
+            await ssh_run(f"echo {b64} | base64 -d > {job_file}", timeout=5)
 
             # B-0 fix: subshell wrapping, stdbuf removed (Xcelium incompatible)
             # P6-5b: echo $! > pid_file inside subshell — aligns with _run_batch_single
@@ -845,7 +849,8 @@ async def _run_batch_regression(
                     "log_file": log_file, "current": test_name,
                     "current_log": test_log, "completed": completed_tests,
                 })
-                await ssh_run(f"cat > {job_file} << 'MCPEOF'\n{job_update}\nMCPEOF", timeout=5)
+                b64_upd = _b64.b64encode(job_update.encode()).decode()
+                await ssh_run(f"echo {b64_upd} | base64 -d > {job_file}", timeout=5)
                 # P6-5: PID watcher for per-test done marker
                 # >& /dev/null: B-0 fix — detach from asyncio PIPE fds
                 test_done = f"{test_log}.done"
@@ -1073,8 +1078,3 @@ async def resolve_test_name(short_name: str, sim_dir: str = "") -> str:
             + "\nSpecify more precisely."
         )
 
-
-# Backward-compat aliases
-_validate_extra_args = validate_extra_args
-_resolve_sim_params = resolve_sim_params
-_resolve_test_name = resolve_test_name

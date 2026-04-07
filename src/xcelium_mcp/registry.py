@@ -187,6 +187,16 @@ async def config_action(action: str, file: str, key: str, value: str) -> str:
         return json.dumps(val, indent=2) if isinstance(val, (dict, list)) else str(val)
 
     if action == "set":
+        # Security: block overwriting critical keys that could lead to command injection
+        _PROTECTED_KEYS = {
+            "runner.script", "runner.login_shell", "runner.env_shell",
+            "eda_tools.simvisdbutil", "eda_tools.xmsim", "eda_tools.xrun",
+            "external_tools.gs", "external_tools.convert", "external_tools.magick",
+            "test_discovery.command",
+        }
+        if key in _PROTECTED_KEYS:
+            return f"ERROR: Key '{key}' is protected. Re-run sim_discover to update it."
+
         parsed = _parse_json_value(value)
         _dot_set(data, key, parsed)
         _write_json(path, data)

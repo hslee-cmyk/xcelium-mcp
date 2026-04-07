@@ -11,6 +11,7 @@ Phase 3 unblock:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -44,6 +45,11 @@ def compute_compile_hash(sim_dir: str) -> str:
             except OSError:
                 pass
     return hashlib.md5("\n".join(mtimes).encode()).hexdigest()[:8]
+
+
+async def compute_compile_hash_async(sim_dir: str) -> str:
+    """Async wrapper — offloads os.walk to thread pool to avoid blocking event loop."""
+    return await asyncio.to_thread(compute_compile_hash, sim_dir)
 
 
 # ---------------------------------------------------------------------------
