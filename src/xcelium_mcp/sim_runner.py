@@ -514,7 +514,7 @@ async def _extract_top_module_from_script(sim_dir: str, runner: dict) -> str:
         return ""
 
     content = await ssh_run(
-        f"cat {sq(sim_dir + '/' + script_name)} 2>/dev/null", timeout=10
+        f"cat {sq(sim_dir + '/' + script_name)}", timeout=10
     )
     if not content:
         return ""
@@ -632,7 +632,7 @@ async def _analyze_sdf_annotate(
     # Step 2: find file defining top module
     top_v = await ssh_run(
         f"grep -rl 'module\\s\\+{effective_top}\\b' {sq(sim_dir)} "
-        f"--include='*.v' --include='*.sv' 2>/dev/null | head -1",
+        f"--include='*.v' --include='*.sv' | head -1",
         timeout=10,
     )
     if not top_v.strip():
@@ -646,12 +646,12 @@ async def _analyze_sdf_annotate(
     if "$sdf_annotate" not in content:
         # 3a. includes
         includes = await ssh_run(
-            f"grep -oP '`include\\s+\"\\K[^\"]+' {sq(top_v_path)} 2>/dev/null",
+            f"grep -oP '`include\\s+\"\\K[^\"]+' {sq(top_v_path)}",
             timeout=10,
         )
         # 3b. instantiations
         instances = await ssh_run(
-            f"grep -oP '^\\s*(\\w+)\\s+\\w+\\s*\\(' {sq(top_v_path)} 2>/dev/null",
+            f"grep -oP '^\\s*(\\w+)\\s+\\w+\\s*\\(' {sq(top_v_path)}",
             timeout=10,
         )
         # 3c. collect files
@@ -664,7 +664,7 @@ async def _analyze_sdf_annotate(
             if inst_mod:
                 f = await ssh_run(
                     f"grep -rl 'module\\s\\+{inst_mod}\\b' {sq(sim_dir)} "
-                    f"--include='*.v' --include='*.sv' 2>/dev/null | head -1",
+                    f"--include='*.v' --include='*.sv' | head -1",
                     timeout=10,
                 )
                 if f.strip():
@@ -674,7 +674,7 @@ async def _analyze_sdf_annotate(
         if search_files:
             files_arg = " ".join(sq(f) for f in search_files)
             ctx = await ssh_run(
-                f"grep -n -B10 -A2 '\\$sdf_annotate' {files_arg} 2>/dev/null",
+                f"grep -n -B10 -A2 '\\$sdf_annotate' {files_arg}",
                 timeout=10,
             )
             if ctx.strip():
