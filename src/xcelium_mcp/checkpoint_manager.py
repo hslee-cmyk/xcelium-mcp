@@ -6,8 +6,7 @@ Architecture:
   compile_hash: MD5 of inca/ directory object file mtimes (detects recompile)
 
 Phase 3 unblock:
-  find_nearest_checkpoint() resolves P3-3 (_find_nearest_checkpoint dependency
-  in request_additional_signals).
+  find_nearest_checkpoint() resolves P3-3 (used by bisect_restore_and_debug).
 """
 
 from __future__ import annotations

@@ -168,7 +168,14 @@ def register(
         # Invalidate CSV cache for this sim_dir so next bisect_csv reads fresh SHM
         _csv_cache.clear_cache()
 
-        return f"sim_batch_run {test_name} completed.\n\n{log}"
+        # Resolve SHM path for downstream tools (bisect_signal, extract_csv)
+        shm_path = f"{resolved_sim_dir}/dump/ci_top_{test_name}.shm"
+
+        return (
+            f"sim_batch_run {test_name} completed.\n\n"
+            f"shm_path: {shm_path}\n\n"
+            f"{log}"
+        )
 
     @mcp.tool()
     async def sim_batch_regression(

@@ -27,7 +27,6 @@ from xcelium_mcp.env_detection import _load_or_detect_runner
 from xcelium_mcp.batch_runner import _resolve_exec_cmd, extract_setup_lines
 import xcelium_mcp.csv_cache as csv_cache
 import xcelium_mcp.debug_tools as debug_tools
-import xcelium_mcp.checkpoint_manager as checkpoint_manager
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +80,7 @@ async def _bisect_signal_dump_impl(
         return (
             f"Signal '{signal}' not found in SHM.\n"
             f"{result['error']}\n\n"
-            "Tip: Call request_additional_signals to re-run simulation with this signal probed."
+            "Tip: Re-run with sim_batch_run(dump_signals=[...]) to include this signal."
         )
 
     if not result["found"]:
@@ -482,82 +481,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         return f"Probe added for {len(signals)} signal(s). {result}"
 
     # bisect_signal_dump removed — use bisect_signal(shm_path=...) instead.
-
-    @mcp.tool()
-    async def request_additional_signals(
-        missing_signals: list[str],
-        shm_path: str,
-        bug_time_ns: int = 0,
-        available_checkpoints: list[str] | None = None,
-    ) -> str:
-        """Signal absence handler — presents capture mode options when signals are missing from SHM.
-
-        Called automatically by bisect_signal (Mode A) when a signal is not in the SHM dump.
-        Presents 3 options:
-          [A]  Full re-run with extended probe scope (sim_batch_run + prepare_dump_scope)
-          [A'] Restore from nearest checkpoint + add probes + partial re-run
-          [B]  Bridge mode: attach to simulator, add probes live (requires active connection)
-
-        Args:
-            missing_signals:       Signals not found in the SHM dump.
-            shm_path:              SHM path being analyzed.
-            bug_time_ns:           Approximate bug time (used for checkpoint selection in [A']).
-            available_checkpoints: Known checkpoint names (auto-queried from registry if empty).
-        """
-        if available_checkpoints is None:
-            available_checkpoints = []
-        # Auto-query nearest checkpoints from checkpoint_manager when not provided
-        resolved_checkpoints = list(available_checkpoints)
-        if not resolved_checkpoints and bug_time_ns:
-            sim_dir = await get_default_sim_dir()
-            if sim_dir:
-                # Extract stem from .shm directory (not .trn file inside it)
-                shm_p = Path(shm_path)
-                shm_stem = shm_p.parent.stem if shm_p.parent.suffix == ".shm" else shm_p.stem
-                nearest = checkpoint_manager.find_nearest_checkpoint(sim_dir, bug_time_ns, shm_stem=shm_stem)
-                resolved_checkpoints = [c["_key"] for c in nearest[:3]]
-
-        lines = [
-            f"Signals not in SHM dump ({shm_path}):",
-        ]
-        for s in missing_signals:
-            lines.append(f"  - {s}")
-        lines.append("")
-        lines.append("Select a capture strategy:")
-        lines.append("")
-        lines.append(
-            "[A] Full re-run with extended probe scope\n"
-            "    \u2192 sim_batch_run(dump_signals=[missing_signals])\n"
-            "    \u2192 New SHM with all signals included\n"
-            "    Cost: full simulation time"
-        )
-        lines.append("")
-
-        a_prime = (
-            "[A'] Restore from nearest checkpoint + add probes + partial run\n"
-            "    \u2192 restore_checkpoint + probe_add_signals + sim_run\n"
-            "    \u2192 Faster than full re-run\n"
-            "    Cost: partial simulation time from checkpoint"
-        )
-        lines.append(a_prime)
-
-        if bug_time_ns:
-            lines.append(f"    Bug time: {bug_time_ns}ns")
-        if resolved_checkpoints:
-            lines.append(f"    Available checkpoints: {', '.join(resolved_checkpoints)}")
-        else:
-            lines.append("    No checkpoints found (use [A] for now or save_checkpoint first)")
-
-        lines.append("")
-        lines.append(
-            "[B] Bridge mode: add probes to live simulator session\n"
-            "    \u2192 probe_add_signals(missing_signals) + sim_run\n"
-            "    \u2192 Requires active SimVision connection (connect_simulator)\n"
-            "    Cost: none if bridge already connected"
-        )
-        lines.append("")
-        lines.append("Reply with [A], [A'], or [B] to proceed.")
-        return "\n".join(lines)
+    # request_additional_signals removed — AI calls sim_batch_run(dump_signals=) directly.
 
     @mcp.tool()
     async def generate_debug_tcl(
