@@ -51,7 +51,7 @@ async def _bisect_signal_dump_impl(
     end_ns: int = 0,
     context_signals: list[str] | None = None,
 ) -> str:
-    """Implementation of bisect_signal_dump — callable without a registered tool reference."""
+    """Implementation of bisect_signal Mode A — callable without a registered tool reference."""
     if context_signals is None:
         context_signals = []
     all_signals = list({signal} | set(context_signals))
@@ -284,35 +284,34 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         signal: str,
         op: str,
         value: str,
-        start_ns: int,
-        end_ns: int,
+        start_ns: int = 0,
+        end_ns: int = 0,
         precision_ns: int = 1000,
         shm_path: str = "",
+        context_signals: list[str] | None = None,
     ) -> str:
         """Find when a signal condition first becomes true.
 
         Mode A (preferred, no active simulator required): when shm_path is given,
-        uses bisect_signal_dump — extracts CSV from SHM and performs in-memory
-        binary search.  No bridge connection needed.
+        extracts CSV from SHM and performs in-memory binary search.
+        No bridge connection needed.
 
         Mode B (bridge, legacy): when shm_path is empty and a bridge is connected,
         uses the simulator's native __BISECT__ binary search with save/restore.
 
-        v2 API: shm_path parameter is new; all other parameters are unchanged.
-
         Args:
-            signal:       Full hierarchical signal path.
-            op:           Comparison operator: "eq","ne","gt","lt","change"
-                          (bridge mode also accepts "==", "!=", etc.)
-            value:        Target value (hex/dec/oct; ignored for "change").
-            start_ns:     Start of search range in nanoseconds.
-            end_ns:       End of search range in nanoseconds.
-            precision_ns: (Bridge mode) Stop when range < this (default 1000ns).
-            shm_path:     SHM dump path for Mode A (CSV-based).  Empty = Mode B.
+            signal:          Full hierarchical signal path.
+            op:              Comparison operator: "eq","ne","gt","lt","change"
+                             (bridge mode also accepts "==", "!=", etc.)
+            value:           Target value (hex/dec/oct; ignored for "change").
+            start_ns:        Start of search range in nanoseconds.
+            end_ns:          End of search range in nanoseconds (0 = to end).
+            precision_ns:    (Bridge mode) Stop when range < this (default 1000ns).
+            shm_path:        SHM dump path for Mode A (CSV-based). Empty = Mode B.
+            context_signals: (Mode A) Additional signals to include in CSV for context.
         """
         if shm_path:
-            # Mode A: SHM dump → CSV → in-memory search (P4-7)
-            # Use module-level helper to avoid forward-reference into closure
+            # Mode A: SHM dump → CSV → in-memory search
             return await _bisect_signal_dump_impl(
                 shm_path=shm_path,
                 signal=signal,
@@ -320,6 +319,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
                 value=value,
                 start_ns=start_ns,
                 end_ns=end_ns,
+                context_signals=context_signals,
             )
 
         # Mode B: bridge-based binary search (legacy)
@@ -343,8 +343,8 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         """Restore a checkpoint, add probe signals, then run with optional watchpoint stop.
 
         Pattern: restore → probe_add_signals → [set watchpoint] → sim_run → stop.
-        Use for interactive debug after bisect_signal_dump identifies a bug time.
-        When shm_path is given, runs bisect_signal_dump after stop for immediate analysis.
+        Use for interactive debug after bisect_signal identifies a bug time.
+        When shm_path is given, runs bisect_signal(shm_path) after stop for immediate analysis.
 
         Args:
             checkpoint_name:   Checkpoint name to restore.
@@ -353,7 +353,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             watch_op:          Watchpoint operator (==, !=, >, <). Default "==".
             watch_value:       Watchpoint value. Required when watch_signal_path is set.
             run_duration:      Fallback run duration when no watchpoint (e.g. "10000ns").
-            shm_path:          If given, run bisect_signal_dump(watch_signal, ...) after stop.
+            shm_path:          If given, run bisect_signal(shm_path=...) after stop for CSV analysis.
             sim_dir:           Simulation directory (auto-detected if empty).
             keep_alive:        True = leave simulator running after analysis (default).
         """
@@ -481,41 +481,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         result = await bridge.execute(cmd)
         return f"Probe added for {len(signals)} signal(s). {result}"
 
-    @mcp.tool()
-    async def bisect_signal_dump(
-        shm_path: str,
-        signal: str,
-        op: str,
-        value: str,
-        start_ns: int = 0,
-        end_ns: int = 0,
-        context_signals: list[str] | None = None,
-    ) -> str:
-        """Binary search in SHM dump CSV for first occurrence of a signal condition.
-
-        No simulator connection required — pure offline CSV analysis.
-        If signal is absent from SHM, suggests calling request_additional_signals.
-
-        Op values: "eq" (==), "ne" (!=), "gt" (>), "lt" (<), "change" (any change).
-
-        Args:
-            shm_path:        SHM dump file path.
-            signal:          Signal path to search.
-            op:              Comparison operator.
-            value:           Target value (hex/dec/oct; ignored for "change").
-            start_ns:        Search start time in nanoseconds.
-            end_ns:          Search end time in nanoseconds (0 = to end).
-            context_signals: Additional signals to include in CSV extract for context.
-        """
-        return await _bisect_signal_dump_impl(
-            shm_path=shm_path,
-            signal=signal,
-            op=op,
-            value=value,
-            start_ns=start_ns,
-            end_ns=end_ns,
-            context_signals=context_signals,
-        )
+    # bisect_signal_dump removed — use bisect_signal(shm_path=...) instead.
 
     @mcp.tool()
     async def request_additional_signals(
@@ -526,7 +492,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
     ) -> str:
         """Signal absence handler — presents capture mode options when signals are missing from SHM.
 
-        Called automatically by bisect_signal_dump when a signal is not in the SHM dump.
+        Called automatically by bisect_signal (Mode A) when a signal is not in the SHM dump.
         Presents 3 options:
           [A]  Full re-run with extended probe scope (sim_batch_run + prepare_dump_scope)
           [A'] Restore from nearest checkpoint + add probes + partial re-run
