@@ -109,6 +109,13 @@ def register(
             name_opt = f" -name {name}" if name else ""
             try:
                 result = await bridge.execute(f"database open {shm_path}{name_opt}")
+                # explorefull: load full signal tree so waveform add resolves signals
+                try:
+                    db_name = result.strip() if result.strip() else name
+                    if db_name:
+                        await bridge.execute(f"database explorefull -using {db_name}")
+                except (TclError, ConnectionError, TimeoutError):
+                    pass  # best-effort — some DBs may not support explorefull
                 return f"Database opened (SimVision): {result}"
             except (TclError, ConnectionError, TimeoutError) as e:
                 return f"ERROR: SimVision database open failed: {e}"
@@ -219,6 +226,14 @@ def register(
                     try:
                         ping = await bridge.connect()
                         bridges.set_simvision(bridge)
+                        # explorefull: ensure signal tree is loaded for waveform add
+                        try:
+                            db_list = await bridge.execute("database find")
+                            for db in db_list.strip().splitlines():
+                                if db.strip():
+                                    await bridge.execute(f"database explorefull -using {db.strip()}")
+                        except (TclError, ConnectionError, TimeoutError):
+                            pass
                         return (
                             f"SimVision started and connected.\n"
                             f"  display: {display}\n"
