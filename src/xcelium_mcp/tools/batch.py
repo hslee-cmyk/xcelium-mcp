@@ -23,6 +23,17 @@ import xcelium_mcp.csv_cache as _csv_cache
 RestoreCheckpointFn = Callable[..., Coroutine[Any, Any, str]]
 
 
+def _build_dump_window(start_ms: int, end_ms: int) -> dict | None:
+    """Validate and build dump_window dict from flat MCP params."""
+    if start_ms < 0 or end_ms < 0:
+        raise ValueError(f"dump_window values must be >= 0 (got start={start_ms}, end={end_ms})")
+    if start_ms == 0 and end_ms == 0:
+        return None
+    if end_ms <= start_ms:
+        raise ValueError(f"Invalid dump_window: end_ms ({end_ms}) must be > start_ms ({start_ms})")
+    return {"start_ms": start_ms, "end_ms": end_ms}
+
+
 def register(
     mcp: FastMCP,
     bridges: BridgeManager,
@@ -144,11 +155,10 @@ def register(
             effective_mode = sim_mode or runner.get("default_mode", "rtl")
             # v4.3: dump_depth + dump_window
             effective_dump_depth = dump_depth if dump_depth else None
-            dump_window = None
-            if dump_window_start_ms > 0 or dump_window_end_ms > 0:
-                if dump_window_end_ms <= dump_window_start_ms:
-                    return f"Invalid dump_window: end_ms ({dump_window_end_ms}) must be > start_ms ({dump_window_start_ms})"
-                dump_window = {"start_ms": dump_window_start_ms, "end_ms": dump_window_end_ms}
+            try:
+                dump_window = _build_dump_window(dump_window_start_ms, dump_window_end_ms)
+            except ValueError as e:
+                return str(e)
             log = await _run_batch_single(
                 sim_dir=resolved_sim_dir,
                 test_name=test_name,
@@ -264,11 +274,10 @@ def register(
         # Execute regression
         try:
             effective_dump_depth = dump_depth if dump_depth else None
-            dump_window = None
-            if dump_window_start_ms > 0 or dump_window_end_ms > 0:
-                if dump_window_end_ms <= dump_window_start_ms:
-                    return f"Invalid dump_window: end_ms ({dump_window_end_ms}) must be > start_ms ({dump_window_start_ms})"
-                dump_window = {"start_ms": dump_window_start_ms, "end_ms": dump_window_end_ms}
+            try:
+                dump_window = _build_dump_window(dump_window_start_ms, dump_window_end_ms)
+            except ValueError as e:
+                return str(e)
             summary = await _run_batch_regression(
                 sim_dir=resolved_sim_dir,
                 test_list=test_list,

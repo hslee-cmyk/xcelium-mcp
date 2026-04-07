@@ -7,6 +7,7 @@ parameter resolution, and test name resolution.
 from __future__ import annotations
 
 import asyncio
+import base64 as _b64
 import json
 from pathlib import Path
 import re as _re
@@ -260,7 +261,7 @@ def _inject_dump_window(content: str, dump_window: dict) -> str:
 
     # 기존 run 명령 제거
     lines = content.splitlines()
-    filtered = [line for line in lines if not _re.match(r"\s*run\b", line)]
+    filtered = [line for line in lines if not _re.match(r"\s*run(\s|$)", line)]
 
     window_tcl = ["probe -disable"]
     if start_ms > 0:
@@ -284,6 +285,10 @@ async def _handle_sdf_override(
 
     Returns extra_args string to append (e.g. "-define NODLY -tfile ...").
     """
+    # Validate sdf_file path (prevent command injection)
+    if not _re.fullmatch(r"[\w./\-]+", sdf_file):
+        raise ValueError(f"Invalid sdf_file path: {sdf_file!r}")
+
     from xcelium_mcp.sim_runner import get_user_tmp_dir
 
     config = await load_sim_config(sim_dir)
@@ -317,8 +322,10 @@ async def _handle_sdf_override(
         tfile_lines.append(";")
     tfile_content = "\n".join(tfile_lines) + "\n"
 
+    # Write tfile via base64 (avoid heredoc delimiter injection)
+    b64 = _b64.b64encode(tfile_content.encode()).decode()
     await ssh_run(
-        f"cat > {sq(tfile_path)} << 'TFILE_EOF'\n{tfile_content}TFILE_EOF",
+        f"echo {sq(b64)} | base64 -d > {sq(tfile_path)}",
         timeout=10,
     )
 
@@ -327,7 +334,7 @@ async def _handle_sdf_override(
     return " ".join(extra_defines + [elab_extra])
 
 
-async def _patch_tb_sdf_guard(sim_dir: str, sdf_info: dict):
+async def _patch_tb_sdf_guard(sim_dir: str, sdf_info: dict) -> None:
     """Patch TB RTL: add `ifndef MCP_SDF_OVERRIDE guard around $sdf_annotate.
 
     Only called when sdf_guard_define is None (no existing guard).
@@ -355,8 +362,10 @@ async def _patch_tb_sdf_guard(sim_dir: str, sdf_info: dict):
     )
 
     if patched != content:
+        # Write via base64 (avoid heredoc delimiter injection)
+        b64 = _b64.b64encode(patched.encode()).decode()
         await ssh_run(
-            f"cat > {sq(top_v)} << 'PATCH_EOF'\n{patched}PATCH_EOF",
+            f"echo {sq(b64)} | base64 -d > {sq(top_v)}",
             timeout=10,
         )
 
@@ -517,7 +526,7 @@ async def _run_batch_single(
     timeout: int = 600,
     sim_mode: str = "rtl",
     extra_args: str = "",
-    dump_depth: str = None,
+    dump_depth: str | None = None,
     dump_signals: list[str] | None = None,
     dump_window: dict | None = None,
     sdf_file: str = "",
@@ -671,7 +680,7 @@ async def _run_batch_regression(
     extra_args: str = "",
     save_checkpoints: bool = False,
     l1_time: str = "",
-    dump_depth: str = None,
+    dump_depth: str | None = None,
     dump_signals: list[str] | None = None,
     dump_window: dict | None = None,
     sdf_file: str = "",
@@ -769,9 +778,11 @@ async def _run_batch_regression(
             test_log = f"{user_tmp}/regression_{ts}_{sq(test_name)}.log"
             env_prefix = f"TEST_NAME={sq(test_name)} "
 
-            # SHM naming: preprocess setup_tcl for test-specific SHM path.
-            # Skip when save_checkpoints — _build_checkpoint_tcl already handles
-            # SHM replacement via _replace_shm_stems and sets its own MCP_INPUT_TCL.
+            # SHM naming + probe scope + dump window: preprocess setup_tcl.
+            # Skip when save_checkpoints — _build_checkpoint_tcl handles SHM
+            # replacement and sets its own MCP_INPUT_TCL.
+            # NOTE: dump_depth/dump_window are ignored when save_checkpoints=True.
+            # Checkpoints need full probe scope for later restore+debug.
             if not (save_checkpoints and setup_lines):
                 preprocessed_tcl = await _preprocess_setup_tcl(
                     sim_dir, runner, test_name, effective_sim_mode,
@@ -959,7 +970,7 @@ def resolve_sim_params(
     sim_mode: str = "rtl",
     extra_args: str = "",
     timeout: int = 600,
-    dump_depth: str = None,
+    dump_depth: str | None = None,
 ) -> dict:
     """Resolve simulation parameters from registry schema — Single Point of Change.
 
