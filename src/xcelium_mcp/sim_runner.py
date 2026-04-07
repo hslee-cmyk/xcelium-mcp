@@ -416,7 +416,7 @@ async def run_full_discovery(
 
     # v4.3: $sdf_annotate analysis
     try:
-        sdf_info = await _analyze_sdf_annotate(sim_dir, runner_info, top_module)
+        sdf_info = await _analyze_sdf_annotate(sim_dir, config["runner"], top_module)
         config["sdf_info"] = sdf_info
     except UserInputRequired:
         # top module 자동 탐지 실패 → sdf_info 없이 진행 (사용자가 재호출 시 top_module 제공)
