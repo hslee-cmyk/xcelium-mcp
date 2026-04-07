@@ -87,9 +87,9 @@ def login_shell_cmd(login_shell: str, cmd: str) -> str:
     if "tcsh" in login_shell or "csh" in login_shell:
         return (
             f"{login_shell} -c '"
-            f"set noglob; "   # prevent [] glob expansion on signal names
             f"if (-f ~/.tcshrc) source ~/.tcshrc >& /dev/null; "
             f"if (-f ~/.cshrc) source ~/.cshrc >& /dev/null; "
+            f"set noglob; "   # prevent [] glob expansion on signal names (after rc sourcing)
             f"{safe_cmd}'"
         )
     return f"{login_shell} -l -c '{safe_cmd}'"
