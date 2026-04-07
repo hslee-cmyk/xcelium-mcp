@@ -29,26 +29,60 @@ async def restore_checkpoint_impl(bridges: BridgeManager, name: str, sim_dir: st
 def register(mcp: FastMCP, bridges: BridgeManager) -> None:
 
     @mcp.tool()
-    async def save_checkpoint(
+    async def checkpoint(
+        action: str,
         name: str = "",
         sim_dir: str = "",
         saved_time_ns: int = 0,
+        mode: str = "stale",
+        filter_value: str = "",
+        dry_run: bool = True,
+        invert: bool = False,
     ) -> str:
-        """Save a simulation checkpoint to persistent storage.
-
-        Checkpoints are saved to {sim_dir}/checkpoints/ and registered in the
-        manifest with a compile_hash for automatic invalidation on recompile.
-        Use restore_checkpoint to return to this state without re-simulating.
+        """Manage simulation checkpoints: save, restore, list, or cleanup.
 
         Args:
-            name:          Checkpoint name (alphanumeric, e.g. "L1_common_init").
-                           Auto-generated from timestamp if empty.
+            action:        "save" — save a checkpoint.
+                           "restore" — restore to a previously saved checkpoint.
+                           "list" — list all checkpoints with details.
+                           "cleanup" — remove checkpoints by filter criteria.
+            name:          Checkpoint name (alphanumeric). Auto-generated if empty.
+                           Used by save/restore actions.
             sim_dir:       Simulation directory (auto-detected if empty).
-            saved_time_ns: Current simulation time in ns for nearest-checkpoint lookup.
+            saved_time_ns: Current simulation time in ns (save action only).
+            mode:          Cleanup filter mode (cleanup action only):
+                           "stale" (default), "hash", "origin", "pattern",
+                           "before", "project", "all", "rebuild".
+            filter_value:  Filter parameter for cleanup modes.
+            dry_run:       True = report only (cleanup), False = actually delete.
+            invert:        True = keep matching, remove rest (cleanup).
         """
+        resolved_dir = sim_dir if sim_dir else await get_default_sim_dir()
+
+        if action == "save":
+            return await _save_impl(bridges, name, resolved_dir, saved_time_ns)
+        elif action == "restore":
+            return await restore_checkpoint_impl(bridges, name, resolved_dir or "")
+        elif action == "list":
+            return await _cleanup_impl(
+                resolved_dir, mode="list", filter_value="", dry_run=True, invert=False,
+            )
+        elif action == "cleanup":
+            return await _cleanup_impl(
+                resolved_dir, mode=mode, filter_value=filter_value,
+                dry_run=dry_run, invert=invert,
+            )
+        else:
+            return f"ERROR: Unknown action '{action}'. Use 'save', 'restore', 'list', or 'cleanup'."
+
+    async def _save_impl(
+        bridges: BridgeManager,
+        name: str,
+        resolved_dir: str | None,
+        saved_time_ns: int,
+    ) -> str:
         bridge = bridges.xmsim
 
-        resolved_dir = sim_dir if sim_dir else await get_default_sim_dir()
         chk_base = os.path.join(resolved_dir, "checkpoints") if resolved_dir else f"{await get_user_tmp_dir()}/checkpoints"
 
         cmd = f"__SAVE__ {name} {chk_base}" if name else f"__SAVE__  {chk_base}"
@@ -56,7 +90,6 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
 
         # Register in manifest on success
         if "save failed" not in result and resolved_dir:
-            # Extract actual name from response "saved:worklib.{name}:module|dir:..."
             actual_name = name
             if not actual_name and "saved:worklib." in result:
                 try:
@@ -71,59 +104,13 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
 
         return result
 
-    @mcp.tool()
-    async def restore_checkpoint(
-        name: str = "",
-        sim_dir: str = "",
+    async def _cleanup_impl(
+        resolved_dir: str | None,
+        mode: str,
+        filter_value: str,
+        dry_run: bool,
+        invert: bool,
     ) -> str:
-        """Restore simulation to a previously saved checkpoint.
-
-        No compile_hash verification — allows restoring from any checkpoint,
-        including those from previous compiles (useful for before/after comparison).
-        Use cleanup_checkpoints(mode="stale") to remove outdated checkpoints.
-
-        Args:
-            name:    Checkpoint name to restore. Empty = last saved checkpoint.
-            sim_dir: Simulation directory (auto-detected if empty).
-        """
-        return await restore_checkpoint_impl(bridges, name, sim_dir)
-
-    @mcp.tool()
-    async def cleanup_checkpoints(
-        sim_dir: str = "",
-        mode: str = "stale",
-        filter_value: str = "",
-        dry_run: bool = True,
-        invert: bool = False,
-    ) -> str:
-        """List or remove checkpoints from {sim_dir}/checkpoints/.
-
-        mode:
-          "list"    — list all checkpoints with details (no deletion)
-          "rebuild" — scan worklib .pak via xmls and rebuild manifest for missing entries
-          "stale"   — checkpoints whose compile_hash no longer matches (default)
-          "hash"    — checkpoints with compile_hash == filter_value
-          "origin"  — checkpoints with origin == filter_value ("regression"/"bridge"/"single")
-          "pattern" — checkpoints whose name or test_name contains filter_value
-          "before"  — checkpoints saved before filter_value (ISO date, e.g. "2026-04-01")
-          "project" — checkpoints whose path contains filter_value
-          "all"     — every checkpoint
-
-        invert: When True, keep what matches the filter and remove everything else.
-                e.g. mode="pattern", filter_value="TOP015", invert=True
-                → keep only TOP015 checkpoints, remove all others.
-
-        dry_run=True (default): report candidates only, no deletion.
-        Set dry_run=False to actually remove.
-
-        Args:
-            sim_dir:      Simulation directory (auto-detected if empty).
-            mode:         Cleanup mode.
-            filter_value: Filter parameter for hash/origin/pattern/before/project modes.
-            dry_run:      True = report only, False = delete.
-            invert:       True = keep matching, remove rest. False = remove matching (default).
-        """
-        resolved_dir = sim_dir if sim_dir else await get_default_sim_dir()
         if not resolved_dir:
             return "ERROR: Could not determine sim_dir. Pass sim_dir explicitly."
 
@@ -132,7 +119,6 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             chk_dir = os.path.join(resolved_dir, "checkpoints", "worklib")
             if not os.path.isdir(chk_dir):
                 return f"No checkpoints directory found at {chk_dir}"
-            # Resolve xmls path from registry
             cfg = None
             try:
                 from xcelium_mcp.registry import load_sim_config
@@ -141,11 +127,9 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
                 pass
             xmls_path = "xmls"
             if cfg and "eda_tools" in cfg:
-                # xmls is in the same bin dir as xrun
                 xrun = cfg["eda_tools"].get("xrun", "")
                 if xrun:
                     xmls_path = xrun.replace("/xrun", "/xmls")
-            # Create temp cds.lib pointing to checkpoints worklib
             user_tmp = await get_user_tmp_dir()
             cds_lib = f"{user_tmp}/rebuild_cds.lib"
             abs_worklib = os.path.expanduser(chk_dir)
@@ -153,7 +137,6 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
                 f"echo 'DEFINE worklib {abs_worklib}' > {sq(cds_lib)}",
                 timeout=5,
             )
-            # Run xmls (needs EDA environment for library resolution)
             from xcelium_mcp.sim_runner import login_shell_cmd
             login_shell = "/usr/bin/tcsh"
             if cfg and "runner" in cfg:

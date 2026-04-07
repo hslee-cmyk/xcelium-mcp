@@ -31,112 +31,121 @@ async def _list_waveform_windows(bridge: TclBridge) -> str:
         return "(error)"
 
 
+async def _waveform_add_impl(
+    bridges: BridgeManager,
+    signals: list[str],
+    group_name: str = "",
+    window_name: str = "",
+) -> str:
+    """Internal add implementation — callable from simvision.py via dict reference."""
+    bridge = bridges.simvision
+
+    err = _validate_group_name(group_name)
+    if err:
+        return err
+
+    if window_name:
+        try:
+            await bridge.execute(f"waveform using {window_name}")
+        except TclError:
+            avail = await _list_waveform_windows(bridge)
+            return f"ERROR: Window '{window_name}' not found. Available: {avail}"
+
+    grp = _encode_group_arg(group_name)
+    sig_str = " ".join(signals)
+    result = await bridge.execute(
+        f"__WAVEFORM_ADD__ {grp} {sig_str}", timeout=30.0
+    )
+    return result
+
+
 def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
     @mcp.tool()
-    async def waveform_add(
-        signals: list[str],
+    async def waveform(
+        action: str,
+        signals: list[str] | None = None,
         group_name: str = "",
         window_name: str = "",
     ) -> str:
-        """Add signals to SimVision waveform. Auto-creates window, skips duplicates.
+        """Manage waveform signals: add, remove, or clear.
 
         Args:
-            signals:     Signal paths to add.
+            action:      "add" — add signals to waveform. Auto-creates window, skips duplicates.
+                         "remove" — remove signals or a group from waveform.
+                         "clear" — remove all signals and groups from waveform.
+            signals:     Signal paths (required for add; optional for remove).
             group_name:  Group within window. Empty = no group.
-            window_name: Target waveform window. Empty = current (or auto-create).
+                         For remove: scope removal to this group. Empty = search all.
+            window_name: Target waveform window (add only). Empty = current (or auto-create).
         """
-        bridge = bridges.simvision
+        if action == "add":
+            if not signals:
+                return "ERROR: 'signals' is required for action='add'."
+            return await _waveform_add_impl(bridges, signals, group_name, window_name)
 
-        err = _validate_group_name(group_name)
-        if err:
-            return err
+        elif action == "remove":
+            bridge = bridges.simvision
+            err = _validate_group_name(group_name)
+            if err:
+                return err
+            if not signals and not group_name:
+                return "ERROR: Provide signals to remove, or group_name to remove a group."
+            grp = _encode_group_arg(group_name)
+            sig_str = " ".join(signals) if signals else ""
+            result = await bridge.execute(
+                f"__WAVEFORM_REMOVE__ {grp} {sig_str}".strip(), timeout=30.0
+            )
+            return result
 
-        # Switch to specific window if requested
-        if window_name:
+        elif action == "clear":
+            bridge = bridges.simvision
             try:
-                await bridge.execute(f"waveform using {window_name}")
+                await bridge.execute("waveform clearall")
             except TclError:
-                avail = await _list_waveform_windows(bridge)
-                return f"ERROR: Window '{window_name}' not found. Available: {avail}"
+                return "ERROR: No waveform window open or clearall failed."
+            return "All signals and groups cleared."
 
-        # Protocol: __WAVEFORM_ADD__ {group_or_""} sig1 sig2 ...
-        grp = _encode_group_arg(group_name)
-        sig_str = " ".join(signals)
-        result = await bridge.execute(
-            f"__WAVEFORM_ADD__ {grp} {sig_str}", timeout=30.0
-        )
-        return result
+        else:
+            return f"ERROR: Unknown action '{action}'. Use 'add', 'remove', or 'clear'."
 
     @mcp.tool()
-    async def waveform_remove(
-        signals: list[str] | None = None,
-        group_name: str = "",
+    async def waveform_navigate(
+        action: str,
+        start_time: str = "",
+        end_time: str = "",
+        time: str = "",
+        cursor_name: str = "TimeA",
     ) -> str:
-        """Remove signals or a group from the waveform. Mirrors waveform_add.
-
-        Modes:
-          - group_name + signals: remove matching signals within that group only.
-          - group_name only:      remove the entire group and its child signals.
-          - signals only:         remove matching signals from all groups/ungrouped.
+        """Navigate the waveform viewer: zoom or set cursor.
 
         Args:
-            signals:    Signal names (or suffixes) to remove.
-            group_name: Scope removal to this group. Empty = search all.
+            action:      "zoom" — set waveform time range.
+                         "cursor" — set a cursor to a specific time.
+            start_time:  Start time for zoom (e.g. "0ns").
+            end_time:    End time for zoom (e.g. "100ns").
+            time:        Simulation time for cursor (e.g. "50ns").
+            cursor_name: Cursor name for cursor action (default "TimeA").
         """
         bridge = bridges.simvision
 
-        err = _validate_group_name(group_name)
-        if err:
-            return err
+        if action == "zoom":
+            if not start_time or not end_time:
+                return "ERROR: 'start_time' and 'end_time' are required for action='zoom'."
+            result = await bridge.execute(
+                f"waveform xview limits {start_time} {end_time}"
+            )
+            return f"Waveform zoomed to {start_time} – {end_time}. {result}"
 
-        if not signals and not group_name:
-            return "ERROR: Provide signals to remove, or group_name to remove a group."
+        elif action == "cursor":
+            if not time:
+                return "ERROR: 'time' is required for action='cursor'."
+            result = await bridge.execute(
+                f"cursor set -using {cursor_name} -time {time}"
+            )
+            return f"Cursor {cursor_name} set to {time}. {result}"
 
-        # Protocol: __WAVEFORM_REMOVE__ {group_or_""} sig1 sig2 ...
-        grp = _encode_group_arg(group_name)
-        sig_str = " ".join(signals) if signals else ""
-        result = await bridge.execute(
-            f"__WAVEFORM_REMOVE__ {grp} {sig_str}".strip(), timeout=30.0
-        )
-        return result
-
-    @mcp.tool()
-    async def waveform_clear() -> str:
-        """Remove all signals and groups from the waveform window."""
-        bridge = bridges.simvision
-        try:
-            await bridge.execute("waveform clearall")
-        except TclError:
-            return "ERROR: No waveform window open or clearall failed."
-        return "All signals and groups cleared."
-
-    @mcp.tool()
-    async def waveform_zoom(start_time: str, end_time: str) -> str:
-        """Set the waveform viewer time range (zoom to region).
-
-        Args:
-            start_time: Start time (e.g. "0ns").
-            end_time: End time (e.g. "100ns").
-        """
-        bridge = bridges.simvision
-        result = await bridge.execute(
-            f"waveform xview limits {start_time} {end_time}"
-        )
-        return f"Waveform zoomed to {start_time} – {end_time}. {result}"
-
-    @mcp.tool()
-    async def cursor_set(time: str, cursor_name: str = "TimeA") -> str:
-        """Set a waveform cursor to a specific time.
-
-        Args:
-            time: Simulation time (e.g. "50ns").
-            cursor_name: Cursor name (default "TimeA").
-        """
-        bridge = bridges.simvision
-        result = await bridge.execute(
-            f"cursor set -using {cursor_name} -time {time}"
-        )
-        return f"Cursor {cursor_name} set to {time}. {result}"
+        else:
+            return f"ERROR: Unknown action '{action}'. Use 'zoom' or 'cursor'."
 
     @mcp.tool()
     async def take_waveform_screenshot() -> Image:
@@ -156,7 +165,9 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         png_bytes = await ps_to_png(ps_path, config=cfg)
         return Image(data=png_bytes, format="png")
 
+    # Return dict: waveform_add key points to the unified waveform tool,
+    # and _waveform_add_impl is exposed for direct internal calls from simvision.py
     return {
-        "waveform_add": waveform_add,
-        "waveform_remove": waveform_remove,
+        "waveform_add": waveform,
+        "_waveform_add_impl": lambda **kwargs: _waveform_add_impl(bridges, **kwargs),
     }

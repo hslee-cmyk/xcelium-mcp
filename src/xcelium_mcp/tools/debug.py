@@ -118,138 +118,39 @@ async def _bisect_signal_dump_impl(
 def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
 
     @mcp.tool()
-    async def set_breakpoint(condition: str, name: str = "") -> str:
-        """Set a conditional breakpoint in the simulation.
-
-        For signal-based conditions, uses xmsim's [value] syntax:
-          signal="top.hw.r_rst", condition="== 1'b1"
-          → stop -create -condition {[value top.hw.r_rst] == "1'b1"}
-
-        For raw Tcl expressions, wraps in braces:
-          condition="{$time > 5000000}"
-
-        Args:
-            condition: Signal condition "signal op value" (e.g. "top.hw.r_rst == 1'b1")
-                       or raw Tcl expression in braces.
-            name: Optional breakpoint name.
-        """
-        bridge = bridges.xmsim
-
-        # Parse "signal op value" format for hierarchical signal paths
-        m = re.match(r'^(\S+)\s*(==|!=|>|<|>=|<=)\s*(.+)$', condition.strip())
-        if m and '.' in m.group(1):
-            sig, op, val = m.group(1), m.group(2), m.group(3).strip()
-            tcl_cond = '{[value ' + sig + '] ' + op + ' "' + val + '"}'
-            cmd = f"stop -create -condition {tcl_cond}"
-        else:
-            cmd = f"stop -create -condition {condition}"
-
-        if name:
-            cmd += f" -name {name}"
-        result = await bridge.execute(cmd)
-        return f"Breakpoint set: {result}"
-
-    @mcp.tool()
-    async def run_debugger_mode(target: str = "auto") -> list:
-        """Comprehensive debug snapshot: simulation state + signal values + screenshot + debugging guide.
-
-        Returns a combined text report and waveform screenshot for AI-assisted hardware debugging.
-
-        Args:
-            target: "xmsim" | "simvision" | "auto" (default: auto).
-        """
-        bridge = bridges.get_bridge(target)
-        sections: list[str] = []
-
-        # 1. Simulation state + breakpoints (single round-trip)
-        try:
-            snapshot = await bridge.execute("__DEBUG_SNAPSHOT__")
-            # Parse: POSITION:...\nSCOPE:...\nSTOPS:...
-            pos = scope_val = stops = ""
-            for line in snapshot.splitlines():
-                if line.startswith("POSITION:"):
-                    pos = line[9:]
-                elif line.startswith("SCOPE:"):
-                    scope_val = line[6:]
-                elif line.startswith("STOPS:"):
-                    stops = line[6:]
-        except (TclError, ConnectionError) as e:
-            pos = scope_val = f"(error: {e})"
-            stops = "(unavailable)"
-
-        sections.append("## Simulation State")
-        sections.append(f"- **Position**: `{pos}`")
-        sections.append(f"- **Scope**: `{scope_val}`")
-
-        # 2. Signal values in current scope (up to 50) — still needs per-signal loop
-        sections.append("\n## Signal Values (current scope)")
-        try:
-            sig_list = await bridge.execute("describe *")
-            lines = sig_list.strip().splitlines()[:50]
-            if lines:
-                for line in lines:
-                    sig_name = line.split()[0] if line.split() else ""
-                    if sig_name:
-                        try:
-                            val = await bridge.execute(f"value {sig_name}")
-                            sections.append(f"- `{sig_name}` = `{val}`")
-                        except TclError:
-                            sections.append(f"- `{sig_name}` = (could not read)")
-            else:
-                sections.append("(no signals in current scope)")
-        except TclError as e:
-            sections.append(f"(could not list signals: {e})")
-
-        # 3. Active breakpoints (already fetched in snapshot)
-        sections.append("\n## Active Breakpoints")
-        sections.append(f"```\n{stops}\n```")
-
-        # 4. Hardware debugging checklist
-        sections.append(textwrap.dedent("""
-        ## Hardware Debugging Checklist
-        - [ ] **X/Z values**: Check for uninitialized or multi-driven signals
-        - [ ] **Clock**: Verify clock is toggling at expected frequency
-        - [ ] **Reset**: Confirm reset sequence completed correctly
-        - [ ] **FSM state**: Check state machine is not stuck
-        - [ ] **CDC**: Look for metastability on clock domain crossings
-        - [ ] **Timing**: Verify setup/hold on critical paths
-        - [ ] **FIFO**: Check for overflow/underflow conditions
-
-        ## Suggested Next Steps
-        - `get_signal_value` — read specific signals of interest
-        - `find_drivers` — trace X/Z values to their source
-        - `waveform_add_signals` — add signals to waveform for visual inspection
-        - `sim_run` with duration — step the simulation forward
-        - `set_breakpoint` — set conditional breakpoints on suspicious signals
-        """))
-
-        report = "\n".join(sections)
-
-        # 5. Try to capture a screenshot
-        try:
-            ps_path = await bridge.screenshot()
-            png_bytes = await ps_to_png(ps_path, config=config)
-            screenshot = Image(data=png_bytes, format="png")
-            return [report, screenshot]
-        except Exception as e:
-            report += f"\n\n*(Screenshot unavailable: {e})*"
-            return [report]
-
-    @mcp.tool()
-    async def watch_signal(signal: str, op: str = "==", value: str = "") -> str:
-        """Set a watchpoint to stop simulation when a signal matches a condition.
-
-        The simulation will automatically stop at the exact clock edge where
-        the condition becomes true. Much more efficient than manual probing.
+    async def watch_signal(
+        signal: str,
+        op: str = "==",
+        value: str = "",
+        type: str = "watch",
+    ) -> str:
+        """Set a watchpoint or breakpoint to stop simulation on a signal condition.
 
         Args:
             signal: Full hierarchical signal path (e.g. "top.dut.r_state[3:0]").
-            op: Comparison operator ("==", "!=", ">", "<", ">=", "<=").
-            value: Target value in Verilog format (e.g. "8'h10", "4'b1010").
+            op:     Comparison operator ("==", "!=", ">", "<", ">=", "<=").
+            value:  Target value in Verilog format (e.g. "8'h10", "4'b1010").
+            type:   "watch" — watchpoint via __WATCH__ protocol (default).
+                    "breakpoint" — conditional breakpoint via stop -create.
         """
         bridge = bridges.xmsim
-        result = await bridge.execute(f"__WATCH__ {signal} {op} {value}")
-        return f"Watchpoint set: {result}"
+
+        if type == "breakpoint":
+            # Parse "signal op value" for breakpoint
+            condition = f"{signal} {op} {value}"
+            m = re.match(r'^(\S+)\s*(==|!=|>|<|>=|<=)\s*(.+)$', condition.strip())
+            if m and '.' in m.group(1):
+                sig, bop, val = m.group(1), m.group(2), m.group(3).strip()
+                tcl_cond = '{[value ' + sig + '] ' + bop + ' "' + val + '"}'
+                cmd = f"stop -create -condition {tcl_cond}"
+            else:
+                cmd = f"stop -create -condition {condition}"
+            result = await bridge.execute(cmd)
+            return f"Breakpoint set: {result}"
+        else:
+            # Default: watchpoint
+            result = await bridge.execute(f"__WATCH__ {signal} {op} {value}")
+            return f"Watchpoint set: {result}"
 
     @mcp.tool()
     async def watch_clear(watch_id: str = "all") -> str:
@@ -263,20 +164,44 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         return result
 
     @mcp.tool()
-    async def probe_control(mode: str, scope: str = "") -> str:
-        """Control SHM waveform recording to manage dump file size.
-
-        Disable probes during uninteresting simulation periods to save disk space.
-        Re-enable before the region of interest. Optionally target a specific scope.
+    async def probe(
+        action: str,
+        signals: list[str] | None = None,
+        scope: str = "",
+        shm_path: str = "",
+        depth: str = "all",
+    ) -> str:
+        """Control SHM waveform probes: add signals or enable/disable recording.
 
         Args:
-            mode: "enable" to start recording, "disable" to pause, "status" to check.
-            scope: Hierarchical scope to target (e.g. "top.hw.u_ext"). Empty = all probes.
+            action:   "add" — add probe signals to the session.
+                      "enable" — start/resume SHM recording.
+                      "disable" — pause SHM recording to save disk space.
+            signals:  Signal paths to add (required for action="add").
+            scope:    Hierarchical scope for enable/disable (empty = all probes).
+            shm_path: SHM file for probe data (action="add" only). Empty = current session SHM.
+            depth:    Probe depth for action="add" ("all", "1", "2", ...).
         """
         bridge = bridges.xmsim
-        cmd = f"__PROBE_CONTROL__ {mode} {scope}" if scope else f"__PROBE_CONTROL__ {mode}"
-        result = await bridge.execute(cmd)
-        return result
+
+        if action == "add":
+            if not signals:
+                return "ERROR: 'signals' is required for action='add'."
+            sig_str = " ".join(signals)
+            if shm_path:
+                cmd = f"probe -create {{{sig_str}}} -shm {shm_path} -depth {depth}"
+            else:
+                cmd = f"probe -create {{{sig_str}}} -shm -depth {depth}"
+            result = await bridge.execute(cmd)
+            return f"Probe added for {len(signals)} signal(s). {result}"
+
+        elif action in ("enable", "disable"):
+            cmd = f"__PROBE_CONTROL__ {action} {scope}" if scope else f"__PROBE_CONTROL__ {action}"
+            result = await bridge.execute(cmd)
+            return result
+
+        else:
+            return f"ERROR: Unknown action '{action}'. Use 'add', 'enable', or 'disable'."
 
     @mcp.tool()
     async def bisect_signal(
@@ -328,189 +253,163 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         return result
 
     @mcp.tool()
-    async def bisect_restore_and_debug(
-        checkpoint_name: str,
-        probe_signals: list[str],
-        watch_signal_path: str = "",
-        watch_op: str = "==",
-        watch_value: str = "",
-        run_duration: str = "10000ns",
+    async def debug_snapshot(
+        mode: str = "snapshot",
+        # snapshot mode args
+        target: str = "auto",
+        # tcl mode args
         shm_path: str = "",
-        sim_dir: str = "",
-        keep_alive: bool = True,
-    ) -> str:
-        """Restore a checkpoint, add probe signals, then run with optional watchpoint stop.
-
-        Pattern: restore → probe_add_signals → [set watchpoint] → sim_run → stop.
-        Use for interactive debug after bisect_signal identifies a bug time.
-        When shm_path is given, runs bisect_signal(shm_path) after stop for immediate analysis.
-
-        Args:
-            checkpoint_name:   Checkpoint name to restore.
-            probe_signals:     Signal paths to add via probe after restore.
-            watch_signal_path: Signal path to watch (stop when condition met). Empty = no watchpoint.
-            watch_op:          Watchpoint operator (==, !=, >, <). Default "==".
-            watch_value:       Watchpoint value. Required when watch_signal_path is set.
-            run_duration:      Fallback run duration when no watchpoint (e.g. "10000ns").
-            shm_path:          If given, run bisect_signal(shm_path=...) after stop for CSV analysis.
-            sim_dir:           Simulation directory (auto-detected if empty).
-            keep_alive:        True = leave simulator running after analysis (default).
-        """
-        resolved_dir = sim_dir if sim_dir else await get_default_sim_dir()
-
-        # 1. Restore — import from checkpoint module's registered tool
-        from xcelium_mcp.tools.checkpoint import restore_checkpoint_impl
-        restore_result = await restore_checkpoint_impl(bridges, checkpoint_name, resolved_dir)
-        if "ERROR" in restore_result or "restore failed" in restore_result:
-            return f"Restore failed: {restore_result}"
-
-        # 2. Add probe signals
-        if probe_signals:
-            bridge = bridges.xmsim
-            sig_str = " ".join(probe_signals)
-            try:
-                await bridge.execute(
-                    f"probe -create {{{sig_str}}} -shm -depth all", timeout=30.0
-                )
-            except Exception as e:
-                return f"Restore succeeded but probe_add_signals failed: {e}\nRestore result: {restore_result}"
-
-        # 3. Run (with or without watchpoint)
-        bridge = bridges.xmsim
-        if watch_signal_path and watch_value:
-            # Use __WATCH__ meta command (same as watch_signal tool)
-            # xmsim stop -create doesn't support -signal option
-            await bridge.execute(
-                f"__WATCH__ {watch_signal_path} {watch_op} {watch_value}",
-                timeout=10.0,
-            )
-            run_result = await bridge.execute(f"run {run_duration}", timeout=600.0)
-        else:
-            run_result = await bridge.execute(f"run {run_duration}", timeout=120.0)
-
-        lines = [f"restore: {restore_result}", f"run: {run_result}"]
-
-        # 4. Optional CSV analysis after stop
-        if shm_path and watch_signal_path and watch_value:
-            csv_result = await _bisect_signal_dump_impl(
-                shm_path=shm_path,
-                signal=watch_signal_path,
-                op="eq" if watch_op == "==" else watch_op,
-                value=watch_value,
-            )
-            lines.append(f"bisect: {csv_result}")
-
-        if not keep_alive:
-            try:
-                await bridge.execute("stop", timeout=10.0)
-            except Exception:
-                pass
-        else:
-            lines.append("(simulator left running)")
-
-        return "\n".join(lines)
-
-    @mcp.tool()
-    async def extract_csv(
-        shm_path: str,
-        signals: list[str],
-        start_ns: int = 0,
-        end_ns: int = 0,
-        output_path: str = "",
-        missing_ok: bool = True,
-    ) -> str:
-        """Extract signal waveform data from SHM dump to CSV via simvisdbutil.
-
-        Internally runs:
-          simvisdbutil {shm_path} -csv -output {output_path} -overwrite
-              [-range {start_ns}:{end_ns}ns]
-              [-missing]
-              -sig {signal_1} -sig {signal_2} ...
-
-        Returns: path to generated CSV file.
-        Caches result keyed by (shm_path, signals, start_ns, end_ns).
-
-        Args:
-            shm_path: SHM dump file path (e.g. "dump/ci_top_TOP015.shm/ci_top.trn").
-            signals: List of signal paths to extract.
-            start_ns: Start of time range in nanoseconds (0 = from beginning).
-            end_ns: End of time range in nanoseconds (0 = to end).
-            output_path: CSV output path. Auto-generated if empty.
-            missing_ok: Ignore signals absent from SHM (True) vs raise error (False).
-        """
-        try:
-            path = await csv_cache.extract(
-                shm_path=shm_path,
-                signals=signals,
-                start_ns=start_ns,
-                end_ns=end_ns,
-                output_path=output_path,
-                missing_ok=missing_ok,
-            )
-            return f"CSV extracted: {path}"
-        except RuntimeError as e:
-            return f"ERROR: {e}"
-
-    # prepare_dump_scope removed in v4.3.
-    # dump_signals now handled by sim_batch_run → _preprocess_setup_tcl → _resolve_probe_signals.
-
-    @mcp.tool()
-    async def probe_add_signals(
-        signals: list[str],
-        shm_path: str = "",
-        depth: str = "all",
-    ) -> str:
-        """Dynamically add probe signals to the connected SimVision bridge session.
-
-        Wraps: probe -create {signals} [-shm {shm_path}] -depth {depth}
-        Requires active bridge connection. Use before sim_run to capture
-        additional signals not in the original probe scope.
-
-        Args:
-            signals:  Signal paths to add (hierarchical, e.g. "top.hw.u_ext.r_state").
-            shm_path: SHM file to write probe data to. Empty = current session SHM.
-            depth:    Probe depth ("all", "1", "2", ...).
-        """
-        bridge = bridges.xmsim
-        sig_str = " ".join(signals)
-        if shm_path:
-            cmd = f"probe -create {{{sig_str}}} -shm {shm_path} -depth {depth}"
-        else:
-            cmd = f"probe -create {{{sig_str}}} -shm -depth {depth}"
-        result = await bridge.execute(cmd)
-        return f"Probe added for {len(signals)} signal(s). {result}"
-
-    # bisect_signal_dump removed — use bisect_signal(shm_path=...) instead.
-    # request_additional_signals removed — AI calls sim_batch_run(dump_signals=) directly.
-
-    @mcp.tool()
-    async def generate_debug_tcl(
-        shm_path: str,
-        signals: list[str],
-        center_time_ns: int,
+        signals: list[str] | None = None,
+        center_time_ns: int = 0,
         zoom_range_ns: int = 10000,
         markers: list[dict] | None = None,
         context_note: str = "",
         output_path: str = "",
-    ) -> str:
-        """Generate a SimVision Tcl script for offline debugging.
-
-        Creates a ready-to-use .tcl file that opens the SHM dump, adds the
-        specified signals to the waveform viewer, zooms to the bug region,
-        sets cursors at key times, and prints the AI analysis context.
-
-        User runs: simvision -input {output_path} {shm_path}
-        Returns: path to generated Tcl script.
+        # export mode args
+        test_name: str = "",
+        bug_description: str = "",
+        root_cause: str = "",
+        evidence: list[dict] | None = None,
+        related_code: list[dict] | None = None,
+        signals_to_check: list[str] | None = None,
+        suggested_fix: str = "",
+    ) -> list | str:
+        """Debug snapshot, Tcl script generation, or context export.
 
         Args:
-            shm_path:       SHM dump file path.
-            signals:        Signal paths to add to waveform.
-            center_time_ns: Bug time — waveform zoomed to center \u00b1 zoom_range_ns.
-            zoom_range_ns:  Half-width of zoom range in nanoseconds.
-            markers:        List of {"time_ns": int, "label": str} dicts.
-            context_note:   AI analysis summary printed to SimVision console.
-            output_path:    Output .tcl path. Auto-generated in SHM parent dir if empty.
+            mode: "snapshot" — comprehensive debug snapshot with signal values + screenshot.
+                  "tcl" — generate SimVision Tcl script for offline debugging.
+                  "export" — export AI analysis as Markdown debug context document.
+            target:          (snapshot) "xmsim"|"simvision"|"auto".
+            shm_path:        (tcl) SHM dump file path.
+            signals:         (tcl) Signal paths to add to waveform.
+            center_time_ns:  (tcl) Bug time — waveform zoomed to center +/- zoom_range_ns.
+            zoom_range_ns:   (tcl) Half-width of zoom range in nanoseconds.
+            markers:         (tcl) List of {"time_ns": int, "label": str} dicts.
+            context_note:    (tcl/export) AI analysis summary.
+            output_path:     (tcl/export) Output file path. Auto-generated if empty.
+            test_name:       (export) Test name (e.g. "TOP015").
+            bug_description: (export) One-line bug summary.
+            root_cause:      (export) AI-inferred root cause.
+            evidence:        (export) List of {"time_ns", "signal", "value", "expected", "meaning"}.
+            related_code:    (export) List of {"file", "line", "snippet"}.
+            signals_to_check:(export) Signal paths for user to inspect in SimVision.
+            suggested_fix:   (export) Optional fix suggestion.
         """
+        if mode == "snapshot":
+            return await _run_debugger_mode(bridges, target)
+        elif mode == "tcl":
+            return await _generate_debug_tcl(
+                shm_path=shm_path,
+                signals=signals or [],
+                center_time_ns=center_time_ns,
+                zoom_range_ns=zoom_range_ns,
+                markers=markers,
+                context_note=context_note,
+                output_path=output_path,
+            )
+        elif mode == "export":
+            return await _export_debug_context(
+                test_name=test_name,
+                bug_description=bug_description,
+                root_cause=root_cause,
+                evidence=evidence or [],
+                related_code=related_code or [],
+                signals_to_check=signals_to_check or [],
+                suggested_fix=suggested_fix,
+                output_path=output_path,
+            )
+        else:
+            return f"ERROR: Unknown mode '{mode}'. Use 'snapshot', 'tcl', or 'export'."
+
+    # --- Internal implementations for debug_snapshot ---
+
+    async def _run_debugger_mode(bridges: BridgeManager, target: str) -> list:
+        bridge = bridges.get_bridge(target)
+        sections: list[str] = []
+
+        # 1. Simulation state + breakpoints (single round-trip)
+        try:
+            snapshot = await bridge.execute("__DEBUG_SNAPSHOT__")
+            pos = scope_val = stops = ""
+            for line in snapshot.splitlines():
+                if line.startswith("POSITION:"):
+                    pos = line[9:]
+                elif line.startswith("SCOPE:"):
+                    scope_val = line[6:]
+                elif line.startswith("STOPS:"):
+                    stops = line[6:]
+        except (TclError, ConnectionError) as e:
+            pos = scope_val = f"(error: {e})"
+            stops = "(unavailable)"
+
+        sections.append("## Simulation State")
+        sections.append(f"- **Position**: `{pos}`")
+        sections.append(f"- **Scope**: `{scope_val}`")
+
+        # 2. Signal values in current scope (up to 50)
+        sections.append("\n## Signal Values (current scope)")
+        try:
+            sig_list = await bridge.execute("describe *")
+            lines = sig_list.strip().splitlines()[:50]
+            if lines:
+                for line in lines:
+                    sig_name = line.split()[0] if line.split() else ""
+                    if sig_name:
+                        try:
+                            val = await bridge.execute(f"value {sig_name}")
+                            sections.append(f"- `{sig_name}` = `{val}`")
+                        except TclError:
+                            sections.append(f"- `{sig_name}` = (could not read)")
+            else:
+                sections.append("(no signals in current scope)")
+        except TclError as e:
+            sections.append(f"(could not list signals: {e})")
+
+        # 3. Active breakpoints
+        sections.append("\n## Active Breakpoints")
+        sections.append(f"```\n{stops}\n```")
+
+        # 4. Hardware debugging checklist
+        sections.append(textwrap.dedent("""
+        ## Hardware Debugging Checklist
+        - [ ] **X/Z values**: Check for uninitialized or multi-driven signals
+        - [ ] **Clock**: Verify clock is toggling at expected frequency
+        - [ ] **Reset**: Confirm reset sequence completed correctly
+        - [ ] **FSM state**: Check state machine is not stuck
+        - [ ] **CDC**: Look for metastability on clock domain crossings
+        - [ ] **Timing**: Verify setup/hold on critical paths
+        - [ ] **FIFO**: Check for overflow/underflow conditions
+
+        ## Suggested Next Steps
+        - `get_signal_value` — read specific signals of interest
+        - `inspect_signal(action="drivers")` — trace X/Z values to their source
+        - `waveform(action="add")` — add signals to waveform for visual inspection
+        - `sim_run` with duration — step the simulation forward
+        - `watch_signal` — set conditional breakpoints on suspicious signals
+        """))
+
+        report = "\n".join(sections)
+
+        # 5. Try to capture a screenshot
+        try:
+            ps_path = await bridge.screenshot()
+            png_bytes = await ps_to_png(ps_path, config=config)
+            screenshot = Image(data=png_bytes, format="png")
+            return [report, screenshot]
+        except Exception as e:
+            report += f"\n\n*(Screenshot unavailable: {e})*"
+            return [report]
+
+    async def _generate_debug_tcl(
+        shm_path: str,
+        signals: list[str],
+        center_time_ns: int,
+        zoom_range_ns: int,
+        markers: list[dict] | None,
+        context_note: str,
+        output_path: str,
+    ) -> str:
         if markers is None:
             markers = []
 
@@ -533,32 +432,16 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             f"Run: simvision -input {output_path} {shm_path}"
         )
 
-    @mcp.tool()
-    async def export_debug_context(
+    async def _export_debug_context(
         test_name: str,
         bug_description: str,
         root_cause: str,
         evidence: list[dict],
         related_code: list[dict],
         signals_to_check: list[str],
-        suggested_fix: str = "",
-        output_path: str = "",
+        suggested_fix: str,
+        output_path: str,
     ) -> str:
-        """Export AI analysis as a human-readable Markdown debug context document.
-
-        Generates a structured report with bug summary, root cause, CSV evidence
-        table, related code references, and signals to check in SimVision.
-
-        Args:
-            test_name:        Test name (e.g. "TOP015").
-            bug_description:  One-line bug summary.
-            root_cause:       AI-inferred root cause.
-            evidence:         List of {"time_ns", "signal", "value", "expected", "meaning"}.
-            related_code:     List of {"file", "line", "snippet"}.
-            signals_to_check: Signal paths for user to inspect in SimVision.
-            suggested_fix:    Optional fix suggestion.
-            output_path:      Output file path. Default: /tmp/debug_{test_name}.md
-        """
         if not output_path:
             output_path = f"/tmp/debug_{test_name}_{int(time.time())}.md"
 
@@ -579,4 +462,4 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
 
         return f"Debug context exported to: {output_path}"
 
-    return {"generate_debug_tcl": generate_debug_tcl}
+    return {"generate_debug_tcl": debug_snapshot}

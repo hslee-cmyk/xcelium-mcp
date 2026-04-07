@@ -28,64 +28,61 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
         return "\n".join(results)
 
     @mcp.tool()
-    async def describe_signal(signal: str) -> str:
-        """Get detailed information about a signal (type, width, direction).
+    async def inspect_signal(
+        action: str,
+        signal: str = "",
+        scope: str = "",
+        pattern: str = "*",
+        target: str = "auto",
+    ) -> str:
+        """Inspect signal metadata: describe, list, or find drivers.
 
         Args:
-            signal: Full hierarchical signal path.
+            action:  "describe" — detailed info (type, width, direction) for a signal.
+                     "list" — list signals in a scope, filtered by pattern.
+                     "drivers" — find all drivers of a signal (useful for X/Z debugging).
+            signal:  Full hierarchical signal path. Required for "describe" and "drivers".
+            scope:   Hierarchical scope path (e.g. "top.hw.u_ext"). Required for "list".
+            pattern: Glob pattern for "list" action (default "*").
+            target:  "xmsim" | "simvision" | "auto" (default: auto). Used by "list".
         """
-        bridge = bridges.xmsim
-        result = await bridge.execute(f"describe {signal}")
-        return result
+        if action == "describe":
+            if not signal:
+                return "ERROR: 'signal' is required for action='describe'."
+            bridge = bridges.xmsim
+            result = await bridge.execute(f"describe {signal}")
+            return result
+
+        elif action == "list":
+            if not scope:
+                return "ERROR: 'scope' is required for action='list'."
+            bridge = bridges.get_bridge(target)
+            result = await bridge.execute(f"describe {scope}.{pattern}")
+            return result
+
+        elif action == "drivers":
+            if not signal:
+                return "ERROR: 'signal' is required for action='drivers'."
+            bridge = bridges.xmsim
+            result = await bridge.execute(f"drivers {signal}")
+            return result
+
+        else:
+            return f"ERROR: Unknown action '{action}'. Use 'describe', 'list', or 'drivers'."
 
     @mcp.tool()
-    async def find_drivers(signal: str) -> str:
-        """Find all drivers of a signal (useful for X/Z debugging).
+    async def deposit_value(signal: str, value: str, release: bool = False) -> str:
+        """Force-deposit a value onto a signal, or release a previously deposited signal.
 
         Args:
-            signal: Full hierarchical signal path.
+            signal:  Full hierarchical signal path.
+            value:   Value to deposit (e.g. "1'b1", "8'hFF", "0"). Ignored when release=True.
+            release: True = release the signal (restore driven value) instead of depositing.
         """
         bridge = bridges.xmsim
-        result = await bridge.execute(f"drivers {signal}")
-        return result
-
-    @mcp.tool()
-    async def list_signals(scope: str, pattern: str = "*", target: str = "auto") -> str:
-        """List signals in a scope, optionally filtered by pattern.
-
-        Args:
-            scope:   Hierarchical scope path (e.g. "top.hw.u_ext").
-            pattern: Glob pattern to filter signals (default "*").
-            target:  "xmsim" | "simvision" | "auto" (default: auto).
-        """
-        bridge = bridges.get_bridge(target)
-
-        # Use 'describe' with hierarchical path + pattern
-        # 'scope -describe' does NOT accept pattern args (causes SCMULT error)
-        result = await bridge.execute(f"describe {scope}.{pattern}")
-        return result
-
-    @mcp.tool()
-    async def deposit_value(signal: str, value: str) -> str:
-        """Force-deposit a value onto a signal.
-
-        Args:
-            signal: Full hierarchical signal path.
-            value: Value to deposit (e.g. "1'b1", "8'hFF", "0").
-        """
-        bridge = bridges.xmsim
-        # Single round-trip: deposit + value readback in Tcl
-        readback = await bridge.execute(f"__DEPOSIT_AND_VERIFY__ {signal} {value}")
-        return f"Deposited {value} on {signal}. Readback: {readback}"
-
-    @mcp.tool()
-    async def release_signal(signal: str) -> str:
-        """Release a previously deposited signal, restoring driven value.
-
-        Args:
-            signal: Full hierarchical signal path.
-        """
-        bridge = bridges.xmsim
-        # Single round-trip: release + value readback in Tcl
-        readback = await bridge.execute(f"__RELEASE_AND_VERIFY__ {signal}")
-        return f"Released {signal}. Current value: {readback}"
+        if release:
+            readback = await bridge.execute(f"__RELEASE_AND_VERIFY__ {signal}")
+            return f"Released {signal}. Current value: {readback}"
+        else:
+            readback = await bridge.execute(f"__DEPOSIT_AND_VERIFY__ {signal} {value}")
+            return f"Deposited {value} on {signal}. Readback: {readback}"

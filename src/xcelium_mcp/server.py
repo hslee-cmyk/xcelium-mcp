@@ -1,7 +1,8 @@
-"""Xcelium MCP Server — FastMCP server with 49 tools for simulator control.
+"""Xcelium MCP Server — FastMCP server with 28 tools for simulator control.
 
 v4.2: Tools split into 7 modules under tools/. This file only creates
 the MCP instance, BridgeManager, and registers all tool modules.
+v5.0: Tool consolidation — 49 tools → 28 tools via action-parameter dispatch.
 """
 from __future__ import annotations
 
@@ -23,7 +24,7 @@ mcp = FastMCP(
 bridges = BridgeManager()
 
 # ---------------------------------------------------------------------------
-# Tool registration — 7 modules, 49 tools total
+# Tool registration — 7 modules, 28 tools total
 #
 # Registration order matters: simvision needs references to tools from
 # waveform, sim_lifecycle, and debug modules (cross-tool calls).
@@ -59,7 +60,7 @@ batch.register(
 simvision.register(
     mcp,
     bridges,
-    waveform_add_signals_fn=waveform_tools["waveform_add"],
+    waveform_add_impl_fn=waveform_tools["_waveform_add_impl"],
     connect_simulator_fn=lifecycle_tools["connect_simulator"],
     generate_debug_tcl_fn=debug_tools["generate_debug_tcl"],
     csv_cache=csv_cache,
