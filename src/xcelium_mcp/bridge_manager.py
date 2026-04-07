@@ -20,7 +20,7 @@ class BridgeManager:
         """Get connected xmsim bridge. Raises if not connected."""
         if self._xmsim is None or not self._xmsim.connected:
             raise ConnectionError(
-                "Not connected to xmsim. Use connect_simulator or sim_start first."
+                "Not connected to xmsim. Use connect_simulator or sim_bridge_run first."
             )
         return self._xmsim
 

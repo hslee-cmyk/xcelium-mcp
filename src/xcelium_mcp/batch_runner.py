@@ -974,7 +974,7 @@ def resolve_sim_params(
 ) -> dict:
     """Resolve simulation parameters from registry schema — Single Point of Change.
 
-    All tools (sim_start, sim_batch_run, sim_batch_regression) call this.
+    All tools (sim_bridge_run, sim_batch_run, sim_batch_regression) call this.
     Schema changes → modify here only → all tools updated.
 
     Returns:

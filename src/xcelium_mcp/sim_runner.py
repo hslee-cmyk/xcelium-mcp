@@ -1,7 +1,7 @@
 """sim_runner.py — Core simulation lifecycle for xcelium-mcp v4.2.
 
 v4.2: Functions split into env_detection.py, registry.py, batch_runner.py.
-This file retains: ssh_run, shell helpers, start_simulation, _start_bridge,
+This file retains: ssh_run, shell helpers, start_bridge_simulation, _start_bridge,
 run_full_discovery orchestrator, and legacy script patching.
 
 Re-exports from new modules are provided for backward compatibility with
@@ -707,18 +707,16 @@ async def _analyze_sdf_annotate(
 # ===================================================================
 
 
-async def start_simulation(
+async def start_bridge_simulation(
     test_name: str,
     sim_dir: str = "",
-    mode: str = "bridge",
     sim_mode: str = "",
-    run_duration: str = "",
     timeout: int = 120,
     extra_args: str = "",
     bridges=None,
     dump_depth: str = "",
 ) -> str:
-    """Start simulation. Registry없으면 sim_discover 자동 호출."""
+    """Start simulation in bridge (interactive) mode. Registry없으면 sim_discover 자동 호출."""
     validate_extra_args(extra_args)
 
     resolved_dir = sim_dir if sim_dir else await get_default_sim_dir()
@@ -745,17 +743,10 @@ async def start_simulation(
 
     setup_tcl = f"{resolved_dir}/{setup_tcls[effective_mode]}"
 
-    if mode == "bridge":
-        return await _start_bridge(
-            resolved_dir, config, test_name, setup_tcl, effective_mode, timeout,
-            extra_args=extra_args, bridges=bridges, dump_depth=dump_depth,
-        )
-    elif mode == "batch":
-        return await _start_batch(
-            resolved_dir, config, test_name, setup_tcl, run_duration
-        )
-    else:
-        raise ValueError(f"Unknown mode: {mode}. Use 'bridge' or 'batch'.")
+    return await _start_bridge(
+        resolved_dir, config, test_name, setup_tcl, effective_mode, timeout,
+        extra_args=extra_args, bridges=bridges, dump_depth=dump_depth,
+    )
 
 
 async def _start_bridge(
@@ -875,19 +866,4 @@ async def _start_bridge(
     return f"ERROR: bridge not ready after {timeout}s.\nLog tail:\n{log_tail}"
 
 
-async def _start_batch(
-    sim_dir: str,
-    config: dict,
-    test_name: str,
-    setup_tcl: str,
-    run_duration: str,
-) -> str:
-    """Start simulation in batch mode. Delegates to batch_runner."""
-    runner = config.get("runner", {})
-    return await _run_batch_single(
-        sim_dir=sim_dir,
-        test_name=test_name,
-        runner=runner,
-        run_duration=run_duration,
-        timeout=600,
-    )
+    # _start_batch removed — use sim_batch_run tool directly for batch execution.

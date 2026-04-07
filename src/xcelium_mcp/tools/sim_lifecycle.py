@@ -13,7 +13,7 @@ from xcelium_mcp.tcl_bridge import TclBridge, TclError
 from xcelium_mcp.sim_runner import (
     UserInputRequired,
     ssh_run,
-    start_simulation,
+    start_bridge_simulation,
     run_full_discovery,
     get_default_sim_dir,
     get_user_tmp_dir,
@@ -59,7 +59,7 @@ async def _auto_connect_all(bridges: BridgeManager, host: str, timeout: float) -
     user_tmp = await get_user_tmp_dir()
     r = await ssh_run(f"cat {user_tmp}/bridge_ready_* 2>/dev/null")
     if not r.strip():
-        return "No bridges found. Run sim_start or simvision_start first."
+        return "No bridges found. Run sim_bridge_run or simvision_start first."
 
     for line in r.strip().splitlines():
         parts = line.strip().split()
@@ -177,32 +177,33 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             return f"ERROR: {e}"
 
     @mcp.tool()
-    async def sim_start(
+    async def sim_bridge_run(
         test_name: str,
         sim_dir: str = "",
-        mode: str = "bridge",
         sim_mode: str = "",
-        run_duration: str = "",
         timeout: int = 120,
         extra_args: str = "",
         dump_depth: str = "",
     ) -> str:
-        """Start simulation using registry configuration.
+        """Start simulation in bridge (interactive) mode. Compile + launch + connect bridge.
+
+        After this tool returns, use sim_run/get_signal_value/bisect_signal for debugging.
+        For batch (non-interactive) runs, use sim_batch_run instead.
 
         Args:
-            test_name:    Required — test to run. Short name OK (e.g. "TOP015").
-            sim_dir:      Simulation dir. Empty = registry default.
-            mode:         "bridge" (interactive) or "batch" (run to end).
-            sim_mode:     "rtl"|"gate"|"ams_rtl"|"ams_gate". Empty = default_mode.
-            run_duration: Batch mode only — limit sim time.
-            timeout:      Bridge mode — max seconds to wait for bridge ready.
-            extra_args:   1-shot extra simulation arguments (not saved to registry).
-            dump_depth:   "boundary"|"all"|"" (auto from mode_defaults). v4.3.
+            test_name:  Required — test to run. Short name OK (e.g. "TOP015").
+            sim_dir:    Simulation dir. Empty = registry default.
+            sim_mode:   "rtl"|"gate"|"ams_rtl"|"ams_gate". Empty = default_mode.
+            timeout:    Max seconds to wait for bridge ready.
+            extra_args: 1-shot extra simulation arguments (not saved to registry).
+            dump_depth: "boundary"|"all"|"" (auto from mode_defaults). v4.3.
         """
         try:
-            # v4.1: resolve short test name → full name
             test_name = await resolve_test_name(test_name, sim_dir)
-            return await start_simulation(test_name, sim_dir, mode, sim_mode, run_duration, timeout, extra_args=extra_args, bridges=bridges, dump_depth=dump_depth)
+            return await start_bridge_simulation(
+                test_name, sim_dir, sim_mode, timeout,
+                extra_args=extra_args, bridges=bridges, dump_depth=dump_depth,
+            )
         except UserInputRequired as e:
             return f"USER INPUT REQUIRED:\n{e.prompt}"
         except RuntimeError as e:
