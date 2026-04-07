@@ -15,7 +15,6 @@ from xcelium_mcp.sim_runner import (
 from xcelium_mcp.registry import load_sim_config
 from xcelium_mcp.env_detection import _load_or_detect_runner
 from xcelium_mcp.batch_runner import _run_batch_single, _run_batch_regression, resolve_test_name
-from xcelium_mcp.tools.debug import _prepare_dump_scope_internal
 import xcelium_mcp.csv_cache as _csv_cache
 
 
@@ -86,7 +85,7 @@ def register(
             shm_path: New SHM path for [A'] mode (default: dump/{test_name}_extra.shm).
             run_duration: Run only up to this time (e.g. "10ms"). Empty = run to end.
             rename_dump: Enable Method 6-B SHM rename fallback.
-            dump_signals: Additional signals to dump (prepare_dump_scope).
+            dump_signals: Additional signals for v4.3 dump_depth probe (merged with BOUNDARY_SIGNALS).
             timeout: SSH wait timeout in seconds.
         """
         if probe_signals is None:
@@ -137,19 +136,8 @@ def register(
                 except Exception as e:
                     return f"Restore succeeded but probe_add_signals failed: {e}"
 
-        # dump_signals: extend probe scope via prepare_dump_scope
-        if dump_signals:
-            try:
-                extended_tcl = await _prepare_dump_scope_internal(
-                    resolved_sim_dir,
-                    additional_signals=dump_signals,
-                )
-                runner = dict(runner)
-                runner["_extended_tcl"] = extended_tcl
-            except Exception as e:
-                return f"ERROR in prepare_dump_scope: {e}"
-
         # Execute simulation
+        # dump_signals flows to _run_batch_single → _preprocess_setup_tcl → _resolve_probe_signals
         try:
             # v4.1: sim_mode + extra_args
             effective_mode = sim_mode or runner.get("default_mode", "rtl")
@@ -241,17 +229,7 @@ def register(
         except UserInputRequired as e:
             return f"USER INPUT REQUIRED:\n{e.prompt}"
 
-        # dump_signals: 1회만 prepare_dump_scope → 전 테스트 공유
-        if dump_signals:
-            try:
-                shared_tcl = await _prepare_dump_scope_internal(
-                    resolved_sim_dir,
-                    additional_signals=dump_signals,
-                )
-                runner = dict(runner)
-                runner["_extended_tcl"] = shared_tcl
-            except Exception as e:
-                return f"ERROR in prepare_dump_scope: {e}"
+        # dump_signals flows to _run_batch_regression → _preprocess_setup_tcl → _resolve_probe_signals
 
         # Auto-detect test_list from sim config if empty
         if not test_list:

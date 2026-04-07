@@ -61,7 +61,7 @@ def _parse_l1_time_ns(l1_time: str) -> int:
 def extract_setup_lines(tcl_content: str) -> str:
     """Extract probe/database setup lines from a setup Tcl, stripping run/exit/finish.
 
-    Used by both _prepare_dump_scope_internal and _build_checkpoint_tcl
+    Used by _build_checkpoint_tcl and _preprocess_setup_tcl
     to get the probe configuration without simulation control commands.
     """
     lines = []

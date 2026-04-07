@@ -24,7 +24,7 @@ from xcelium_mcp.sim_runner import (
 )
 from xcelium_mcp.registry import load_sim_config
 from xcelium_mcp.env_detection import _load_or_detect_runner
-from xcelium_mcp.batch_runner import _resolve_exec_cmd, read_setup_tcl, extract_setup_lines
+from xcelium_mcp.batch_runner import _resolve_exec_cmd, extract_setup_lines
 import xcelium_mcp.csv_cache as csv_cache
 import xcelium_mcp.debug_tools as debug_tools
 import xcelium_mcp.checkpoint_manager as checkpoint_manager
@@ -34,50 +34,8 @@ import xcelium_mcp.checkpoint_manager as checkpoint_manager
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-async def _prepare_dump_scope_internal(
-    sim_dir: str,
-    additional_signals: list[str],
-    input_tcl: str = "",
-) -> str:
-    """Extend an existing setup Tcl file with additional probe signals.
-
-    Uses read_setup_tcl() from batch_runner for Tcl detection (registry-aware).
-    Falls back to manual detection if runner config not available.
-    Returns path to the extended Tcl file (written as setup_rtl_debug.tcl).
-    """
-    original = ""
-
-    if input_tcl:
-        # Explicit input Tcl
-        p = Path(input_tcl)
-        if p.exists():
-            original = p.read_text()
-    else:
-        # Try registry-based detection via read_setup_tcl
-        cfg = await load_sim_config(sim_dir)
-        runner = cfg.get("runner", {}) if cfg else {}
-        if runner:
-            original = read_setup_tcl(runner, sim_dir)
-
-        # Fallback: manual detection
-        if not original:
-            for candidate in ("setup_rtl.tcl", "input.tcl", "setup.tcl"):
-                p = Path(sim_dir) / candidate
-                if p.exists():
-                    original = p.read_text()
-                    break
-
-    output_tcl = str(Path(sim_dir) / "setup_rtl_debug.tcl")
-
-    # Append new probe commands for additional signals
-    sig_list = " ".join(f'"{s}"' for s in additional_signals)
-    extra = (
-        f"\n# === Added by xcelium-mcp prepare_dump_scope ===\n"
-        f"probe -create {{{sig_list}}} -shm -depth all\n"
-        f"# ================================================\n"
-    )
-    Path(output_tcl).write_text(original + extra)
-    return output_tcl
+    # _prepare_dump_scope_internal removed in v4.3.
+    # dump_signals now flows through _preprocess_setup_tcl → _resolve_probe_signals.
 
 
 # ---------------------------------------------------------------------------
@@ -494,39 +452,8 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         except RuntimeError as e:
             return f"ERROR: {e}"
 
-    @mcp.tool()
-    async def prepare_dump_scope(
-        additional_signals: list[str],
-        input_tcl: str = "",
-        sim_dir: str = "",
-    ) -> str:
-        """Extend a simulation setup Tcl file with additional probe signals.
-
-        Reads the original setup Tcl (auto-detected from sim_dir if not provided),
-        appends `probe -create {signals} -shm -depth all`, and writes the result
-        to `{sim_dir}/setup_rtl_debug.tcl`.
-
-        Use with sim_batch_run(dump_signals=[...]) to capture additional signals
-        without re-running from scratch.
-
-        Args:
-            additional_signals: Signal paths to add to probe scope.
-            input_tcl: Path to existing setup Tcl file. Auto-detected if empty.
-            sim_dir: Simulation directory for auto-detection and output. Uses default if empty.
-        """
-        try:
-            resolved_sim_dir = sim_dir if sim_dir else await get_default_sim_dir()
-        except UserInputRequired as e:
-            return f"USER INPUT REQUIRED:\n{e.prompt}"
-
-        try:
-            out = await _prepare_dump_scope_internal(
-                resolved_sim_dir, additional_signals, input_tcl
-            )
-        except Exception as e:
-            return f"ERROR: {e}"
-
-        return f"Extended Tcl written to: {out}\nAdded signals: {additional_signals}"
+    # prepare_dump_scope removed in v4.3.
+    # dump_signals now handled by sim_batch_run → _preprocess_setup_tcl → _resolve_probe_signals.
 
     @mcp.tool()
     async def probe_add_signals(
