@@ -234,77 +234,67 @@ def register(
         return f"ERROR: SimVision bridge not ready after 60s.\nLog:\n{log_tail}"
 
     @mcp.tool()
-    async def simvision_setup(
+    async def simvision(
+        action: str,
+        # setup params
         shm_path: str = "",
         signals: list[str] | None = None,
         zoom_start: str = "",
         zoom_end: str = "",
         screenshot: bool = False,
-    ) -> str:
-        """One-shot SimVision setup: open SHM + create waveform + add signals + zoom.
-
-        Args:
-            shm_path:   SHM database path. Empty = skip database open.
-            signals:    Signal paths to add to waveform.
-            zoom_start: Zoom start time. Empty = full range.
-            zoom_end:   Zoom end time. Empty = full range.
-            screenshot: True = capture and return waveform screenshot after setup.
-        """
-        if signals is None:
-            signals = []
-        bridge = bridges.simvision
-        results = []
-
-        if shm_path:
-            db_result = await _database_open(shm_path)
-            results.append(db_result)
-
-        if signals:
-            add_result = await waveform_add_impl_fn(signals=signals)
-            results.append(add_result)
-
-        if zoom_start and zoom_end:
-            try:
-                await bridge.execute(f"waveform xview limits {zoom_start} {zoom_end}")
-                results.append(f"Zoomed to {zoom_start} – {zoom_end}")
-            except TclError as e:
-                results.append(f"Zoom failed: {e}")
-
-        if screenshot:
-            try:
-                from xcelium_mcp.screenshot import ps_to_png
-                ps_path = await bridge.screenshot()
-                cfg = None
-                sim_dir = await get_default_sim_dir()
-                if sim_dir:
-                    cfg = await load_sim_config(sim_dir)
-                png_bytes = await ps_to_png(ps_path, config=cfg)
-                # Screenshot captured but we return text (Image requires tool return type)
-                results.append("Screenshot captured.")
-            except Exception as e:
-                results.append(f"Screenshot failed: {e}")
-
-        return "\n".join(results) if results else "No actions performed."
-
-    @mcp.tool()
-    async def simvision_live(
-        action: str = "start",
-        signals: list[str] | None = None,
-        zoom_start: str = "",
-        zoom_end: str = "",
+        # live params
         auto_reload: bool = True,
     ) -> str:
-        """Control SimVision live waveform viewing with running xmsim.
+        """SimVision waveform control: setup, live monitoring start/stop.
 
         Args:
-            action:      "start" — connect SimVision to running xmsim for live waveform viewing.
-                         "stop" — stop SimVision live waveform auto-reload.
-            signals:     (start) Signal paths to add.
-            zoom_start:  (start) Zoom start time. Empty = auto-compute from sim time.
-            zoom_end:    (start) Zoom end time. Empty = auto-compute from sim time.
-            auto_reload: (start) Enable auto-reload (default True).
+            action:      "setup" — open SHM + add signals + zoom (one-shot configuration).
+                         "live_start" — connect to running xmsim for live waveform viewing.
+                         "live_stop" — stop live waveform auto-reload.
+            shm_path:    (setup/live) SHM database path. Empty = skip or auto-detect.
+            signals:     (setup/live) Signal paths to add to waveform.
+            zoom_start:  Zoom start time. Empty = full range (setup) or auto-compute (live).
+            zoom_end:    Zoom end time. Empty = full range (setup) or auto-compute (live).
+            screenshot:  (setup) True = capture waveform screenshot after setup.
+            auto_reload: (live_start) Enable auto-reload (default True).
         """
-        if action == "stop":
+        if action == "setup":
+            if signals is None:
+                signals = []
+            bridge = bridges.simvision
+            results = []
+
+            if shm_path:
+                db_result = await _database_open(shm_path)
+                results.append(db_result)
+
+            if signals:
+                add_result = await waveform_add_impl_fn(signals=signals)
+                results.append(add_result)
+
+            if zoom_start and zoom_end:
+                try:
+                    await bridge.execute(f"waveform xview limits {zoom_start} {zoom_end}")
+                    results.append(f"Zoomed to {zoom_start} – {zoom_end}")
+                except TclError as e:
+                    results.append(f"Zoom failed: {e}")
+
+            if screenshot:
+                try:
+                    from xcelium_mcp.screenshot import ps_to_png
+                    ps_path = await bridge.screenshot()
+                    cfg = None
+                    sim_dir = await get_default_sim_dir()
+                    if sim_dir:
+                        cfg = await load_sim_config(sim_dir)
+                    png_bytes = await ps_to_png(ps_path, config=cfg)
+                    results.append("Screenshot captured.")
+                except Exception as e:
+                    results.append(f"Screenshot failed: {e}")
+
+            return "\n".join(results) if results else "No actions performed."
+
+        elif action == "live_stop":
             sv = bridges.simvision
             try:
                 await sv.execute("foreach id [after info] { after cancel $id }")
@@ -312,89 +302,85 @@ def register(
             except TclError as e:
                 return f"ERROR: {e}"
 
-        if action != "start":
-            return f"ERROR: Unknown action '{action}'. Use 'start' or 'stop'."
-
-        if signals is None:
-            signals = []
-        try:
-            xmsim = bridges.xmsim
-        except ConnectionError as e:
-            return f"ERROR: xmsim bridge not connected — {e}"
-        try:
-            sv = bridges.simvision
-        except ConnectionError as e:
-            return f"ERROR: SimVision bridge not connected — {e}"
-        results = []
-
-        # 1. Get xmsim SHM info + sim time
-        shm_info = ""
-        sim_time = ""
-        try:
-            shm_info = await xmsim.execute("database -show")
-            sim_time = await xmsim.execute("where")
-            results.append(f"xmsim at {sim_time.strip()}, SHM: {shm_info.strip()}")
-        except (TclError, ConnectionError, TimeoutError) as e:
-            results.append(f"xmsim info: {e}")
-
-        # 2. Open SHM in SimVision — skip if already open
-        sv_db = ""
-        try:
-            sv_db = await sv.execute("database find")
-        except (TclError, ConnectionError, TimeoutError):
-            pass
-
-        if sv_db.strip():
-            results.append(f"SimVision database already open: {sv_db.strip()}")
-        elif shm_info.strip():
-            shm_path = _parse_shm_path(shm_info)
-            if not shm_path:
-                return (
-                    f"ERROR: Could not parse SHM path from xmsim database list:\n{shm_info}\n"
-                    "Open SHM manually: simvision_connect(action='open_db', shm_path='...')"
-                )
+        elif action == "live_start":
+            if signals is None:
+                signals = []
             try:
-                await sv.execute(f"database open {shm_path}")
-                results.append(f"SimVision opened: {shm_path}")
+                xmsim = bridges.xmsim
+            except ConnectionError as e:
+                return f"ERROR: xmsim bridge not connected — {e}"
+            try:
+                sv = bridges.simvision
+            except ConnectionError as e:
+                return f"ERROR: SimVision bridge not connected — {e}"
+            results = []
+
+            shm_info = ""
+            sim_time = ""
+            try:
+                shm_info = await xmsim.execute("database -show")
+                sim_time = await xmsim.execute("where")
+                results.append(f"xmsim at {sim_time.strip()}, SHM: {shm_info.strip()}")
             except (TclError, ConnectionError, TimeoutError) as e:
-                results.append(f"SHM open failed: {e}")
+                results.append(f"xmsim info: {e}")
 
-        # 3. Add signals
-        if signals:
+            sv_db = ""
             try:
-                add_result = await waveform_add_impl_fn(signals=signals)
-                results.append(add_result)
-            except (ConnectionError, TimeoutError) as e:
-                results.append(f"Add signals failed: {e}")
+                sv_db = await sv.execute("database find")
+            except (TclError, ConnectionError, TimeoutError):
+                pass
 
-        # 4. Zoom
-        if not zoom_start or not zoom_end:
-            cur_ns = _parse_time_ns(sim_time)
-            zoom_start = f"{max(0, cur_ns - 1_000_000)}ns"
-            zoom_end = f"{cur_ns}ns"
-        try:
-            await sv.execute(f"waveform xview limits {zoom_start} {zoom_end}")
-            results.append(f"Zoomed to {zoom_start} – {zoom_end}")
-        except (TclError, ConnectionError, TimeoutError):
-            pass
+            if sv_db.strip():
+                results.append(f"SimVision database already open: {sv_db.strip()}")
+            elif shm_info.strip():
+                live_shm = _parse_shm_path(shm_info)
+                if not live_shm:
+                    return (
+                        f"ERROR: Could not parse SHM path from xmsim database list:\n{shm_info}\n"
+                        "Open SHM manually: simvision_connect(action='open_db', shm_path='...')"
+                    )
+                try:
+                    await sv.execute(f"database open {live_shm}")
+                    results.append(f"SimVision opened: {live_shm}")
+                except (TclError, ConnectionError, TimeoutError) as e:
+                    results.append(f"SHM open failed: {e}")
 
-        # 5. Auto-reload
-        if auto_reload:
+            if signals:
+                try:
+                    add_result = await waveform_add_impl_fn(signals=signals)
+                    results.append(add_result)
+                except (ConnectionError, TimeoutError) as e:
+                    results.append(f"Add signals failed: {e}")
+
+            if not zoom_start or not zoom_end:
+                cur_ns = _parse_time_ns(sim_time)
+                zoom_start = f"{max(0, cur_ns - 1_000_000)}ns"
+                zoom_end = f"{cur_ns}ns"
             try:
-                db_name = sv_db.strip() if sv_db.strip() else ""
-                reload_cmd = f"database reload {db_name}" if db_name else "database reload"
-                await sv.execute(
-                    f"proc _mcp_auto_reload {{}} {{ "
-                    f"  catch {{{reload_cmd}}}; "
-                    f"  after 2000 _mcp_auto_reload "
-                    f"}}; "
-                    f"after 2000 _mcp_auto_reload"
-                )
-                results.append("Auto-reload enabled (2s interval)")
-            except (TclError, ConnectionError, TimeoutError) as e:
-                results.append(f"Auto-reload failed: {e}")
+                await sv.execute(f"waveform xview limits {zoom_start} {zoom_end}")
+                results.append(f"Zoomed to {zoom_start} – {zoom_end}")
+            except (TclError, ConnectionError, TimeoutError):
+                pass
 
-        return "\n".join(results)
+            if auto_reload:
+                try:
+                    db_name = sv_db.strip() if sv_db.strip() else ""
+                    reload_cmd = f"database reload {db_name}" if db_name else "database reload"
+                    await sv.execute(
+                        f"proc _mcp_auto_reload {{}} {{ "
+                        f"  catch {{{reload_cmd}}}; "
+                        f"  after 2000 _mcp_auto_reload "
+                        f"}}; "
+                        f"after 2000 _mcp_auto_reload"
+                    )
+                    results.append("Auto-reload enabled (2s interval)")
+                except (TclError, ConnectionError, TimeoutError) as e:
+                    results.append(f"Auto-reload failed: {e}")
+
+            return "\n".join(results)
+
+        else:
+            return f"ERROR: Unknown action '{action}'. Use 'setup', 'live_start', or 'live_stop'."
 
     @mcp.tool()
     async def compare_waveforms(

@@ -18,30 +18,20 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
         scope: str = "",
         pattern: str = "*",
         target: str = "auto",
-        value: str = "",
-        release: bool = False,
     ) -> str:
-        """Unified signal tool: read values, describe, list, find drivers, deposit, or release.
+        """Read signal values, describe metadata, list signals, or find drivers.
 
         Args:
             action:  "value" — read current values of one or more signals.
                      "describe" — detailed info (type, width, direction) for a signal.
                      "list" — list signals in a scope, filtered by pattern.
                      "drivers" — find all drivers of a signal (useful for X/Z debugging).
-                     "deposit" — force a value onto a signal.
-                     "release" — release a previously deposited signal (restore driven value).
-            signal:  Full hierarchical signal path. Required for describe/drivers/deposit/release.
+            signal:  Full hierarchical signal path. Required for describe/drivers. Also usable for value (single).
             signals: List of signal paths for "value" action.
             scope:   Hierarchical scope path (e.g. "top.hw.u_ext"). Required for "list".
             pattern: Glob pattern for "list" action (default "*").
             target:  "xmsim" | "simvision" | "auto" (default: auto). Used by "list".
-            value:   Value to deposit (e.g. "1'b1", "8'hFF"). Required for "deposit".
-            release: Alias for action="release" when used with deposit — deprecated, use action="release".
         """
-        # Backward compat: release=True with action="deposit" → treat as release
-        if release and action == "deposit":
-            action = "release"
-
         if action == "value":
             if not signals:
                 if signal:
@@ -76,19 +66,28 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             bridge = bridges.xmsim
             return await bridge.execute(f"drivers {signal}")
 
-        elif action == "deposit":
-            if not signal or not value:
-                return "ERROR: 'signal' and 'value' are required for action='deposit'."
-            bridge = bridges.xmsim
-            readback = await bridge.execute(f"__DEPOSIT_AND_VERIFY__ {signal} {value}")
-            return f"Deposited {value} on {signal}. Readback: {readback}"
+        else:
+            return f"ERROR: Unknown action '{action}'. Use 'value', 'describe', 'list', or 'drivers'."
 
-        elif action == "release":
-            if not signal:
-                return "ERROR: 'signal' is required for action='release'."
-            bridge = bridges.xmsim
+    @mcp.tool()
+    async def deposit_signal(
+        signal: str,
+        value: str = "",
+        release: bool = False,
+    ) -> str:
+        """Force-deposit a value onto a signal, or release to restore driven value.
+
+        Args:
+            signal:  Full hierarchical signal path.
+            value:   Value to deposit (e.g. "1'b1", "8'hFF"). Required unless release=True.
+            release: True = release the signal instead of depositing.
+        """
+        bridge = bridges.xmsim
+        if release:
             readback = await bridge.execute(f"__RELEASE_AND_VERIFY__ {signal}")
             return f"Released {signal}. Current value: {readback}"
-
         else:
-            return f"ERROR: Unknown action '{action}'. Use 'value', 'describe', 'list', 'drivers', 'deposit', or 'release'."
+            if not value:
+                return "ERROR: 'value' is required for deposit (or set release=True)."
+            readback = await bridge.execute(f"__DEPOSIT_AND_VERIFY__ {signal} {value}")
+            return f"Deposited {value} on {signal}. Readback: {readback}"

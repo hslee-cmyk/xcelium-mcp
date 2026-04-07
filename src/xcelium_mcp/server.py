@@ -1,4 +1,4 @@
-"""Xcelium MCP Server — FastMCP server with 26 tools for simulator control.
+"""Xcelium MCP Server — FastMCP server with 23 tools for simulator control.
 
 v4.2: Tools split into 7 modules under tools/. This file only creates
 the MCP instance, BridgeManager, and registers all tool modules.

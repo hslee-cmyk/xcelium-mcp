@@ -258,25 +258,61 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         return f"Connected to {target} at {host}:{port} (ping={ping})\nCurrent position: {where}"
 
     @mcp.tool()
-    async def disconnect_simulator(target: str = "all") -> str:
-        """Disconnect from bridge(s).
+    async def sim_disconnect(
+        action: str = "bridge",
+        target: str = "all",
+    ) -> str:
+        """Disconnect or shutdown simulator.
 
         Args:
-            target: "xmsim" | "simvision" | "all" (default: all)
+            action: "bridge" — disconnect bridge connection only (sim keeps running).
+                    "shutdown" — safely shutdown simulator, preserving SHM data.
+                    WARNING: Always use "shutdown" when ending a debug session.
+                    Plain disconnect or pkill will lose SHM data.
+            target: "xmsim" | "simvision" | "all" (default: all for bridge, xmsim for shutdown).
         """
-        results = []
+        if action == "bridge":
+            results = []
+            if target in ("xmsim", "all") and bridges.xmsim_raw and bridges.xmsim_raw.connected:
+                await bridges.xmsim_raw.disconnect()
+                bridges.set_xmsim(None)
+                results.append("xmsim: disconnected")
+            if target in ("simvision", "all") and bridges.simvision_raw and bridges.simvision_raw.connected:
+                await bridges.simvision_raw.disconnect()
+                bridges.set_simvision(None)
+                results.append("simvision: disconnected")
+            return "\n".join(results) if results else f"No {target} bridge connected."
 
-        if target in ("xmsim", "all") and bridges.xmsim_raw and bridges.xmsim_raw.connected:
-            await bridges.xmsim_raw.disconnect()
-            bridges.set_xmsim(None)
-            results.append("xmsim: disconnected")
+        elif action == "shutdown":
+            shutdown_target = target if target != "all" else "xmsim"
+            user_tmp = await get_user_tmp_dir()
+            if shutdown_target == "simvision":
+                bridge = bridges.simvision
+                port = bridge.port if hasattr(bridge, 'port') else 0
+                try:
+                    resp = await bridge.execute_safe("__SHUTDOWN__")
+                    return f"SimVision shutdown: {resp.body}"
+                except (ConnectionError, asyncio.TimeoutError):
+                    return "SimVision shutdown completed (connection closed)."
+                finally:
+                    bridges.set_simvision(None)
+                    if port:
+                        await ssh_run(f"rm -f {user_tmp}/bridge_ready_{port}")
+            else:
+                bridge = bridges.xmsim
+                port = bridge.port if hasattr(bridge, 'port') else 0
+                try:
+                    resp = await bridge.execute_safe("__SHUTDOWN__")
+                    return f"Simulator shutdown: {resp.body}"
+                except (ConnectionError, asyncio.TimeoutError):
+                    return "Simulator shutdown completed (connection closed)."
+                finally:
+                    bridges.set_xmsim(None)
+                    if port:
+                        await ssh_run(f"rm -f {user_tmp}/bridge_ready_{port}")
 
-        if target in ("simvision", "all") and bridges.simvision_raw and bridges.simvision_raw.connected:
-            await bridges.simvision_raw.disconnect()
-            bridges.set_simvision(None)
-            results.append("simvision: disconnected")
-
-        return "\n".join(results) if results else f"No {target} bridge connected."
+        else:
+            return f"ERROR: Unknown action '{action}'. Use 'bridge' or 'shutdown'."
 
     @mcp.tool()
     async def sim_run(duration: str = "", timeout: float = 600.0) -> str:
@@ -341,44 +377,5 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         bridge = bridges.get_bridge(target)
         # Single round-trip: where + scope combined in Tcl
         return await bridge.execute("__STATUS__")
-
-    @mcp.tool()
-    async def shutdown_simulator(target: str = "xmsim") -> str:
-        """Safely shutdown the simulator, preserving SHM waveform data.
-
-        Closes all SHM databases and terminates the target simulator gracefully.
-        Always use this instead of disconnect_simulator when ending a debug session.
-        WARNING: exit or pkill will lose SHM data. This is the only safe way.
-
-        Args:
-            target: "xmsim" (default) | "simvision". Which bridge to shutdown.
-        """
-        user_tmp = await get_user_tmp_dir()
-        if target == "simvision":
-            bridge = bridges.simvision
-            port = bridge.port if hasattr(bridge, 'port') else 0
-            try:
-                resp = await bridge.execute_safe("__SHUTDOWN__")
-                return f"SimVision shutdown: {resp.body}"
-            except (ConnectionError, asyncio.TimeoutError):
-                return "SimVision shutdown completed (connection closed)."
-            finally:
-                bridges.set_simvision(None)
-                # Fallback: cleanup ready file from Python side
-                if port:
-                    await ssh_run(f"rm -f {user_tmp}/bridge_ready_{port}")
-        else:
-            bridge = bridges.xmsim
-            port = bridge.port if hasattr(bridge, 'port') else 0
-            try:
-                resp = await bridge.execute_safe("__SHUTDOWN__")
-                return f"Simulator shutdown: {resp.body}"
-            except (ConnectionError, asyncio.TimeoutError):
-                return "Simulator shutdown completed (connection closed)."
-            finally:
-                bridges.set_xmsim(None)
-                # Fallback: cleanup ready file from Python side
-                if port:
-                    await ssh_run(f"rm -f {user_tmp}/bridge_ready_{port}")
 
     return {"connect_simulator": connect_simulator}
