@@ -356,14 +356,14 @@ async def run_full_discovery(
 
     mode_defaults = {
         "common": {"timeout": 120, "probe_strategy": "all", "extra_args": "", "dump_depth": "all"},
-        "rtl": {},
+        "rtl": {"extra_args": ""},
     }
     if "gate" in setup_tcls:
-        mode_defaults["gate"] = {"timeout": 1800, "probe_strategy": "selective", "dump_depth": "boundary"}
+        mode_defaults["gate"] = {"timeout": 1800, "probe_strategy": "selective", "extra_args": "", "dump_depth": "boundary"}
     if "ams_rtl" in setup_tcls:
-        mode_defaults["ams_rtl"] = {"timeout": 3600, "probe_strategy": "selective", "dump_depth": "boundary"}
+        mode_defaults["ams_rtl"] = {"timeout": 3600, "probe_strategy": "selective", "extra_args": "", "dump_depth": "boundary"}
     if "ams_gate" in setup_tcls:
-        mode_defaults["ams_gate"] = {"timeout": 3600, "probe_strategy": "selective", "dump_depth": "boundary"}
+        mode_defaults["ams_gate"] = {"timeout": 3600, "probe_strategy": "selective", "extra_args": "", "dump_depth": "boundary"}
 
     _sd = sq(sim_dir)
     if tb_type == "uvm":
