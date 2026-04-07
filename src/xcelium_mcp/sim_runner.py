@@ -356,6 +356,7 @@ async def run_full_discovery(
 
     mode_defaults = {
         "common": {"timeout": 120, "probe_strategy": "all", "extra_args": "", "dump_depth": "all"},
+        "rtl": {},
     }
     if "gate" in setup_tcls:
         mode_defaults["gate"] = {"timeout": 1800, "probe_strategy": "selective", "dump_depth": "boundary"}
