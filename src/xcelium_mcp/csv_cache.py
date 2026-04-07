@@ -127,7 +127,8 @@ async def extract(
     # --- Build simvisdbutil command with EDA env ---
     svdb = await _resolve_simvisdbutil()
     # -timeunits ns: force nanosecond output regardless of SHM time resolution
-    parts = [svdb, shm_path, "-csv", "-output", output_path, "-overwrite", "-timeunits", "ns"]
+    # Quote paths to protect from tcsh glob/space expansion
+    parts = [svdb, shlex.quote(shm_path), "-csv", "-output", shlex.quote(output_path), "-overwrite", "-timeunits", "ns"]
 
     if start_ns or end_ns:
         parts += ["-range", f"{start_ns}:{end_ns}ns"]
@@ -136,7 +137,8 @@ async def extract(
         parts.append("-missing")
 
     for sig in signals:
-        parts += ["-sig", sig]
+        # Quote signal names to protect [] from tcsh glob expansion
+        parts += ["-sig", shlex.quote(sig)]
 
     svdb_cmd = " ".join(parts)
 
