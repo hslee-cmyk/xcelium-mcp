@@ -1,8 +1,8 @@
-"""Xcelium MCP Server — FastMCP server with 28 tools for simulator control.
+"""Xcelium MCP Server — FastMCP server with 26 tools for simulator control.
 
 v4.2: Tools split into 7 modules under tools/. This file only creates
 the MCP instance, BridgeManager, and registers all tool modules.
-v5.0: Tool consolidation — 49 tools → 28 tools via action-parameter dispatch.
+v5.0: Tool consolidation — 51 tools → 26 tools via action-parameter dispatch.
 """
 from __future__ import annotations
 

@@ -66,17 +66,28 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         signals: list[str] | None = None,
         group_name: str = "",
         window_name: str = "",
+        # zoom params
+        start_time: str = "",
+        end_time: str = "",
+        # cursor params
+        time: str = "",
+        cursor_name: str = "TimeA",
     ) -> str:
-        """Manage waveform signals: add, remove, or clear.
+        """Manage waveform: add/remove/clear signals, zoom, or set cursor.
 
         Args:
-            action:      "add" — add signals to waveform. Auto-creates window, skips duplicates.
+            action:      "add" — add signals to waveform (auto-creates window, dedup).
                          "remove" — remove signals or a group from waveform.
-                         "clear" — remove all signals and groups from waveform.
+                         "clear" — remove all signals and groups.
+                         "zoom" — set waveform time range.
+                         "cursor" — set a cursor to a specific time.
             signals:     Signal paths (required for add; optional for remove).
-            group_name:  Group within window. Empty = no group.
-                         For remove: scope removal to this group. Empty = search all.
-            window_name: Target waveform window (add only). Empty = current (or auto-create).
+            group_name:  Group within window (add/remove).
+            window_name: Target waveform window (add only).
+            start_time:  Start time for zoom (e.g. "0ns").
+            end_time:    End time for zoom (e.g. "100ns").
+            time:        Simulation time for cursor (e.g. "50ns").
+            cursor_name: Cursor name (default "TimeA").
         """
         if action == "add":
             if not signals:
@@ -105,32 +116,10 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
                 return "ERROR: No waveform window open or clearall failed."
             return "All signals and groups cleared."
 
-        else:
-            return f"ERROR: Unknown action '{action}'. Use 'add', 'remove', or 'clear'."
-
-    @mcp.tool()
-    async def waveform_navigate(
-        action: str,
-        start_time: str = "",
-        end_time: str = "",
-        time: str = "",
-        cursor_name: str = "TimeA",
-    ) -> str:
-        """Navigate the waveform viewer: zoom or set cursor.
-
-        Args:
-            action:      "zoom" — set waveform time range.
-                         "cursor" — set a cursor to a specific time.
-            start_time:  Start time for zoom (e.g. "0ns").
-            end_time:    End time for zoom (e.g. "100ns").
-            time:        Simulation time for cursor (e.g. "50ns").
-            cursor_name: Cursor name for cursor action (default "TimeA").
-        """
-        bridge = bridges.simvision
-
-        if action == "zoom":
+        elif action == "zoom":
             if not start_time or not end_time:
                 return "ERROR: 'start_time' and 'end_time' are required for action='zoom'."
+            bridge = bridges.simvision
             result = await bridge.execute(
                 f"waveform xview limits {start_time} {end_time}"
             )
@@ -139,16 +128,17 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         elif action == "cursor":
             if not time:
                 return "ERROR: 'time' is required for action='cursor'."
+            bridge = bridges.simvision
             result = await bridge.execute(
                 f"cursor set -using {cursor_name} -time {time}"
             )
             return f"Cursor {cursor_name} set to {time}. {result}"
 
         else:
-            return f"ERROR: Unknown action '{action}'. Use 'zoom' or 'cursor'."
+            return f"ERROR: Unknown action '{action}'. Use 'add', 'remove', 'clear', 'zoom', or 'cursor'."
 
     @mcp.tool()
-    async def take_waveform_screenshot() -> Image:
+    async def waveform_screenshot() -> Image:
         """Capture a screenshot of the SimVision waveform window.
 
         Returns the screenshot as a PNG image that Claude can analyze.
@@ -165,8 +155,6 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         png_bytes = await ps_to_png(ps_path, config=cfg)
         return Image(data=png_bytes, format="png")
 
-    # Return dict: waveform_add key points to the unified waveform tool,
-    # and _waveform_add_impl is exposed for direct internal calls from simvision.py
     return {
         "waveform_add": waveform,
         "_waveform_add_impl": lambda **kwargs: _waveform_add_impl(bridges, **kwargs),

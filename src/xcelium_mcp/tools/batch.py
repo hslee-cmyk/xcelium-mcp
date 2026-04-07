@@ -178,7 +178,7 @@ def register(
         )
 
     @mcp.tool()
-    async def sim_batch_regression(
+    async def sim_regression(
         test_list: list[str],
         sim_dir: str = "",
         dump_signals: list[str] | None = None,
@@ -281,4 +281,4 @@ def register(
         except Exception as e:
             return f"ERROR running regression: {e}"
 
-        return f"sim_batch_regression completed.\n\n{summary}"
+        return f"sim_regression completed.\n\n{summary}"

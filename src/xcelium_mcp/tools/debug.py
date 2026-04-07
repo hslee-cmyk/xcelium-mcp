@@ -118,50 +118,52 @@ async def _bisect_signal_dump_impl(
 def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
 
     @mcp.tool()
-    async def watch_signal(
-        signal: str,
+    async def watch(
+        action: str,
+        signal: str = "",
         op: str = "==",
         value: str = "",
         type: str = "watch",
+        watch_id: str = "all",
     ) -> str:
-        """Set a watchpoint or breakpoint to stop simulation on a signal condition.
+        """Manage watchpoints and breakpoints: set or clear.
 
         Args:
-            signal: Full hierarchical signal path (e.g. "top.dut.r_state[3:0]").
-            op:     Comparison operator ("==", "!=", ">", "<", ">=", "<=").
-            value:  Target value in Verilog format (e.g. "8'h10", "4'b1010").
-            type:   "watch" — watchpoint via __WATCH__ protocol (default).
-                    "breakpoint" — conditional breakpoint via stop -create.
+            action:   "set" — create a watchpoint or breakpoint.
+                      "clear" — remove watchpoints. Use watch_id="all" or a specific ID.
+            signal:   Full hierarchical signal path (required for action="set").
+            op:       Comparison operator ("==", "!=", ">", "<", ">=", "<=").
+            value:    Target value in Verilog format (e.g. "8'h10", "4'b1010").
+            type:     "watch" — watchpoint via __WATCH__ protocol (default).
+                      "breakpoint" — conditional breakpoint via stop -create.
+            watch_id: Watchpoint ID to clear, or "all" (action="clear" only).
         """
         bridge = bridges.xmsim
 
-        if type == "breakpoint":
-            # Parse "signal op value" for breakpoint
-            condition = f"{signal} {op} {value}"
-            m = re.match(r'^(\S+)\s*(==|!=|>|<|>=|<=)\s*(.+)$', condition.strip())
-            if m and '.' in m.group(1):
-                sig, bop, val = m.group(1), m.group(2), m.group(3).strip()
-                tcl_cond = '{[value ' + sig + '] ' + bop + ' "' + val + '"}'
-                cmd = f"stop -create -condition {tcl_cond}"
+        if action == "set":
+            if not signal:
+                return "ERROR: 'signal' is required for action='set'."
+            if type == "breakpoint":
+                condition = f"{signal} {op} {value}"
+                m = re.match(r'^(\S+)\s*(==|!=|>|<|>=|<=)\s*(.+)$', condition.strip())
+                if m and '.' in m.group(1):
+                    sig, bop, val = m.group(1), m.group(2), m.group(3).strip()
+                    tcl_cond = '{[value ' + sig + '] ' + bop + ' "' + val + '"}'
+                    cmd = f"stop -create -condition {tcl_cond}"
+                else:
+                    cmd = f"stop -create -condition {condition}"
+                result = await bridge.execute(cmd)
+                return f"Breakpoint set: {result}"
             else:
-                cmd = f"stop -create -condition {condition}"
-            result = await bridge.execute(cmd)
-            return f"Breakpoint set: {result}"
+                result = await bridge.execute(f"__WATCH__ {signal} {op} {value}")
+                return f"Watchpoint set: {result}"
+
+        elif action == "clear":
+            result = await bridge.execute(f"__WATCH_CLEAR__ {watch_id}")
+            return result
+
         else:
-            # Default: watchpoint
-            result = await bridge.execute(f"__WATCH__ {signal} {op} {value}")
-            return f"Watchpoint set: {result}"
-
-    @mcp.tool()
-    async def watch_clear(watch_id: str = "all") -> str:
-        """Clear watchpoints. Use "all" to clear all, or a specific stop ID.
-
-        Args:
-            watch_id: Watchpoint ID to clear, or "all" for all watchpoints.
-        """
-        bridge = bridges.xmsim
-        result = await bridge.execute(f"__WATCH_CLEAR__ {watch_id}")
-        return result
+            return f"ERROR: Unknown action '{action}'. Use 'set' or 'clear'."
 
     @mcp.tool()
     async def probe(
