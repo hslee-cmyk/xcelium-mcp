@@ -329,16 +329,18 @@ async def run_full_discovery(
     shell_env = await _detect_shell_and_env(sim_dir, script_name, project_root)
 
     # Phase B: dependent on shell_env / bridge_tcl (parallelized)
-    setup_tcls, eda_tools, external_tools, bridge_port, patch_result, run_info = (
+    # _patch_legacy_run_script uses sed -i (file write) — must run serially
+    # to avoid race with _detect_run_dir which reads the same script.
+    setup_tcls, eda_tools, external_tools, bridge_port, run_info = (
         await asyncio.gather(
             _detect_setup_tcls(sim_dir),
             _resolve_eda_tools(shell_env),
             _resolve_external_tools(shell_env),
             _detect_bridge_port(sim_dir, bridge_tcl),
-            _patch_legacy_run_script(sim_dir, runner_info),
             _detect_run_dir(sim_dir, runner_info),
         )
     )
+    patch_result = await _patch_legacy_run_script(sim_dir, runner_info)
     run_dir = run_info["run_dir"]
     script_has_cd = run_info["script_has_cd"]
 
