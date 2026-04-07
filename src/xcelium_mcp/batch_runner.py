@@ -221,11 +221,20 @@ def _replace_probe_lines(
         else:
             filtered.append(line)
 
+    # Extract database path from database -open line for -database option
+    db_path = ""
+    for line in filtered:
+        m = _re.match(r"\s*database\s+-open\s+(\S+)", line)
+        if m:
+            db_path = m.group(1)
+            break
+    db_opt = f" -database {db_path}" if db_path else " -shm"
+
     if probe_type == "depth_all":
-        new_probes = ["probe -create top -depth all -shm"]
+        new_probes = [f"probe -create top -depth all{db_opt}"]
     else:
         new_probes = [
-            f"probe -create {sig} -shm"
+            f"probe -create {sig}{db_opt}"
             for sig in (probe_signals or [])
             if sig not in existing_signals
         ]
