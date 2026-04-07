@@ -133,15 +133,245 @@ def _replace_shm_stems(content: str, test_name: str) -> str:
     return content
 
 
+# ---------------------------------------------------------------------------
+# v4.3: Dump depth — boundary signals + probe line management
+# ---------------------------------------------------------------------------
+
+BOUNDARY_SIGNALS = [
+    "top.hw.i_mainClk", "top.hw.i_rst_n",
+    "top.hw.i_scl", "top.hw.io_sda",
+    "top.hw.i_pcmIn", "top.hw.i_pcmSync",
+    "top.hw.o_askData", "top.hw.o_askDataInv",
+    "top.hw.o_askRefClk", "top.hw.o_refClk", "top.hw.o_refClkInv",
+    "top.hw.o_btCoilShort",
+    "top.hw.i_backTel_p", "top.hw.i_backTel_n",
+    "top.hw.o_backTel_pwr_en",
+    "top.hw.i_led_ctrl_r", "top.hw.i_led_ctrl_g", "top.hw.i_led_ctrl_b",
+    "top.hw.o_led_r", "top.hw.o_led_g", "top.hw.o_led_b",
+    "top.hw.i_earpiece_det_n", "top.hw.i_rmClkNum",
+    "top.hw.i_deep_slp_en", "top.hw.i_dyn_slp_en",
+    "top.hw.o_sync_req", "top.hw.o_stim_trig", "top.hw.o_serial_tp_out",
+]
+
+
+def _resolve_probe_signals(
+    dump_signals: list[str] | None,
+    dump_depth: str,
+) -> tuple[str, list[str] | None]:
+    """Resolve final probe signal set based on dump_depth and dump_signals.
+
+    dump_depth="all" → probe -create top -depth all (dump_signals ignored).
+    dump_depth="boundary" → BOUNDARY_SIGNALS union dump_signals (deduped).
+
+    Returns:
+        ("depth_all", None)              — probe -create top -depth all
+        ("signals", [sig1, sig2, ...])   — probe -create {each} individually
+    """
+    if dump_depth == "all":
+        return ("depth_all", None)
+
+    base = set(BOUNDARY_SIGNALS)
+    if dump_signals:
+        base |= set(dump_signals)
+
+    return ("signals", sorted(base))
+
+
+def _generate_probe_reset_tcl(probe_type: str, probe_signals: list[str] | None) -> str:
+    """Generate Tcl commands to reset probe configuration after checkpoint restore.
+
+    Sequence: disable existing probes → add new probes → enable.
+    Used when from_checkpoint + dump_depth is specified.
+    """
+    lines = []
+    lines.append("probe -disable")
+
+    if probe_type == "depth_all":
+        lines.append("probe -create top -depth all -shm")
+    elif probe_signals:
+        for sig in probe_signals:
+            lines.append(f"probe -create {sig} -shm")
+
+    lines.append("probe -enable")
+    return "\n".join(lines) + "\n"
+
+
+def _replace_probe_lines(
+    content: str, probe_type: str, probe_signals: list[str] | None,
+) -> str:
+    """Adjust probe lines in setup tcl based on dump_depth.
+
+    - Scope probes (-depth option) → removed
+    - Specific signal probes (user custom) → kept
+    - New probes added based on dump_depth (deduped against existing)
+    """
+    lines = content.splitlines()
+
+    filtered = []
+    existing_signals: set[str] = set()
+    for line in lines:
+        if _re.match(r"\s*probe\s+-create\b", line):
+            if "-depth" in line:
+                continue  # scope probe → remove
+            sig_match = _re.search(r"probe\s+-create\s+(\S+)", line)
+            if sig_match:
+                existing_signals.add(sig_match.group(1))
+            filtered.append(line)
+        else:
+            filtered.append(line)
+
+    if probe_type == "depth_all":
+        new_probes = ["probe -create top -depth all -shm"]
+    else:
+        new_probes = [
+            f"probe -create {sig} -shm"
+            for sig in (probe_signals or [])
+            if sig not in existing_signals
+        ]
+
+    # Insert after database -open, or at start if not found
+    result: list[str] = []
+    inserted = False
+    for line in filtered:
+        result.append(line)
+        if not inserted and _re.match(r"\s*database\s+-open\b", line):
+            result.extend(new_probes)
+            inserted = True
+
+    if not inserted:
+        result = new_probes + result
+
+    return "\n".join(result) + "\n"
+
+
+def _inject_dump_window(content: str, dump_window: dict) -> str:
+    """Inject probe on/off + run sequence for dump_window (Batch mode only).
+
+    Replaces existing 'run' command with windowed probe on/off + run sequence.
+    Setup tcl에 직접 주입되므로 bridge 통신 불필요.
+
+    Args:
+        content: setup tcl content
+        dump_window: {"start_ms": int, "end_ms": int}
+    """
+    start_ms = dump_window["start_ms"]
+    end_ms = dump_window["end_ms"]
+    duration_ms = end_ms - start_ms
+
+    # 기존 run 명령 제거
+    lines = content.splitlines()
+    filtered = [line for line in lines if not _re.match(r"\s*run\b", line)]
+
+    window_tcl = ["probe -disable"]
+    if start_ms > 0:
+        window_tcl.append(f"run {start_ms}ms")
+    window_tcl.append("probe -enable")
+    window_tcl.append(f"run {duration_ms}ms")
+    window_tcl.append("probe -disable")
+    window_tcl.append("run")  # $finish까지
+
+    return "\n".join(filtered + window_tcl) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# v4.3: SDF override
+# ---------------------------------------------------------------------------
+
+async def _handle_sdf_override(
+    sim_dir: str, runner: dict, sdf_file: str, sdf_corner: str,
+) -> str:
+    """Handle SDF override: disable TB $sdf_annotate + generate tfile.
+
+    Returns extra_args string to append (e.g. "-define NODLY -tfile ...").
+    """
+    from xcelium_mcp.sim_runner import get_user_tmp_dir
+
+    config = await load_sim_config(sim_dir)
+    sdf_info = (config or {}).get("sdf_info", {})
+    extra_defines: list[str] = []
+
+    # Step 1: disable TB $sdf_annotate
+    if sdf_info.get("has_sdf_annotate"):
+        guard = sdf_info.get("sdf_guard_define")
+        if guard:
+            extra_defines.append(f"-define {guard}")
+        else:
+            await _patch_tb_sdf_guard(sim_dir, sdf_info)
+            extra_defines.append("-define MCP_SDF_OVERRIDE")
+
+    # Step 2: generate tfile with scope-aware entries
+    corner_map = {"min": "MINIMUM", "max": "MAXIMUM", "typ": "TYPICAL"}
+    sdf_corner_upper = corner_map.get(sdf_corner, "MAXIMUM")
+
+    user_tmp = await get_user_tmp_dir()
+    tfile_path = f"{user_tmp}/mcp_sdf_tfile"
+
+    sdf_entries = sdf_info.get("sdf_entries", [])
+    scopes = sorted(set(e["scope"] for e in sdf_entries)) if sdf_entries else ["top"]
+
+    tfile_lines: list[str] = []
+    for scope in scopes:
+        tfile_lines.append(f'COMPILED_SDF_FILE "{sdf_file}"')
+        tfile_lines.append(f"  SCOPE {scope}")
+        tfile_lines.append(f"  {sdf_corner_upper}")
+        tfile_lines.append(";")
+    tfile_content = "\n".join(tfile_lines) + "\n"
+
+    await ssh_run(
+        f"cat > {sq(tfile_path)} << 'TFILE_EOF'\n{tfile_content}TFILE_EOF",
+        timeout=10,
+    )
+
+    # Step 3: build elab extra args
+    elab_extra = f"-delay_mode path -sdf_verbose -timescale 1ns/1fs -tfile {tfile_path}"
+    return " ".join(extra_defines + [elab_extra])
+
+
+async def _patch_tb_sdf_guard(sim_dir: str, sdf_info: dict):
+    """Patch TB RTL: add `ifndef MCP_SDF_OVERRIDE guard around $sdf_annotate.
+
+    Only called when sdf_guard_define is None (no existing guard).
+    Creates backup before patching.
+    """
+    from xcelium_mcp.sim_runner import get_user_tmp_dir
+
+    top_v = sdf_info.get("sdf_source_file", "")
+    if not top_v:
+        return
+
+    # Backup
+    user_tmp = await get_user_tmp_dir()
+    filename = top_v.split("/")[-1]
+    await ssh_run(f"cp {sq(top_v)} {user_tmp}/{filename}.bak.mcp_sdf", timeout=5)
+
+    # Patch: wrap $sdf_annotate block with `ifndef MCP_SDF_OVERRIDE
+    content = await ssh_run(f"cat {sq(top_v)}", timeout=10)
+
+    patched = _re.sub(
+        r"(\s*initial\s+begin\s*\n)(.*?\$sdf_annotate.*?\n)(.*?\s*end)",
+        r"\1`ifndef MCP_SDF_OVERRIDE\n\2`endif\n\3",
+        content,
+        flags=_re.DOTALL,
+    )
+
+    if patched != content:
+        await ssh_run(
+            f"cat > {sq(top_v)} << 'PATCH_EOF'\n{patched}PATCH_EOF",
+            timeout=10,
+        )
+
+
 async def _preprocess_setup_tcl(
     sim_dir: str, runner: dict, test_name: str, sim_mode: str = "",
+    dump_depth: str = "all",
+    dump_signals: list[str] | None = None,
+    dump_window: dict | None = None,
 ) -> str:
-    """Preprocess setup_tcl to inject test_name into SHM paths.
+    """Preprocess setup_tcl: SHM naming + probe scope + dump window (v4.3).
 
-    Replaces ``<stem>.shm`` with ``<stem>_{test_name}.shm`` in all SHM
-    references: ``database -open/-close`` and ``probe ... -database`` lines.
-    Skips if <stem> already contains test_name or if ``$env(TEST_NAME)``
-    is used. Generic — works with any SHM name.
+    1. SHM stem replacement (existing): ``<stem>.shm`` → ``<stem>_{test_name}.shm``
+    2. Probe scope adjustment (v4.3): remove scope probes, add dump_depth-based probes
+    3. Dump window (v4.3): replace 'run' with probe on/off + windowed run sequence
 
     Returns temp file path for MCP_INPUT_TCL injection, or empty string
     if no replacement needed.
@@ -154,19 +384,37 @@ async def _preprocess_setup_tcl(
     if not content:
         return ""
 
-    # Skip if already using $env(TEST_NAME) — dynamic naming, no preprocessing
-    if "$env(TEST_NAME)" in content:
-        return ""
+    changed = False
 
-    new_content = _replace_shm_stems(content, test_name)
-    if new_content == content:
+    # Step 1: SHM stem replacement (existing)
+    if "$env(TEST_NAME)" not in content:
+        new_content = _replace_shm_stems(content, test_name)
+        if new_content != content:
+            content = new_content
+            changed = True
+
+    # Step 2: probe scope adjustment (v4.3)
+    probe_type, probe_signals = _resolve_probe_signals(dump_signals, dump_depth)
+    new_content = _replace_probe_lines(content, probe_type, probe_signals)
+    if new_content != content:
+        content = new_content
+        changed = True
+
+    # Step 3: dump window — replace 'run' with probe on/off sequence (v4.3)
+    if dump_window:
+        new_content = _inject_dump_window(content, dump_window)
+        if new_content != content:
+            content = new_content
+            changed = True
+
+    if not changed:
         return ""
 
     # Write preprocessed tcl to temp location
     from xcelium_mcp.sim_runner import get_user_tmp_dir
     user_tmp = await get_user_tmp_dir()
     out_path = f"{user_tmp}/setup_batch_{test_name}.tcl"
-    Path(out_path).write_text(new_content)
+    Path(out_path).write_text(content)
 
     return out_path
 
@@ -269,6 +517,11 @@ async def _run_batch_single(
     timeout: int = 600,
     sim_mode: str = "rtl",
     extra_args: str = "",
+    dump_depth: str = None,
+    dump_signals: list[str] | None = None,
+    dump_window: dict | None = None,
+    sdf_file: str = "",
+    sdf_corner: str = "max",
 ) -> str:
     """Execute a single simulation test and return combined log output.
 
@@ -278,13 +531,19 @@ async def _run_batch_single(
     (e.g. ``dump/ci_top.shm``) with test-specific names
     (``dump/ci_top_{TEST_NAME}.shm``) before simulation runs.
     Injected via MCP_INPUT_TCL env var so run_sim sources the modified tcl.
+
+    v4.3: dump_depth/dump_signals control probe scope in setup tcl.
+           dump_window injects probe on/off + windowed run sequence.
+           sdf_file/sdf_corner for SDF override.
     """
     import time as _time
 
     # v4.1: _resolve_sim_params for mode-aware params
+    # v4.3: dump_depth forwarded to resolve_sim_params
     validate_extra_args(extra_args)
-    params = resolve_sim_params(runner, sim_mode, extra_args, timeout)
+    params = resolve_sim_params(runner, sim_mode, extra_args, timeout, dump_depth=dump_depth)
     effective_timeout = params["timeout"]
+    effective_dump_depth = params["dump_depth"]
 
     # v4.1: use args_format from _resolve_sim_params
     info = _resolve_exec_cmd(runner, regression=False)
@@ -295,11 +554,19 @@ async def _run_batch_single(
     if params["extra_args"]:
         cmd = f"{cmd} {params['extra_args']}"
 
-    # SHM naming: preprocess setup_tcl to inject test-specific SHM path.
-    # Replaces hardcoded "ci_top.shm" with "ci_top_{TEST_NAME}.shm"
-    # so the SHM is created with the correct name from the start.
+    # v4.3: SDF override — disable TB $sdf_annotate + generate tfile
+    if sdf_file:
+        sdf_extra = await _handle_sdf_override(sim_dir, runner, sdf_file, sdf_corner)
+        if sdf_extra:
+            cmd = f"{cmd} {sdf_extra}"
+
+    # SHM naming + probe scope + dump window: preprocess setup_tcl.
     env_prefix = f"TEST_NAME={sq(test_name)} "
-    preprocessed_tcl = await _preprocess_setup_tcl(sim_dir, runner, test_name, sim_mode)
+    preprocessed_tcl = await _preprocess_setup_tcl(
+        sim_dir, runner, test_name, sim_mode,
+        dump_depth=effective_dump_depth, dump_signals=dump_signals,
+        dump_window=dump_window,
+    )
     if preprocessed_tcl:
         env_prefix += f"MCP_INPUT_TCL={sq(preprocessed_tcl)} "
 
@@ -404,6 +671,11 @@ async def _run_batch_regression(
     extra_args: str = "",
     save_checkpoints: bool = False,
     l1_time: str = "",
+    dump_depth: str = None,
+    dump_signals: list[str] | None = None,
+    dump_window: dict | None = None,
+    sdf_file: str = "",
+    sdf_corner: str = "max",
 ) -> str:
     """Execute regression tests via nohup batch with job resume.
 
@@ -431,7 +703,7 @@ async def _run_batch_regression(
     # v4.1: resolve sim_mode/extra_args for regression
     validate_extra_args(extra_args)
     effective_sim_mode = sim_mode or runner.get("default_mode", "rtl")
-    params = resolve_sim_params(runner, effective_sim_mode, extra_args=extra_args)
+    params = resolve_sim_params(runner, effective_sim_mode, extra_args=extra_args, dump_depth=dump_depth)
     info = _resolve_exec_cmd(runner, regression=True)
 
     # Phase 4: prepare checkpoint setup (read + strip run/exit once)
@@ -503,6 +775,9 @@ async def _run_batch_regression(
             if not (save_checkpoints and setup_lines):
                 preprocessed_tcl = await _preprocess_setup_tcl(
                     sim_dir, runner, test_name, effective_sim_mode,
+                    dump_depth=params.get("dump_depth", "all"),
+                    dump_signals=dump_signals,
+                    dump_window=dump_window,
                 )
                 if preprocessed_tcl:
                     env_prefix += f"MCP_INPUT_TCL={sq(preprocessed_tcl)} "
@@ -684,6 +959,7 @@ def resolve_sim_params(
     sim_mode: str = "rtl",
     extra_args: str = "",
     timeout: int = 600,
+    dump_depth: str = None,
 ) -> dict:
     """Resolve simulation parameters from registry schema — Single Point of Change.
 
@@ -692,7 +968,7 @@ def resolve_sim_params(
 
     Returns:
         {"test_args_format": str, "timeout": int,
-         "probe_strategy": str, "extra_args": str}
+         "probe_strategy": str, "extra_args": str, "dump_depth": str}
     """
     # 1. args_format: dict → mode선택, string → 전 mode 동일
     args_raw = runner.get("args_format", "-test {test_name} --")
@@ -711,11 +987,30 @@ def resolve_sim_params(
     cfg_extra = effective.get("extra_args", "")
     all_extra = f"{cfg_extra} {extra_args}".strip()
 
+    # v4.3: extra_args combo warnings (warn only, never block)
+    warnings: list[str] = []
+    if extra_args:
+        ea_lower = extra_args.lower()
+        if sim_mode == "rtl" and any(k in ea_lower for k in ("-max", "-worst", "-best", "-min")):
+            warnings.append("WARNING: corner options are typically for gate/ams mode, not rtl")
+        if sim_mode == "gate" and "-ams" in ea_lower:
+            warnings.append("WARNING: AMS option in gate mode — use sim_mode='ams_gate' instead")
+        if not sim_mode and ("-gate" in ea_lower or "-gate post" in ea_lower):
+            warnings.append("WARNING: use sim_mode='gate' instead of extra_args for gate mode")
+
+    # v4.3: dump_depth 결정
+    if dump_depth is not None:
+        effective_dump_depth = dump_depth
+    else:
+        effective_dump_depth = effective.get("dump_depth", "all")
+
     return {
         "test_args_format": test_args_format,
         "timeout": effective.get("timeout", timeout),
         "probe_strategy": effective.get("probe_strategy", "all"),
         "extra_args": all_extra,
+        "dump_depth": effective_dump_depth,
+        "warnings": warnings,
     }
 
 

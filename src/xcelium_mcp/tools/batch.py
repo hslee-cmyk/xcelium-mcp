@@ -50,6 +50,11 @@ def register(
         timeout: int = 600,
         sim_mode: str = "",
         extra_args: str = "",
+        dump_depth: str = "",
+        dump_window_start_ms: int = 0,
+        dump_window_end_ms: int = 0,
+        sdf_file: str = "",
+        sdf_corner: str = "max",
     ) -> str:
         """Run simulation for a single test.
 
@@ -77,6 +82,11 @@ def register(
             probe_signals = []
         if dump_signals is None:
             dump_signals = []
+        # v4.3: enum validation
+        if dump_depth and dump_depth not in ("boundary", "all"):
+            return f"Invalid dump_depth='{dump_depth}'. Must be 'boundary', 'all', or '' (auto)."
+        if sdf_file and sdf_corner not in ("min", "max", "typ"):
+            return f"Invalid sdf_corner='{sdf_corner}'. Must be 'min', 'max', or 'typ'."
         # Resolve sim_dir
         try:
             resolved_sim_dir = sim_dir if sim_dir else await get_default_sim_dir()
@@ -132,6 +142,13 @@ def register(
         try:
             # v4.1: sim_mode + extra_args
             effective_mode = sim_mode or runner.get("default_mode", "rtl")
+            # v4.3: dump_depth + dump_window
+            effective_dump_depth = dump_depth if dump_depth else None
+            dump_window = None
+            if dump_window_start_ms > 0 or dump_window_end_ms > 0:
+                if dump_window_end_ms <= dump_window_start_ms:
+                    return f"Invalid dump_window: end_ms ({dump_window_end_ms}) must be > start_ms ({dump_window_start_ms})"
+                dump_window = {"start_ms": dump_window_start_ms, "end_ms": dump_window_end_ms}
             log = await _run_batch_single(
                 sim_dir=resolved_sim_dir,
                 test_name=test_name,
@@ -141,6 +158,11 @@ def register(
                 timeout=timeout,
                 sim_mode=effective_mode,
                 extra_args=extra_args,
+                dump_depth=effective_dump_depth,
+                dump_signals=dump_signals if dump_signals else None,
+                dump_window=dump_window,
+                sdf_file=sdf_file,
+                sdf_corner=sdf_corner,
             )
         except Exception as e:
             return f"ERROR running simulation: {e}"
@@ -160,6 +182,11 @@ def register(
         extra_args: str = "",
         save_checkpoints: bool = False,
         l1_time: str = "",
+        dump_depth: str = "",
+        dump_window_start_ms: int = 0,
+        dump_window_end_ms: int = 0,
+        sdf_file: str = "",
+        sdf_corner: str = "max",
     ) -> str:
         """Run regression over a list of tests.
 
@@ -178,6 +205,11 @@ def register(
             save_checkpoints: Save L1/L2 checkpoints per test for later debugging.
             l1_time: Time for L1 checkpoint (default "500us"). e.g. "1ms".
         """
+        # v4.3: enum validation
+        if dump_depth and dump_depth not in ("boundary", "all"):
+            return f"Invalid dump_depth='{dump_depth}'. Must be 'boundary', 'all', or '' (auto)."
+        if sdf_file and sdf_corner not in ("min", "max", "typ"):
+            return f"Invalid sdf_corner='{sdf_corner}'. Must be 'min', 'max', or 'typ'."
         if dump_signals is None:
             dump_signals = []
 
@@ -231,6 +263,12 @@ def register(
 
         # Execute regression
         try:
+            effective_dump_depth = dump_depth if dump_depth else None
+            dump_window = None
+            if dump_window_start_ms > 0 or dump_window_end_ms > 0:
+                if dump_window_end_ms <= dump_window_start_ms:
+                    return f"Invalid dump_window: end_ms ({dump_window_end_ms}) must be > start_ms ({dump_window_start_ms})"
+                dump_window = {"start_ms": dump_window_start_ms, "end_ms": dump_window_end_ms}
             summary = await _run_batch_regression(
                 sim_dir=resolved_sim_dir,
                 test_list=test_list,
@@ -240,6 +278,11 @@ def register(
                 extra_args=extra_args,
                 save_checkpoints=save_checkpoints,
                 l1_time=l1_time,
+                dump_depth=effective_dump_depth,
+                dump_signals=dump_signals if dump_signals else None,
+                dump_window=dump_window,
+                sdf_file=sdf_file,
+                sdf_corner=sdf_corner,
             )
         except Exception as e:
             return f"ERROR running regression: {e}"

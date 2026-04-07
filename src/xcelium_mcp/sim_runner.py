@@ -311,7 +311,9 @@ async def _update_simvisionrc(bridge_tcl: str) -> str:
 # ===================================================================
 
 
-async def run_full_discovery(sim_dir: str = "", force: bool = False) -> str:
+async def run_full_discovery(
+    sim_dir: str = "", force: bool = False, top_module: str = "",
+) -> str:
     """Main discovery orchestrator. Called by sim_discover MCP tool."""
     if not sim_dir:
         envs = await _discover_sim_dir()
@@ -353,14 +355,14 @@ async def run_full_discovery(sim_dir: str = "", force: bool = False) -> str:
         args_format["ams_gate"] = "-test {test_name} -amsf -gate post --"
 
     mode_defaults = {
-        "common": {"timeout": 120, "probe_strategy": "all", "extra_args": ""},
+        "common": {"timeout": 120, "probe_strategy": "all", "extra_args": "", "dump_depth": "all"},
     }
     if "gate" in setup_tcls:
-        mode_defaults["gate"] = {"timeout": 1800, "probe_strategy": "selective"}
+        mode_defaults["gate"] = {"timeout": 1800, "probe_strategy": "selective", "dump_depth": "boundary"}
     if "ams_rtl" in setup_tcls:
-        mode_defaults["ams_rtl"] = {"timeout": 3600, "probe_strategy": "selective"}
+        mode_defaults["ams_rtl"] = {"timeout": 3600, "probe_strategy": "selective", "dump_depth": "boundary"}
     if "ams_gate" in setup_tcls:
-        mode_defaults["ams_gate"] = {"timeout": 3600, "probe_strategy": "selective"}
+        mode_defaults["ams_gate"] = {"timeout": 3600, "probe_strategy": "selective", "dump_depth": "boundary"}
 
     _sd = sq(sim_dir)
     if tb_type == "uvm":
@@ -411,6 +413,15 @@ async def run_full_discovery(sim_dir: str = "", force: bool = False) -> str:
         "external_tools": external_tools,
         "test_discovery": test_discovery,
     }
+
+    # v4.3: $sdf_annotate analysis
+    try:
+        sdf_info = await _analyze_sdf_annotate(sim_dir, runner_info, top_module)
+        config["sdf_info"] = sdf_info
+    except UserInputRequired:
+        # top module 자동 탐지 실패 → sdf_info 없이 진행 (사용자가 재호출 시 top_module 제공)
+        config["sdf_info"] = {"has_sdf_annotate": False}
+
     await save_sim_config(sim_dir, config)
     await _update_registry_from_config(sim_dir, tb_type, config)
 
@@ -451,6 +462,246 @@ def _format_discovery_result(
 
 
 # ===================================================================
+# v4.3: Bridge mode dump_window
+# ===================================================================
+
+
+async def run_with_dump_window(bridges, dump_window: dict, timeout: float = 600):
+    """Bridge mode dump_window: probe on/off sequencing.
+
+    Assumes setup tcl started with probe -disable.
+    Bridge turnaround: 5 commands (settling run + enable + window run + disable + final run).
+
+    Args:
+        bridges: BridgeManager instance (must be connected).
+        dump_window: {"start_ms": int, "end_ms": int}
+        timeout: max seconds for each sim_run command.
+    """
+    start_ms = dump_window["start_ms"]
+    end_ms = dump_window["end_ms"]
+    duration_ms = end_ms - start_ms
+
+    bridge = bridges.xmsim
+
+    # settling — probe already off (setup tcl: probe -disable)
+    if start_ms > 0:
+        await bridge.execute(f"run {start_ms}ms", timeout=timeout)
+
+    # window — probe on
+    await bridge.execute("probe -enable", timeout=30)
+    await bridge.execute(f"run {duration_ms}ms", timeout=timeout)
+
+    # remainder — probe off
+    await bridge.execute("probe -disable", timeout=30)
+    await bridge.execute("run", timeout=timeout)
+
+
+# ===================================================================
+# v4.3: SDF annotation analysis
+# ===================================================================
+
+
+async def _extract_top_module_from_script(sim_dir: str, runner: dict) -> str:
+    """Extract top module name from run_sim script.
+
+    Parses xmsim/xrun/irun invocation to find the last non-option argument.
+    Handles: eval prefix, backslash line continuations.
+
+    Returns: top module name, or "" if not found.
+    """
+    script_name = runner.get("script", "")
+    if not script_name:
+        return ""
+
+    content = await ssh_run(
+        f"cat {sq(sim_dir + '/' + script_name)} 2>/dev/null", timeout=10
+    )
+    if not content:
+        return ""
+
+    # Join backslash-continued lines
+    joined = re.sub(r"\\\s*\n\s*", " ", content)
+
+    match = re.search(
+        r"(?:eval\s+)?(?:xmsim|xrun|irun)\s+(.+)",
+        joined, re.MULTILINE,
+    )
+    if match:
+        tokens = match.group(1).strip().split()
+        for token in reversed(tokens):
+            if (not token.startswith("-")
+                    and not token.startswith("$")
+                    and re.fullmatch(r"\w+", token)):
+                return token
+
+    return ""
+
+
+def _parse_ifdef_around_sdf(content: str) -> dict:
+    """Parse ifdef structure around $sdf_annotate — no hardcoded define names.
+
+    Builds structured sdf_entries: each $sdf_annotate call with its scope,
+    conditions (ifdef stack at that point), and SDF file path.
+
+    Returns:
+        {
+            "sdf_guard_define": str | None,
+            "sdf_entries": list[dict],
+        }
+    """
+    sdf_guard_define = None
+    sdf_entries: list[dict] = []
+    ifdef_stack: list[dict] = []
+
+    for line in content.splitlines():
+        stripped = line.strip()
+
+        # ifdef/ifndef tracking
+        m = re.match(r"`(ifdef|ifndef)\s+(\w+)", stripped)
+        if m:
+            ifdef_stack.append({
+                "define": m.group(2), "type": m.group(1), "branch": "if",
+            })
+        elif stripped.startswith("`else"):
+            if ifdef_stack:
+                ifdef_stack[-1]["branch"] = "else"
+        elif stripped.startswith("`endif"):
+            if ifdef_stack:
+                ifdef_stack.pop()
+
+        # $sdf_annotate (skip comments)
+        if "$sdf_annotate" not in line or stripped.startswith("//"):
+            continue
+
+        # Guard detection
+        if sdf_guard_define is None:
+            for frame in reversed(ifdef_stack):
+                if frame["branch"] == "else" and frame["type"] == "ifdef":
+                    sdf_guard_define = frame["define"]
+                    break
+                elif frame["branch"] == "if" and frame["type"] == "ifndef":
+                    sdf_guard_define = frame["define"]
+                    break
+
+        # Build conditions from current stack
+        conditions: dict[str, bool] = {}
+        for frame in ifdef_stack:
+            if frame["define"] == sdf_guard_define:
+                continue
+            if frame["type"] == "ifdef":
+                conditions[frame["define"]] = (frame["branch"] == "if")
+            elif frame["type"] == "ifndef":
+                conditions[frame["define"]] = (frame["branch"] == "else")
+
+        # Extract $sdf_annotate arguments: ("file", scope)
+        sdf_match = re.search(
+            r'\$sdf_annotate\s*\(\s*"([^"]+)"\s*,\s*([^,)\s]+)', line,
+        )
+        if sdf_match:
+            sdf_entries.append({
+                "scope": sdf_match.group(2),
+                "conditions": conditions,
+                "file": sdf_match.group(1),
+            })
+
+    return {"sdf_guard_define": sdf_guard_define, "sdf_entries": sdf_entries}
+
+
+async def _analyze_sdf_annotate(
+    sim_dir: str, runner: dict, top_module: str = "",
+) -> dict:
+    """Analyze $sdf_annotate in TB RTL and surrounding ifdef guards.
+
+    Top module discovery: script → parameter → UserInputRequired → default "top".
+
+    Returns dict with: has_sdf_annotate, top_module, sdf_source_file,
+    sdf_guard_define, sdf_entries.
+    """
+    # Step 1: top module name
+    effective_top = top_module
+    if not effective_top:
+        effective_top = await _extract_top_module_from_script(sim_dir, runner)
+    if not effective_top:
+        raise UserInputRequired(
+            "Top module 이름을 자동으로 찾지 못했습니다.\n"
+            "시뮬레이션의 top module 이름을 입력해주세요.\n"
+            "  (예: top, tb_top, testbench)\n"
+            "  입력하지 않으면 기본값 'top'을 사용합니다."
+        )
+
+    # Step 2: find file defining top module
+    top_v = await ssh_run(
+        f"grep -rl 'module\\s\\+{effective_top}\\b' {sq(sim_dir)} "
+        f"--include='*.v' --include='*.sv' 2>/dev/null | head -1",
+        timeout=10,
+    )
+    if not top_v.strip():
+        return {"has_sdf_annotate": False, "top_module": effective_top}
+
+    # Step 3: search for $sdf_annotate in top module + includes/instances
+    top_v_path = top_v.strip()
+    content = await ssh_run(f"cat {sq(top_v_path)}", timeout=10)
+    sdf_source = top_v_path
+
+    if "$sdf_annotate" not in content:
+        # 3a. includes
+        includes = await ssh_run(
+            f"grep -oP '`include\\s+\"\\K[^\"]+' {sq(top_v_path)} 2>/dev/null",
+            timeout=10,
+        )
+        # 3b. instantiations
+        instances = await ssh_run(
+            f"grep -oP '^\\s*(\\w+)\\s+\\w+\\s*\\(' {sq(top_v_path)} 2>/dev/null",
+            timeout=10,
+        )
+        # 3c. collect files
+        search_files: list[str] = []
+        for inc in includes.strip().splitlines():
+            if inc:
+                search_files.append(f"{sim_dir}/*/{inc}")
+        for line in instances.strip().splitlines():
+            inst_mod = line.strip().split()[0] if line.strip() else ""
+            if inst_mod:
+                f = await ssh_run(
+                    f"grep -rl 'module\\s\\+{inst_mod}\\b' {sq(sim_dir)} "
+                    f"--include='*.v' --include='*.sv' 2>/dev/null | head -1",
+                    timeout=10,
+                )
+                if f.strip():
+                    search_files.append(f.strip())
+
+        # 3d. search collected files
+        if search_files:
+            files_arg = " ".join(sq(f) for f in search_files)
+            ctx = await ssh_run(
+                f"grep -n -B10 -A2 '\\$sdf_annotate' {files_arg} 2>/dev/null",
+                timeout=10,
+            )
+            if ctx.strip():
+                content = ctx
+                # extract source file from grep output
+                first_line = ctx.strip().splitlines()[0]
+                if ":" in first_line:
+                    sdf_source = first_line.split(":")[0]
+            else:
+                return {"has_sdf_annotate": False, "top_module": effective_top}
+        else:
+            return {"has_sdf_annotate": False, "top_module": effective_top}
+
+    if "$sdf_annotate" not in content:
+        return {"has_sdf_annotate": False, "top_module": effective_top}
+
+    # Step 4: parse ifdef guards + sdf_entries
+    result: dict = {
+        "has_sdf_annotate": True,
+        "top_module": effective_top,
+        "sdf_source_file": sdf_source,
+    }
+    result.update(_parse_ifdef_around_sdf(content))
+    return result
+
+
+# ===================================================================
 # Simulation start
 # ===================================================================
 
@@ -464,6 +715,7 @@ async def start_simulation(
     timeout: int = 120,
     extra_args: str = "",
     bridges=None,
+    dump_depth: str = "",
 ) -> str:
     """Start simulation. Registry없으면 sim_discover 자동 호출."""
     validate_extra_args(extra_args)
@@ -495,7 +747,7 @@ async def start_simulation(
     if mode == "bridge":
         return await _start_bridge(
             resolved_dir, config, test_name, setup_tcl, effective_mode, timeout,
-            extra_args=extra_args, bridges=bridges,
+            extra_args=extra_args, bridges=bridges, dump_depth=dump_depth,
         )
     elif mode == "batch":
         return await _start_batch(
@@ -514,6 +766,7 @@ async def _start_bridge(
     timeout: int,
     extra_args: str = "",
     bridges=None,
+    dump_depth: str = "",
 ) -> str:
     """Start simulation in bridge mode via legacy run script + env vars."""
     runner = config["runner"]
@@ -534,7 +787,8 @@ async def _start_bridge(
     await ssh_run(f"rm -f {user_tmp}/bridge_ready_*", timeout=5)
 
     script_shell = runner.get("script_shell", runner.get("env_shell", "/bin/sh"))
-    params = resolve_sim_params(runner, sim_mode, extra_args=extra_args, timeout=timeout)
+    params = resolve_sim_params(runner, sim_mode, extra_args=extra_args, timeout=timeout,
+                               dump_depth=dump_depth if dump_depth else None)
     test_args = params["test_args_format"].format(test_name=sq(test_name))
     if params["extra_args"]:
         test_args = f"{test_args} {params['extra_args']}"

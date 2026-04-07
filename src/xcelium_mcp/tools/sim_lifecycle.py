@@ -138,19 +138,20 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
     async def sim_discover(
         sim_dir: str = "",
         force: bool = False,
+        top_module: str = "",
     ) -> str:
         """Discover simulation environment and register in mcp_registry.
 
         Detects: sim_dir, TB type, runner, shell/EDA env, mcp_bridge.tcl,
-        setup TCLs, EDA tool paths, bridge port.
-        Also updates ~/.simvisionrc and patches legacy run scripts.
+        setup TCLs, EDA tool paths, bridge port, $sdf_annotate guards (v4.3).
 
         Args:
-            sim_dir: Explicit simulation directory. Empty = auto-discover.
-            force:   Re-detect even if registry already exists.
+            sim_dir:    Explicit simulation directory. Empty = auto-discover.
+            force:      Re-detect even if registry already exists.
+            top_module: Top module name for SDF analysis. Empty = auto-detect from script.
         """
         try:
-            return await run_full_discovery(sim_dir, force)
+            return await run_full_discovery(sim_dir, force, top_module=top_module)
         except UserInputRequired as e:
             return f"USER INPUT REQUIRED:\n{e.prompt}"
 
@@ -184,6 +185,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         run_duration: str = "",
         timeout: int = 120,
         extra_args: str = "",
+        dump_depth: str = "",
     ) -> str:
         """Start simulation using registry configuration.
 
@@ -195,11 +197,12 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             run_duration: Batch mode only — limit sim time.
             timeout:      Bridge mode — max seconds to wait for bridge ready.
             extra_args:   1-shot extra simulation arguments (not saved to registry).
+            dump_depth:   "boundary"|"all"|"" (auto from mode_defaults). v4.3.
         """
         try:
             # v4.1: resolve short test name → full name
             test_name = await resolve_test_name(test_name, sim_dir)
-            return await start_simulation(test_name, sim_dir, mode, sim_mode, run_duration, timeout, extra_args=extra_args, bridges=bridges)
+            return await start_simulation(test_name, sim_dir, mode, sim_mode, run_duration, timeout, extra_args=extra_args, bridges=bridges, dump_depth=dump_depth)
         except UserInputRequired as e:
             return f"USER INPUT REQUIRED:\n{e.prompt}"
         except RuntimeError as e:
