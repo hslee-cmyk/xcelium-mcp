@@ -426,9 +426,9 @@ def register(
                 except (TclError, ConnectionError, TimeoutError) as e:
                     return f"ERROR: database replace failed: {e}"
 
-            # 3. Restore waveform signals with db prefix remapping
+            # 3. Restore waveform signals (only for new SHM — same SHM keeps signals)
             saved_signals = wv_state.get("signals", [])
-            if saved_signals:
+            if shm_path and saved_signals:
                 old_prefix = f"{wv_state['old_db']}::" if wv_state["old_db"] else ""
                 new_prefix = f"{new_db}::" if new_db else ""
 
@@ -440,6 +440,8 @@ def register(
                         remapped.append(sig)
 
                 try:
+                    # Clear old signals then re-add with new db prefix
+                    await bridge.execute("waveform delete -all")
                     sig_str = " ".join(f"{{{s}}}" for s in remapped)
                     await bridge.execute(f"waveform add -signals {sig_str}")
                     results.append(f"Restored {len(remapped)} signal(s)")
