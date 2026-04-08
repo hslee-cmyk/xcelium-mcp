@@ -985,6 +985,9 @@ proc ::mcp_bridge::do_waveform_add {channel group_name sig_list} {
     set db_prefix ""
     if {![catch {set db_name [database find]}]} {
         set db_name [string trim $db_name]
+        if {[llength $db_name] > 1} {
+            set db_name [lindex $db_name 0]
+        }
         if {$db_name ne ""} {
             set db_prefix "${db_name}::"
         }
