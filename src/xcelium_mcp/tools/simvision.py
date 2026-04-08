@@ -441,7 +441,7 @@ def register(
 
                 try:
                     # Clear old signals then re-add with new db prefix
-                    await bridge.execute("waveform delete -all")
+                    await bridge.execute("waveform clearall")
                     sig_str = " ".join(f"{{{s}}}" for s in remapped)
                     await bridge.execute(f"waveform add -signals {sig_str}")
                     results.append(f"Restored {len(remapped)} signal(s)")
