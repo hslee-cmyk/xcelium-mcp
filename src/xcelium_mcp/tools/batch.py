@@ -9,8 +9,7 @@ from mcp.server.fastmcp import FastMCP
 from xcelium_mcp.bridge_manager import BridgeManager
 from xcelium_mcp.sim_runner import (
     UserInputRequired,
-    get_default_sim_dir,
-    run_full_discovery,
+    resolve_sim_dir,
     validate_path,
 )
 from xcelium_mcp.registry import load_sim_config
@@ -106,15 +105,9 @@ def register(
             return f"Invalid sdf_corner='{sdf_corner}'. Must be 'min', 'max', or 'typ'."
         # Resolve sim_dir
         try:
-            resolved_sim_dir = sim_dir if sim_dir else await get_default_sim_dir()
-            if not resolved_sim_dir:
-                # v4: auto-discover instead of error
-                await run_full_discovery(sim_dir)
-                resolved_sim_dir = sim_dir if sim_dir else await get_default_sim_dir()
-                if not resolved_sim_dir:
-                    return "ERROR: sim_discover failed. Provide sim_dir explicitly."
-        except UserInputRequired as e:
-            return f"USER INPUT REQUIRED:\n{e.prompt}"
+            resolved_sim_dir = await resolve_sim_dir(sim_dir)
+        except ValueError as e:
+            return f"ERROR: {e}"
 
         # v4.1: resolve short test name → full name
         try:
@@ -227,15 +220,9 @@ def register(
 
         # Resolve sim_dir
         try:
-            resolved_sim_dir = sim_dir if sim_dir else await get_default_sim_dir()
-            if not resolved_sim_dir:
-                # v4: auto-discover instead of error
-                await run_full_discovery(sim_dir)
-                resolved_sim_dir = sim_dir if sim_dir else await get_default_sim_dir()
-                if not resolved_sim_dir:
-                    return "ERROR: sim_discover failed. Provide sim_dir explicitly."
-        except UserInputRequired as e:
-            return f"USER INPUT REQUIRED:\n{e.prompt}"
+            resolved_sim_dir = await resolve_sim_dir(sim_dir)
+        except ValueError as e:
+            return f"ERROR: {e}"
 
         # Load runner config (v4: delegates to sim_discover if config missing)
         try:

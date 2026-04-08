@@ -18,7 +18,7 @@ from xcelium_mcp.sim_runner import (
     UserInputRequired,
     ssh_run,
     build_redirect,
-    get_default_sim_dir,
+    resolve_sim_dir,
     _parse_shm_path,
     _parse_time_ns,
 )
@@ -396,9 +396,11 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         # 5. Try to capture a screenshot
         try:
             cfg = None
-            sim_dir = await get_default_sim_dir()
-            if sim_dir:
+            try:
+                sim_dir = await resolve_sim_dir()
                 cfg = await load_sim_config(sim_dir)
+            except ValueError:
+                pass
             ps_path = await bridge.screenshot()
             png_bytes = await ps_to_png(ps_path, config=cfg)
             screenshot = Image(data=png_bytes, format="png")

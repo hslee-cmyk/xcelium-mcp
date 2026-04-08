@@ -15,7 +15,7 @@ from xcelium_mcp.sim_runner import (
     ssh_run,
     start_bridge_simulation,
     run_full_discovery,
-    get_default_sim_dir,
+    resolve_sim_dir,
     get_user_tmp_dir,
 )
 from xcelium_mcp.registry import load_sim_config, load_registry, config_action, _update_registry_from_config
@@ -98,13 +98,10 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             sim_dir: Simulation directory. Empty = registry default.
             pattern: Filter pattern. Empty = all tests.
         """
-        resolved_dir = sim_dir if sim_dir else await get_default_sim_dir()
-        if not resolved_dir:
-            try:
-                await run_full_discovery(sim_dir)
-                resolved_dir = await get_default_sim_dir()
-            except UserInputRequired as e:
-                return f"USER INPUT REQUIRED:\n{e.prompt}"
+        try:
+            resolved_dir = await resolve_sim_dir(sim_dir)
+        except ValueError as e:
+            return f"ERROR: {e}"
 
         config = await load_sim_config(resolved_dir)
         if not config:

@@ -210,6 +210,17 @@ async def get_default_sim_dir() -> str:
     return ""
 
 
+async def resolve_sim_dir(sim_dir: str = "") -> str:
+    """Resolve sim_dir: use provided value or fall back to registry default.
+
+    Raises ValueError if no sim_dir available.
+    """
+    resolved = sim_dir if sim_dir else await get_default_sim_dir()
+    if not resolved:
+        raise ValueError("No sim_dir. Run sim_discover first.")
+    return resolved
+
+
 
 # ===================================================================
 # Legacy script patching
@@ -719,12 +730,10 @@ async def start_bridge_simulation(
     """Start simulation in bridge (interactive) mode. Registry없으면 sim_discover 자동 호출."""
     validate_extra_args(extra_args)
 
-    resolved_dir = sim_dir if sim_dir else await get_default_sim_dir()
-    if not resolved_dir:
-        await run_full_discovery(sim_dir)
-        resolved_dir = sim_dir if sim_dir else await get_default_sim_dir()
-        if not resolved_dir:
-            raise RuntimeError("sim_discover failed to create registry.")
+    try:
+        resolved_dir = await resolve_sim_dir(sim_dir)
+    except ValueError as e:
+        raise RuntimeError(str(e))
 
     config = await load_sim_config(resolved_dir)
     if config is None:

@@ -18,7 +18,7 @@ from xcelium_mcp.sim_runner import (
     _parse_shm_path,
     _parse_time_ns,
     get_user_tmp_dir,
-    get_default_sim_dir,
+    resolve_sim_dir,
 )
 from xcelium_mcp.registry import load_sim_config
 from xcelium_mcp.env_detection import _detect_vnc_display
@@ -145,9 +145,10 @@ def register(
                     pass
 
         # 2. Resolve sim_dir + config
-        resolved_dir = sim_dir if sim_dir else await get_default_sim_dir()
-        if not resolved_dir:
-            return "ERROR: No sim_dir. Run sim_discover first."
+        try:
+            resolved_dir = await resolve_sim_dir(sim_dir)
+        except ValueError as e:
+            return f"ERROR: {e}"
         config = await load_sim_config(resolved_dir)
         runner = config.get("runner", {}) if config else {}
 
@@ -284,9 +285,11 @@ def register(
                     from xcelium_mcp.screenshot import ps_to_png
                     ps_path = await bridge.screenshot()
                     cfg = None
-                    sim_dir = await get_default_sim_dir()
-                    if sim_dir:
+                    try:
+                        sim_dir = await resolve_sim_dir()
                         cfg = await load_sim_config(sim_dir)
+                    except ValueError:
+                        pass
                     png_bytes = await ps_to_png(ps_path, config=cfg)
                     results.append("Screenshot captured.")
                 except Exception as e:

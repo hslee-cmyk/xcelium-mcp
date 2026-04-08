@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 from mcp.server.fastmcp import FastMCP
 
 from xcelium_mcp.bridge_manager import BridgeManager
-from xcelium_mcp.sim_runner import get_default_sim_dir, get_user_tmp_dir, ssh_run, sq
+from xcelium_mcp.sim_runner import get_user_tmp_dir, resolve_sim_dir, ssh_run, sq
 import xcelium_mcp.checkpoint_manager as checkpoint_manager
 
 
@@ -20,7 +20,10 @@ async def restore_checkpoint_impl(bridges: BridgeManager, name: str, sim_dir: st
     previous compile (e.g. to compare behavior before/after RTL change).
     Use cleanup_checkpoints(mode="stale") to remove outdated checkpoints.
     """
-    resolved_dir = sim_dir if sim_dir else await get_default_sim_dir()
+    try:
+        resolved_dir = await resolve_sim_dir(sim_dir)
+    except ValueError:
+        resolved_dir = ""
     chk_base = os.path.join(resolved_dir, "checkpoints") if resolved_dir else f"{await get_user_tmp_dir()}/checkpoints"
 
     bridge = bridges.xmsim
@@ -60,7 +63,10 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             dry_run:       True = report only (cleanup), False = actually delete.
             invert:        True = keep matching, remove rest (cleanup).
         """
-        resolved_dir = sim_dir if sim_dir else await get_default_sim_dir()
+        try:
+            resolved_dir = await resolve_sim_dir(sim_dir)
+        except ValueError as e:
+            return f"ERROR: {e}"
 
         if action == "save":
             return await _save_impl(bridges, name, resolved_dir, saved_time_ns)

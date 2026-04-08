@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 
 _REGISTRY_PATH = Path.home() / ".xcelium_mcp" / "mcp_registry.json"
@@ -26,21 +27,38 @@ def save_registry(registry: dict) -> None:
     _REGISTRY_PATH.write_text(json.dumps(registry, indent=2))
 
 
-async def load_sim_config(sim_dir: str) -> dict | None:
-    """Load .mcp_sim_config.json from sim_dir. Returns None if not found."""
+_config_cache: dict[str, tuple[float, dict]] = {}
+_CONFIG_TTL = 5.0  # seconds
+
+
+async def load_sim_config(sim_dir: str, *, force: bool = False) -> dict | None:
+    """Load .mcp_sim_config.json from sim_dir. Cached with 5s TTL.
+
+    Args:
+        sim_dir: Simulation directory path.
+        force: Bypass cache (e.g. after sim_discover).
+    """
+    now = time.monotonic()
+    if not force and sim_dir in _config_cache:
+        ts, cfg = _config_cache[sim_dir]
+        if now - ts < _CONFIG_TTL:
+            return cfg
     path = Path(sim_dir) / ".mcp_sim_config.json"
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text())
+        config = json.loads(path.read_text())
     except json.JSONDecodeError:
         return None
+    _config_cache[sim_dir] = (now, config)
+    return config
 
 
 async def save_sim_config(sim_dir: str, config: dict) -> None:
-    """Save .mcp_sim_config.json to sim_dir."""
+    """Save .mcp_sim_config.json to sim_dir. Invalidates cache."""
     path = Path(sim_dir) / ".mcp_sim_config.json"
     path.write_text(json.dumps(config, indent=2))
+    _config_cache.pop(sim_dir, None)
 
 
 
@@ -149,16 +167,17 @@ def _parse_json_value(value: str):
 async def config_action(action: str, file: str, key: str, value: str) -> str:
     """Execute mcp_config action."""
     # Lazy import to avoid circular dependency (sim_runner imports from registry)
-    from xcelium_mcp.sim_runner import get_default_sim_dir
+    from xcelium_mcp.sim_runner import resolve_sim_dir
 
     # Load target file
     if file == "registry":
         data = load_registry()
         path = _REGISTRY_PATH
     elif file == "checkpoint":
-        sim_dir = await get_default_sim_dir()
-        if not sim_dir:
-            raise RuntimeError("No default sim_dir. Run sim_discover first.")
+        try:
+            sim_dir = await resolve_sim_dir()
+        except ValueError as e:
+            raise RuntimeError(str(e))
         path = Path(sim_dir) / "checkpoints" / "manifest.json"
         if path.exists():
             try:
@@ -168,9 +187,10 @@ async def config_action(action: str, file: str, key: str, value: str) -> str:
         else:
             data = {}
     else:
-        sim_dir = await get_default_sim_dir()
-        if not sim_dir:
-            raise RuntimeError("No default sim_dir. Run sim_discover first.")
+        try:
+            sim_dir = await resolve_sim_dir()
+        except ValueError as e:
+            raise RuntimeError(str(e))
         cfg = await load_sim_config(sim_dir)
         if cfg is None:
             raise RuntimeError(f"No .mcp_sim_config.json in {sim_dir}. Run sim_discover first.")

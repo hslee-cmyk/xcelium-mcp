@@ -143,12 +143,14 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
 
         Returns the screenshot as a PNG image that Claude can analyze.
         """
-        from xcelium_mcp.sim_runner import get_default_sim_dir
+        from xcelium_mcp.sim_runner import resolve_sim_dir
         from xcelium_mcp.registry import load_sim_config
         cfg = None
-        sim_dir = await get_default_sim_dir()
-        if sim_dir:
+        try:
+            sim_dir = await resolve_sim_dir()
             cfg = await load_sim_config(sim_dir)
+        except ValueError:
+            pass
 
         bridge = bridges.simvision
         ps_path = await bridge.screenshot()

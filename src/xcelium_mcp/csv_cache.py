@@ -35,31 +35,19 @@ async def _resolve_simvisdbutil() -> str:
         return _simvisdbutil_path
 
     # Try registry first
-    from xcelium_mcp.sim_runner import get_default_sim_dir, load_sim_config
-    sim_dir = await get_default_sim_dir()
-    if sim_dir:
-        cfg = await load_sim_config(sim_dir)
-        if cfg and "eda_tools" in cfg:
-            path = cfg["eda_tools"].get("simvisdbutil", "")
-            if path:
-                _simvisdbutil_path = path
-                return path
+    from xcelium_mcp.sim_runner import resolve_sim_dir, load_sim_config
+    try:
+        sim_dir = await resolve_sim_dir()
+    except ValueError as e:
+        raise RuntimeError(str(e))
+    cfg = await load_sim_config(sim_dir)
+    if cfg and "eda_tools" in cfg:
+        path = cfg["eda_tools"].get("simvisdbutil", "")
+        if path:
+            _simvisdbutil_path = path
+            return path
 
-    # Fallback: trigger sim_discover
-    from xcelium_mcp.sim_runner import run_full_discovery
-    await run_full_discovery(sim_dir or "")
-
-    # Retry after discover
-    sim_dir = await get_default_sim_dir()
-    if sim_dir:
-        cfg = await load_sim_config(sim_dir)
-        if cfg and "eda_tools" in cfg:
-            path = cfg["eda_tools"].get("simvisdbutil", "")
-            if path:
-                _simvisdbutil_path = path
-                return path
-
-    raise RuntimeError("simvisdbutil not found even after sim_discover.")
+    raise RuntimeError("simvisdbutil not found. Check eda_tools in sim config.")
 
 
 # ---------------------------------------------------------------------------
@@ -142,9 +130,12 @@ async def extract(
 
     # simvisdbutil is a wrapper script that needs EDA env (cds_root in PATH).
     # Source env from registry before execution.
-    from xcelium_mcp.sim_runner import get_default_sim_dir, load_sim_config, login_shell_cmd
-    sim_dir = await get_default_sim_dir()
-    cfg = await load_sim_config(sim_dir) if sim_dir else None
+    from xcelium_mcp.sim_runner import resolve_sim_dir, load_sim_config, login_shell_cmd
+    try:
+        sim_dir = await resolve_sim_dir()
+    except ValueError as e:
+        raise RuntimeError(str(e))
+    cfg = await load_sim_config(sim_dir)
     if cfg:
         runner = cfg.get("runner", {})
         env_files = runner.get("env_files", [])
