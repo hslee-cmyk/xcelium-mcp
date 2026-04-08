@@ -246,13 +246,15 @@ def register(
         # live params
         auto_reload: bool = True,
     ) -> str:
-        """SimVision waveform control: setup, live monitoring start/stop.
+        """SimVision waveform control: setup, live monitoring, reload.
 
         Args:
             action:      "setup" — open SHM + add signals + zoom (one-shot configuration).
                          "live_start" — connect to running xmsim for live waveform viewing.
                          "live_stop" — stop live waveform auto-reload.
-            shm_path:    (setup/live) SHM database path. Empty = skip or auto-detect.
+                         "reload" — reload current or new SHM, preserving waveform context.
+            shm_path:    (setup/live/reload) SHM database path.
+                         reload: empty = reload same SHM, set = replace with new SHM.
             signals:     (setup/live) Signal paths to add to waveform.
             zoom_start:  Zoom start time. Empty = full range (setup) or auto-compute (live).
             zoom_end:    Zoom end time. Empty = full range (setup) or auto-compute (live).
@@ -382,8 +384,78 @@ def register(
 
             return "\n".join(results)
 
+        elif action == "reload":
+            bridge = bridges.simvision
+            results = []
+
+            # 1. Capture current waveform state
+            wv_state: dict = {}
+            try:
+                sigs_raw = await bridge.execute("waveform signals -format fullpath")
+                wv_state["signals"] = sigs_raw.strip().split() if sigs_raw.strip() else []
+            except (TclError, ConnectionError, TimeoutError):
+                wv_state["signals"] = []
+            try:
+                zoom_raw = await bridge.execute("waveform xview limits")
+                wv_state["zoom"] = zoom_raw.strip()
+            except (TclError, ConnectionError, TimeoutError):
+                wv_state["zoom"] = ""
+            try:
+                old_db_raw = await bridge.execute("database find")
+                wv_state["old_db"] = old_db_raw.strip().split()[0] if old_db_raw.strip() else ""
+            except (TclError, ConnectionError, TimeoutError):
+                wv_state["old_db"] = ""
+
+            # 2. Reload or replace DB
+            new_db = wv_state["old_db"]
+            if not shm_path:
+                try:
+                    await bridge.execute("database reload")
+                    results.append("Database reloaded (same SHM)")
+                except (TclError, ConnectionError, TimeoutError) as e:
+                    return f"ERROR: database reload failed: {e}"
+            else:
+                try:
+                    if wv_state["old_db"]:
+                        await bridge.execute(f"database close {wv_state['old_db']}")
+                    await bridge.execute(f"database open {shm_path}")
+                    new_db_raw = await bridge.execute("database find")
+                    new_db = new_db_raw.strip().split()[0] if new_db_raw.strip() else ""
+                    results.append(f"Database replaced: {wv_state['old_db']} -> {new_db}")
+                except (TclError, ConnectionError, TimeoutError) as e:
+                    return f"ERROR: database replace failed: {e}"
+
+            # 3. Restore waveform signals with db prefix remapping
+            saved_signals = wv_state.get("signals", [])
+            if saved_signals:
+                old_prefix = f"{wv_state['old_db']}::" if wv_state["old_db"] else ""
+                new_prefix = f"{new_db}::" if new_db else ""
+
+                remapped = []
+                for sig in saved_signals:
+                    if old_prefix and sig.startswith(old_prefix):
+                        remapped.append(f"{new_prefix}{sig[len(old_prefix):]}")
+                    else:
+                        remapped.append(sig)
+
+                try:
+                    sig_str = " ".join(f"{{{s}}}" for s in remapped)
+                    await bridge.execute(f"waveform add -signals {sig_str}")
+                    results.append(f"Restored {len(remapped)} signal(s)")
+                except (TclError, ConnectionError, TimeoutError) as e:
+                    results.append(f"Signal restore partial: {e}")
+
+            # 4. Restore zoom
+            if wv_state.get("zoom"):
+                try:
+                    await bridge.execute(f"waveform xview limits {wv_state['zoom']}")
+                except (TclError, ConnectionError, TimeoutError):
+                    pass
+
+            return "\n".join(results) if results else "Reload complete (no state to restore)"
+
         else:
-            return f"ERROR: Unknown action '{action}'. Use 'setup', 'live_start', or 'live_stop'."
+            return f"ERROR: Unknown action '{action}'. Use 'setup', 'live_start', 'live_stop', or 'reload'."
 
     @mcp.tool()
     async def compare_waveforms(
