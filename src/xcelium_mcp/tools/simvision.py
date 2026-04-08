@@ -410,7 +410,8 @@ def register(
             new_db = wv_state["old_db"]
             if not shm_path:
                 try:
-                    await bridge.execute("database reload")
+                    reload_cmd = f"database reload {wv_state['old_db']}" if wv_state["old_db"] else "database reload"
+                    await bridge.execute(reload_cmd)
                     results.append("Database reloaded (same SHM)")
                 except (TclError, ConnectionError, TimeoutError) as e:
                     return f"ERROR: database reload failed: {e}"
