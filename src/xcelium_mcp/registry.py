@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
 from pathlib import Path
 
 _REGISTRY_PATH = Path.home() / ".xcelium_mcp" / "mcp_registry.json"
@@ -27,30 +26,29 @@ def save_registry(registry: dict) -> None:
     _REGISTRY_PATH.write_text(json.dumps(registry, indent=2))
 
 
-_config_cache: dict[str, tuple[float, dict]] = {}
-_CONFIG_TTL = 5.0  # seconds
+_config_cache: dict[str, tuple[float, dict]] = {}  # mtime → config
 
 
 async def load_sim_config(sim_dir: str, *, force: bool = False) -> dict | None:
-    """Load .mcp_sim_config.json from sim_dir. Cached with 5s TTL.
+    """Load .mcp_sim_config.json from sim_dir. Cached by file mtime.
 
     Args:
         sim_dir: Simulation directory path.
         force: Bypass cache (e.g. after sim_discover).
     """
-    now = time.monotonic()
-    if not force and sim_dir in _config_cache:
-        ts, cfg = _config_cache[sim_dir]
-        if now - ts < _CONFIG_TTL:
-            return cfg
     path = Path(sim_dir) / ".mcp_sim_config.json"
     if not path.exists():
         return None
+    mtime = path.stat().st_mtime
+    if not force and sim_dir in _config_cache:
+        cached_mtime, cfg = _config_cache[sim_dir]
+        if mtime == cached_mtime:
+            return cfg
     try:
         config = json.loads(path.read_text())
     except json.JSONDecodeError:
         return None
-    _config_cache[sim_dir] = (now, config)
+    _config_cache[sim_dir] = (mtime, config)
     return config
 
 
