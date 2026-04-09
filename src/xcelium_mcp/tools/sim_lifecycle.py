@@ -367,6 +367,10 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         for denied in _TCL_DENYLIST:
             if cmd_lower.startswith(denied) or f"\n{denied}" in cmd_lower or f"; {denied}" in cmd_lower:
                 return f"ERROR: Tcl command '{denied.strip()}' is blocked for security. Use dedicated MCP tools instead."
+        # S-6 fix: also block embedded [exec ...] and [open ...] in Tcl substitution brackets
+        from xcelium_mcp.shell_utils import sanitize_tcl_string
+        if not sanitize_tcl_string(tcl_cmd):
+            return "ERROR: Tcl command contains embedded [exec] or [open] — blocked for security."
 
         bridge = bridges.get_bridge(target)
         return await bridge.execute(tcl_cmd, timeout=float(timeout))

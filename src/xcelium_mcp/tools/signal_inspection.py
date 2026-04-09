@@ -5,6 +5,7 @@ from mcp.server.fastmcp import FastMCP
 
 from xcelium_mcp.bridge_manager import BridgeManager
 from xcelium_mcp.tcl_bridge import TclError
+from xcelium_mcp.shell_utils import sanitize_signal_name
 
 
 def register(mcp: FastMCP, bridges: BridgeManager) -> None:
@@ -35,6 +36,17 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             target:  "xmsim" | "simvision" | "auto" (default: auto). Used by "list".
             shm_path: SHM dump path for "check_dump". Empty = auto-detect latest.
         """
+        # S-1 fix: sanitize all signal/scope inputs to prevent Tcl injection
+        try:
+            if signal:
+                signal = sanitize_signal_name(signal)
+            if signals:
+                signals = [sanitize_signal_name(s) for s in signals]
+            if scope:
+                scope = sanitize_signal_name(scope)
+        except ValueError as e:
+            return f"ERROR: {e}"
+
         if action == "value":
             if not signals:
                 if signal:
@@ -159,6 +171,12 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             value:   Value to deposit (e.g. "1'b1", "8'hFF"). Required unless release=True.
             release: True = release the signal instead of depositing.
         """
+        # S-1 fix: sanitize signal name
+        try:
+            signal = sanitize_signal_name(signal)
+        except ValueError as e:
+            return f"ERROR: {e}"
+
         bridge = bridges.xmsim
         if release:
             readback = await bridge.execute(f"__RELEASE_AND_VERIFY__ {signal}")

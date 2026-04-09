@@ -1,6 +1,9 @@
 """Batch simulation execution for xcelium-mcp.
 
 Extracted from sim_runner.py (v4.2 Phase 3 refactoring).
+v4.4: Tcl preprocessing extracted to tcl_preprocessing.py.
+      Shell utilities imported from shell_utils.py.
+
 Contains batch execution functions: single-test batch, regression, polling,
 parameter resolution, and test name resolution.
 """
@@ -13,13 +16,30 @@ from pathlib import Path
 import re as _re
 from dataclasses import dataclass
 
-from xcelium_mcp.sim_runner import (
+from xcelium_mcp.shell_utils import (
     ssh_run,
-    sq,
+    shell_quote as sq,
     build_redirect,
     login_shell_cmd,
 )
 from xcelium_mcp.registry import load_sim_config, save_sim_config
+
+# Re-export from tcl_preprocessing for backward compat
+from xcelium_mcp.tcl_preprocessing import (  # noqa: F401
+    extract_setup_lines,
+    read_setup_tcl,
+    _replace_shm_stems,
+    BOUNDARY_SIGNALS,
+    _resolve_probe_signals,
+    _generate_probe_reset_tcl,
+    _replace_probe_lines,
+    _inject_dump_window,
+    _handle_sdf_override,
+    _patch_tb_sdf_guard,
+    _preprocess_setup_tcl,
+    _build_checkpoint_tcl,
+    _parse_l1_time_ns,
+)
 
 
 @dataclass
@@ -34,447 +54,26 @@ def validate_extra_args(s: str) -> str:
 
     extra_args intentionally contains multiple shell tokens (e.g. "--flag val"),
     so we cannot quote it as a whole.  Instead we reject metacharacters that
-    could chain/inject commands.
+    could chain/inject commands.  S-4 fix: also reject single quotes to prevent
+    csh -c '...' breakout.
     """
-    if _re.search(r'[;|&$`<>()\n\r]', s):
+    if _re.search(r"[;|&$`<>()\n\r']", s):
         raise ValueError(
             f"extra_args contains forbidden shell metacharacter: {s!r}  "
-            "Only flags and values are allowed (no ;|&$`<>()\\n\\r characters)."
+            "Only flags and values are allowed (no ;|&$`<>()\\n\\r' characters)."
         )
     return s
 
 
-def _parse_l1_time_ns(l1_time: str) -> int:
-    """Convert l1_time string (e.g. "500us", "1ms") to nanoseconds."""
-    m = _re.match(r'(\d+)\s*(us|ms|ns)?', l1_time.strip())
-    if not m:
-        return 0
-    val = int(m.group(1))
-    unit = m.group(2) or "ns"
-    if unit == "ms":
-        return val * 1_000_000
-    if unit == "us":
-        return val * 1_000
-    return val
-
-
-def extract_setup_lines(tcl_content: str) -> str:
-    """Extract probe/database setup lines from a setup Tcl, stripping run/exit/finish.
-
-    Used by _build_checkpoint_tcl and _preprocess_setup_tcl
-    to get the probe configuration without simulation control commands.
-    """
-    lines = []
-    for line in tcl_content.splitlines():
-        stripped = line.strip().lower()
-        # Skip simulation control commands
-        if stripped.startswith("run") or stripped.startswith("exit") or stripped.startswith("finish"):
-            continue
-        # Skip database close (we control this ourselves)
-        if "database" in stripped and "close" in stripped:
-            continue
-        # Skip commented-out control commands (# run, #exit, #finish as first word)
-        if stripped.startswith("#"):
-            words = stripped.lstrip("#").strip().split()
-            if words and words[0] in ("run", "exit", "finish"):
-                continue
-        lines.append(line)
-    return "\n".join(lines)
-
-
-def read_setup_tcl(runner: dict, sim_dir: str) -> str:
-    """Read the setup Tcl content for the current sim_mode.
-
-    MCP server runs on cloud0 — uses direct Path I/O (no ssh_run needed).
-    Returns raw file content, or empty string if not found.
-    """
-    setup_tcls = runner.get("setup_tcls", {})
-    mode = runner.get("default_mode", "rtl")
-    tcl_rel = setup_tcls.get(mode, "scripts/setup_rtl.tcl")
-    p = Path(f"{sim_dir}/{tcl_rel}")
-    if p.exists():
-        return p.read_text()
-    return ""
-
-
-def _replace_shm_stems(content: str, test_name: str) -> str:
-    """Replace <stem>.shm with <stem>_{test_name}.shm in Tcl SHM references.
-
-    Targets all Tcl lines that reference .shm paths:
-      - ``database -open <path>/<stem>.shm``
-      - ``database -close <path>/<stem>.shm``
-      - ``probe ... -database <path>/<stem>.shm``
-
-    Stem discovery uses ``database -open`` lines only. If there is no
-    ``database -open`` line (e.g. probe-only content), no replacement is made.
-    Generic: works with any SHM name. Skips if stem already contains test_name.
-    """
-    # Step 1: find SHM stems from database -open lines
-    pattern = r"database\s+-open\s+(?:\S*/)?(\S+)\.shm"
-    matches = _re.findall(pattern, content)
-
-    if not matches:
-        return content
-
-    # Step 2: for each unique stem, replace in all Tcl command contexts
-    replaced: set[str] = set()
-    for stem in matches:
-        if stem in replaced or test_name in stem:
-            continue
-        escaped = _re.escape(stem)
-        # Replace in: database -open, database -close, probe ... -database
-        content = _re.sub(
-            r"((?:database\s+(?:-open|-close)|probe\s+.*?-database)\s+(?:\S*/)?)"
-            + escaped + r"\.shm",
-            rf"\1{stem}_{test_name}.shm",
-            content,
-        )
-        replaced.add(stem)
-
-    return content
-
 
 # ---------------------------------------------------------------------------
-# v4.3: Dump depth — boundary signals + probe line management
+# Tcl preprocessing functions moved to tcl_preprocessing.py (v4.4).
+# Re-exported above for backward compatibility.
 # ---------------------------------------------------------------------------
 
-BOUNDARY_SIGNALS = [
-    "top.hw.i_mainClk", "top.hw.i_rst_n",
-    "top.hw.i_scl", "top.hw.io_sda",
-    "top.hw.i_pcmIn", "top.hw.i_pcmSync",
-    "top.hw.o_askData", "top.hw.o_askDataInv",
-    "top.hw.o_askRefClk", "top.hw.o_refClk", "top.hw.o_refClkInv",
-    "top.hw.o_btCoilShort",
-    "top.hw.i_backTel_p", "top.hw.i_backTel_n",
-    "top.hw.o_backTel_pwr_en",
-    "top.hw.i_led_ctrl_r", "top.hw.i_led_ctrl_g", "top.hw.i_led_ctrl_b",
-    "top.hw.o_led_r", "top.hw.o_led_g", "top.hw.o_led_b",
-    "top.hw.i_earpiece_det_n", "top.hw.i_rmClkNum",
-    "top.hw.i_deep_slp_en", "top.hw.i_dyn_slp_en",
-    "top.hw.o_sync_req", "top.hw.o_stim_trig", "top.hw.o_serial_tp_out",
-]
 
 
-def _resolve_probe_signals(
-    dump_signals: list[str] | None,
-    dump_depth: str,
-) -> tuple[str, list[str] | None]:
-    """Resolve final probe signal set based on dump_depth and dump_signals.
-
-    dump_depth="all" → probe -create top -depth all (dump_signals ignored).
-    dump_depth="boundary" → BOUNDARY_SIGNALS union dump_signals (deduped).
-
-    Returns:
-        ("depth_all", None)              — probe -create top -depth all
-        ("signals", [sig1, sig2, ...])   — probe -create {each} individually
-    """
-    if dump_depth == "all":
-        return ("depth_all", None)
-
-    base = set(BOUNDARY_SIGNALS)
-    if dump_signals:
-        base |= set(dump_signals)
-
-    return ("signals", sorted(base))
-
-
-def _generate_probe_reset_tcl(probe_type: str, probe_signals: list[str] | None) -> str:
-    """Generate Tcl commands to reset probe configuration after checkpoint restore.
-
-    Sequence: disable existing probes → add new probes → enable.
-    Used when from_checkpoint + dump_depth is specified.
-    """
-    lines = []
-    lines.append("probe -disable")
-
-    if probe_type == "depth_all":
-        lines.append("probe -create top -depth all -shm")
-    elif probe_signals:
-        for sig in probe_signals:
-            lines.append(f"probe -create {sig} -shm")
-
-    lines.append("probe -enable")
-    return "\n".join(lines) + "\n"
-
-
-def _replace_probe_lines(
-    content: str, probe_type: str, probe_signals: list[str] | None,
-) -> str:
-    """Adjust probe lines in setup tcl based on dump_depth.
-
-    - Scope probes (-depth option) → removed
-    - Specific signal probes (user custom) → kept
-    - New probes added based on dump_depth (deduped against existing)
-    """
-    lines = content.splitlines()
-
-    filtered = []
-    existing_signals: set[str] = set()
-    for line in lines:
-        if _re.match(r"\s*probe\s+-create\b", line):
-            if "-depth" in line:
-                continue  # scope probe → remove
-            sig_match = _re.search(r"probe\s+-create\s+(\S+)", line)
-            if sig_match:
-                existing_signals.add(sig_match.group(1))
-            filtered.append(line)
-        else:
-            filtered.append(line)
-
-    # Extract database path from database -open line for -database option
-    db_path = ""
-    for line in filtered:
-        m = _re.match(r"\s*database\s+-open\s+(\S+)", line)
-        if m:
-            db_path = m.group(1)
-            break
-    db_opt = f" -database {db_path}" if db_path else " -shm"
-
-    if probe_type == "depth_all":
-        new_probes = [f"probe -create top -depth all{db_opt}"]
-    else:
-        new_probes = [
-            f"probe -create {sig}{db_opt}"
-            for sig in (probe_signals or [])
-            if sig not in existing_signals
-        ]
-
-    # Insert after database -open, or at start if not found
-    result: list[str] = []
-    inserted = False
-    for line in filtered:
-        result.append(line)
-        if not inserted and _re.match(r"\s*database\s+-open\b", line):
-            result.extend(new_probes)
-            inserted = True
-
-    if not inserted:
-        result = new_probes + result
-
-    return "\n".join(result) + "\n"
-
-
-def _inject_dump_window(content: str, dump_window: dict) -> str:
-    """Inject probe on/off + run sequence for dump_window (Batch mode only).
-
-    Replaces existing 'run' command with windowed probe on/off + run sequence.
-    Setup tcl에 직접 주입되므로 bridge 통신 불필요.
-
-    Args:
-        content: setup tcl content
-        dump_window: {"start_ms": int, "end_ms": int}
-    """
-    start_ms = dump_window["start_ms"]
-    end_ms = dump_window["end_ms"]
-    duration_ms = end_ms - start_ms
-
-    # 기존 run 명령 제거
-    lines = content.splitlines()
-    filtered = [line for line in lines if not _re.match(r"\s*run(\s|$)", line)]
-
-    window_tcl = ["probe -disable"]
-    if start_ms > 0:
-        window_tcl.append(f"run {start_ms}ms")
-    window_tcl.append("probe -enable")
-    window_tcl.append(f"run {duration_ms}ms")
-    window_tcl.append("probe -disable")
-    window_tcl.append("run")  # $finish까지
-
-    return "\n".join(filtered + window_tcl) + "\n"
-
-
-# ---------------------------------------------------------------------------
-# v4.3: SDF override
-# ---------------------------------------------------------------------------
-
-async def _handle_sdf_override(
-    sim_dir: str, runner: dict, sdf_file: str, sdf_corner: str,
-) -> str:
-    """Handle SDF override: disable TB $sdf_annotate + generate tfile.
-
-    Returns extra_args string to append (e.g. "-define NODLY -tfile ...").
-    """
-    # Validate sdf_file path (prevent command injection)
-    if not _re.fullmatch(r"[\w./\-]+", sdf_file):
-        raise ValueError(f"Invalid sdf_file path: {sdf_file!r}")
-
-    from xcelium_mcp.sim_runner import get_user_tmp_dir
-
-    config = await load_sim_config(sim_dir)
-    sdf_info = (config or {}).get("sdf_info", {})
-    extra_defines: list[str] = []
-
-    # Step 1: disable TB $sdf_annotate
-    if sdf_info.get("has_sdf_annotate"):
-        guard = sdf_info.get("sdf_guard_define")
-        if guard:
-            extra_defines.append(f"-define {guard}")
-        else:
-            await _patch_tb_sdf_guard(sim_dir, sdf_info)
-            extra_defines.append("-define MCP_SDF_OVERRIDE")
-
-    # Step 2: generate tfile with scope-aware entries
-    corner_map = {"min": "MINIMUM", "max": "MAXIMUM", "typ": "TYPICAL"}
-    sdf_corner_upper = corner_map.get(sdf_corner, "MAXIMUM")
-
-    user_tmp = await get_user_tmp_dir()
-    tfile_path = f"{user_tmp}/mcp_sdf_tfile"
-
-    sdf_entries = sdf_info.get("sdf_entries", [])
-    scopes = sorted(set(e["scope"] for e in sdf_entries)) if sdf_entries else ["top"]
-
-    tfile_lines: list[str] = []
-    for scope in scopes:
-        tfile_lines.append(f'COMPILED_SDF_FILE "{sdf_file}"')
-        tfile_lines.append(f"  SCOPE {scope}")
-        tfile_lines.append(f"  {sdf_corner_upper}")
-        tfile_lines.append(";")
-    tfile_content = "\n".join(tfile_lines) + "\n"
-
-    # Write tfile via base64 (avoid heredoc delimiter injection)
-    b64 = _b64.b64encode(tfile_content.encode()).decode()
-    await ssh_run(
-        f"echo {sq(b64)} | base64 -d > {sq(tfile_path)}",
-        timeout=10,
-    )
-
-    # Step 3: build elab extra args
-    elab_extra = f"-delay_mode path -sdf_verbose -timescale 1ns/1fs -tfile {tfile_path}"
-    return " ".join(extra_defines + [elab_extra])
-
-
-async def _patch_tb_sdf_guard(sim_dir: str, sdf_info: dict) -> None:
-    """Patch TB RTL: add `ifndef MCP_SDF_OVERRIDE guard around $sdf_annotate.
-
-    Only called when sdf_guard_define is None (no existing guard).
-    Creates backup before patching.
-    """
-    from xcelium_mcp.sim_runner import get_user_tmp_dir
-
-    top_v = sdf_info.get("sdf_source_file", "")
-    if not top_v:
-        return
-
-    # Backup
-    user_tmp = await get_user_tmp_dir()
-    filename = top_v.split("/")[-1]
-    await ssh_run(f"cp {sq(top_v)} {user_tmp}/{filename}.bak.mcp_sdf", timeout=5)
-
-    # Patch: wrap $sdf_annotate block with `ifndef MCP_SDF_OVERRIDE
-    content = await ssh_run(f"cat {sq(top_v)}", timeout=10)
-
-    patched = _re.sub(
-        r"(\s*initial\s+begin\s*\n)(.*?\$sdf_annotate.*?\n)(.*?\s*end)",
-        r"\1`ifndef MCP_SDF_OVERRIDE\n\2`endif\n\3",
-        content,
-        flags=_re.DOTALL,
-    )
-
-    if patched != content:
-        # Write via base64 (avoid heredoc delimiter injection)
-        b64 = _b64.b64encode(patched.encode()).decode()
-        await ssh_run(
-            f"echo {sq(b64)} | base64 -d > {sq(top_v)}",
-            timeout=10,
-        )
-
-
-async def _preprocess_setup_tcl(
-    sim_dir: str, runner: dict, test_name: str, sim_mode: str = "",
-    dump_depth: str = "all",
-    dump_signals: list[str] | None = None,
-    dump_window: dict | None = None,
-) -> str:
-    """Preprocess setup_tcl: SHM naming + probe scope + dump window (v4.3).
-
-    1. SHM stem replacement (existing): ``<stem>.shm`` → ``<stem>_{test_name}.shm``
-    2. Probe scope adjustment (v4.3): remove scope probes, add dump_depth-based probes
-    3. Dump window (v4.3): replace 'run' with probe on/off + windowed run sequence
-
-    Returns temp file path for MCP_INPUT_TCL injection, or empty string
-    if no replacement needed.
-    """
-    # Validate test_name for filesystem/Tcl safety
-    if not _re.fullmatch(r"[A-Za-z0-9_\-]+", test_name):
-        return ""
-
-    content = read_setup_tcl(runner, sim_dir)
-    if not content:
-        return ""
-
-    changed = False
-
-    # Step 1: SHM stem replacement (existing)
-    if "$env(TEST_NAME)" not in content:
-        new_content = _replace_shm_stems(content, test_name)
-        if new_content != content:
-            content = new_content
-            changed = True
-
-    # Step 2: probe scope adjustment (v4.3)
-    probe_type, probe_signals = _resolve_probe_signals(dump_signals, dump_depth)
-    new_content = _replace_probe_lines(content, probe_type, probe_signals)
-    if new_content != content:
-        content = new_content
-        changed = True
-
-    # Step 3: dump window — replace 'run' with probe on/off sequence (v4.3)
-    if dump_window:
-        new_content = _inject_dump_window(content, dump_window)
-        if new_content != content:
-            content = new_content
-            changed = True
-
-    if not changed:
-        return ""
-
-    # Write preprocessed tcl to temp location
-    from xcelium_mcp.sim_runner import get_user_tmp_dir
-    user_tmp = await get_user_tmp_dir()
-    out_path = f"{user_tmp}/setup_batch_{test_name}.tcl"
-    Path(out_path).write_text(content)
-
-    return out_path
-
-
-def _build_checkpoint_tcl(
-    test_name: str, chk_dir: str, l1_time: str,
-    setup_lines: str,
-) -> str:
-    """Generate a Tcl script with probe setup + L1 checkpoint save.
-
-    Saves L1 at l1_time (common init completion), then continues to $finish.
-    L2 ($finish) is not saved — SHM dump is sufficient for post-mortem analysis.
-
-    Uses setup_lines (extracted by extract_setup_lines) — no run/exit included.
-    Injected via MCP_INPUT_TCL env var.
-    """
-    # Replace SHM paths with test-specific names
-    setup_lines = _replace_shm_stems(setup_lines, test_name)
-
-    l1_ns = _parse_l1_time_ns(l1_time) if l1_time else 500000
-    l1_name = f"L1_{test_name}"
-
-    return f"""\
-# Auto-generated checkpoint Tcl (Phase 4)
-# Probe setup + L1 at {l1_ns}ns
-
-# 1. Probe/database setup (extracted from setup Tcl, run/exit stripped)
-{setup_lines}
-
-# 2. Ensure checkpoint directory exists
-file mkdir {chk_dir}
-
-# 3. Run to L1 time (common init completion) + save L1
-run {l1_ns}ns
-catch {{save -simulation worklib.{l1_name}:module -path {chk_dir} -overwrite}}
-
-# 4. Continue simulation to $finish
-run
-
-# 5. Clean exit
-exit
-"""
+# _build_checkpoint_tcl moved to tcl_preprocessing.py (re-exported above)
 
 
 def _resolve_exec_cmd(runner: dict, regression: bool = False) -> ExecInfo:

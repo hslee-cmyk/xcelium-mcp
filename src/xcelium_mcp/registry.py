@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from typing import Any
 
 _REGISTRY_PATH = Path.home() / ".xcelium_mcp" / "mcp_registry.json"
 
@@ -101,7 +102,7 @@ async def _update_registry_from_config(sim_dir: str, tb_type: str, config: dict)
 # ---------------------------------------------------------------------------
 
 
-def _dot_get(data: dict, key: str):
+def _dot_get(data: dict, key: str) -> Any:
     """Traverse dict by dot-separated key. Returns _MISSING if not found."""
     parts = key.split(".")
     cur = data
@@ -113,7 +114,7 @@ def _dot_get(data: dict, key: str):
     return cur
 
 
-def _dot_set(data: dict, key: str, value) -> None:
+def _dot_set(data: dict, key: str, value: Any) -> None:
     """Set value at dot-separated key, creating intermediate dicts as needed."""
     parts = key.split(".")
     cur = data
@@ -139,7 +140,7 @@ def _dot_delete(data: dict, key: str) -> bool:
     return False
 
 
-def _parse_json_value(value: str):
+def _parse_json_value(value: str) -> int | float | bool | str:
     """Parse value string to appropriate Python type.
 
     "9876" -> 9876 (int)

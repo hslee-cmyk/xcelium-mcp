@@ -2,11 +2,9 @@
 from __future__ import annotations
 
 import json
-import csv
 import re
 import textwrap
 import time
-from datetime import datetime
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP, Image
@@ -14,6 +12,7 @@ from mcp.server.fastmcp import FastMCP, Image
 from xcelium_mcp.bridge_manager import BridgeManager
 from xcelium_mcp.tcl_bridge import TclBridge, TclError
 from xcelium_mcp.screenshot import ps_to_png
+from xcelium_mcp.shell_utils import sanitize_signal_name, validate_path
 from xcelium_mcp.sim_runner import (
     UserInputRequired,
     ssh_run,
@@ -236,6 +235,14 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             shm_path:        SHM dump path for Mode A (CSV-based). Empty = Mode B.
             context_signals: (Mode A) Additional signals to include in CSV for context.
         """
+        # S-1 fix: sanitize signal name before Tcl interpolation
+        try:
+            signal = sanitize_signal_name(signal)
+            if context_signals:
+                context_signals = [sanitize_signal_name(s) for s in context_signals]
+        except ValueError as e:
+            return f"ERROR: {e}"
+
         if shm_path:
             # Mode A: SHM dump → CSV → in-memory search
             return await _bisect_signal_dump_impl(
@@ -298,6 +305,12 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             signals_to_check:(export) Signal paths for user to inspect in SimVision.
             suggested_fix:   (export) Optional fix suggestion.
         """
+        # S-3 fix: validate output_path
+        if output_path:
+            err = validate_path(output_path, "output_path")
+            if err:
+                return err
+
         if mode == "snapshot":
             return await _run_debugger_mode(bridges, target)
         elif mode == "tcl":

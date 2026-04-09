@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import hashlib
 import shlex
-from collections import deque
+from collections import deque, OrderedDict
 from pathlib import Path
 
-from xcelium_mcp.sim_runner import ssh_run
+from xcelium_mcp.shell_utils import ssh_run
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +56,7 @@ async def _resolve_simvisdbutil() -> str:
 # ---------------------------------------------------------------------------
 
 _MAX_CACHE_SIZE = 32
-_cache: dict[tuple, str] = {}
+_cache: OrderedDict[tuple, str] = OrderedDict()
 
 
 def _cache_key(
@@ -107,6 +107,7 @@ async def extract(
     """
     key = _cache_key(shm_path, signals, start_ns, end_ns)
     if key in _cache and Path(_cache[key]).exists():
+        _cache.move_to_end(key)  # LRU: mark as recently used
         return _cache[key]
 
     if not output_path:
@@ -159,10 +160,9 @@ async def extract(
             f"Output: {out}"
         )
 
-    # LRU eviction: remove oldest entry when cache is full
+    # LRU eviction: remove least-recently-used entry when cache is full
     if len(_cache) >= _MAX_CACHE_SIZE:
-        oldest_key = next(iter(_cache))
-        del _cache[oldest_key]
+        _cache.popitem(last=False)  # remove oldest (least recently used)
     _cache[key] = output_path
     return output_path
 

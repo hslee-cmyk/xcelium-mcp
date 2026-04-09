@@ -8,9 +8,9 @@ from __future__ import annotations
 import shlex
 from pathlib import Path
 
-from xcelium_mcp.sim_runner import (
+from xcelium_mcp.shell_utils import (
     ssh_run,
-    sq,
+    shell_quote as sq,
     login_shell_cmd,
     UserInputRequired,
 )
