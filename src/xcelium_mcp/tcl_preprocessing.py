@@ -12,7 +12,7 @@ import base64 as _b64
 import re as _re
 from pathlib import Path
 
-from xcelium_mcp.shell_utils import shell_quote, ssh_run
+from xcelium_mcp.shell_utils import shell_quote, ssh_run, validate_path
 
 
 def _parse_l1_time_ns(l1_time: str) -> int:
@@ -250,6 +250,9 @@ async def _handle_sdf_override(
     sim_dir: str, runner: dict, sdf_file: str, sdf_corner: str,
 ) -> str:
     """Handle SDF override: disable TB $sdf_annotate + generate tfile."""
+    err = validate_path(sdf_file, "sdf_file")
+    if err:
+        raise ValueError(err)
     if not _re.fullmatch(r"[\w./\-]+", sdf_file):
         raise ValueError(f"Invalid sdf_file path: {sdf_file!r}")
 

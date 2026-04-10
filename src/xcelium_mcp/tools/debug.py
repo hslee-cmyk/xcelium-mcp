@@ -185,6 +185,9 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             return f"ERROR: {e}"
 
         if shm_path:
+            err = validate_path(shm_path, "shm_path")
+            if err:
+                return err
             # Mode A: SHM dump → CSV → in-memory search (impl moved to csv_cache F-068)
             return await csv_cache.bisect_signal_dump(
                 shm_path=shm_path,

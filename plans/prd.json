@@ -1059,6 +1059,34 @@
       ],
       "notes": "4차 Arch #5. runner_detection.py:283 — 삭제된 env_detection 참조 주석. 미래 독자가 잘못된 의존성 경로를 파악할 수 있음.",
       "completed_at": "2026-04-11"
+    },
+    {
+      "id": "F-076",
+      "title": "Add validate_path for shm_path in bisect_signal Mode A",
+      "priority": 2,
+      "passes": true,
+      "acceptanceCriteria": [
+        "tools/debug.py bisect_signal Mode A (line 187 이전)에서 validate_path(shm_path, 'shm_path') 호출 추가",
+        "다른 shm_path 입력점 (probe handler line 124, debug_snapshot line 251)과 동일 패턴 적용",
+        ".. 포함 shm_path가 csv_cache.bisect_signal_dump에 전달되기 전 차단 확인",
+        "pytest passes"
+      ],
+      "notes": "5차 Security #1. tools/debug.py:187-197 — bisect_signal Mode A에서 shm_path를 validate_path 없이 csv_cache.bisect_signal_dump로 전달. shell_quote로 injection은 차단되지만 경로 traversal은 미방어. 다른 shm_path 입력점과 일관성 불일치.",
+      "completed_at": "2026-04-11"
+    },
+    {
+      "id": "F-077",
+      "title": "Add validate_path for sdf_file in tcl_preprocessing.py",
+      "priority": 2,
+      "passes": true,
+      "acceptanceCriteria": [
+        "tcl_preprocessing.py line 253 이전에 validate_path(sdf_file, 'sdf_file') 호출 추가",
+        "../../ 패턴 포함 sdf_file이 차단되는 테스트 추가",
+        "기존 정상 SDF 파일 경로 통과 확인",
+        "pytest passes"
+      ],
+      "notes": "5차 Security #2. tcl_preprocessing.py:253,282 — sdf_file regex r'[\\w./\\-]+' 가 ../../ 패턴 허용. validate_path 없이 generated tfile에 literal 삽입 (shell_quote 없음). MCP tool access 필요하므로 Low이지만 다른 경로 입력점과 일관성 차원에서 수정 권장.",
+      "completed_at": "2026-04-11"
     }
   ]
 }
