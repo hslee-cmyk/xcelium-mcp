@@ -273,10 +273,10 @@ async def launch_nohup_job(
             "started_at": datetime.now().isoformat(),
         })
         b64 = _b64.b64encode(job_info.encode()).decode()
-        await ssh_run(f"echo {b64} | base64 -d > {job_file}", timeout=5)
-        # P6-5: background watcher — touch {log}.done when PID exits
+        # F-027: merged job-state write + PID watcher into single SSH call
         done_file = f"{log_file}.done"
         await ssh_run(
+            f"echo {b64} | base64 -d > {job_file} && "
             f"(while kill -0 {pid}; do sleep 2; done; touch {done_file}) >& /dev/null &",
             timeout=5,
         )
@@ -538,15 +538,16 @@ async def _run_batch_regression(
                 "started_at": datetime.now().isoformat(),
             })
             b64 = _b64.b64encode(job_info.encode()).decode()
-            await ssh_run(f"echo {b64} | base64 -d > {job_file}", timeout=5)
+            # F-027: merged job-state write + PID watcher into single SSH call
             if test_pid:
-                # P6-5: PID watcher for per-test done marker
-                # >& /dev/null: B-0 fix — detach from asyncio PIPE fds
                 test_done = f"{test_log}.done"
                 await ssh_run(
+                    f"echo {b64} | base64 -d > {job_file} && "
                     f"(while kill -0 {test_pid}; do sleep 2; done; touch {test_done}) >& /dev/null &",
                     timeout=5,
                 )
+            else:
+                await ssh_run(f"echo {b64} | base64 -d > {job_file}", timeout=5)
 
             # Per-test poll (P6-1/P6-2/P6-5 via _poll_batch_log)
             _, timed_out = await _poll_batch_log(test_log, 600)
