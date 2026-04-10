@@ -651,20 +651,23 @@ async def run_batch_regression(
     # Cleanup job file
     await shell_run(f"rm -f {job_file}", timeout=5)
 
-    # Parse final results from per-test logs (F-020: single grep instead of N)
-    # Build one command that greps all test logs and prefixes each with filename
-    log_pattern = f"{user_tmp}/regression_{ts}_*.log"
-    batch_grep = await shell_run(
-        f"(grep -H -E 'PASS|FAIL|Errors:|COMPLETE' {log_pattern} || true) | tail -200",
-        timeout=30.0,
-    )
-    # Parse grep -H output: "filename:matched_line"
+    # Parse final results from per-test logs
+    # For each test, find its log file — current ts first, then most recent
     per_test_results: dict[str, list[str]] = {tn: [] for tn in test_list}
-    for line in batch_grep.strip().splitlines():
-        for tn in test_list:
-            if f"_{shell_quote(tn)}.log:" in line:
-                per_test_results[tn].append(line.split(":", 1)[1] if ":" in line else line)
-                break
+    for tn in test_list:
+        # Try current ts first, then find most recent log for this test
+        test_log_path = f"{user_tmp}/regression_{ts}_{tn}.log"
+        log_exists = await shell_run(f"test -f {shell_quote(test_log_path)} && echo Y || echo N")
+        if "Y" not in log_exists:
+            # Find most recent log for this test (resume scenario — different ts)
+            test_log_path = (await shell_run(
+                f"ls -t {user_tmp}/regression_*_{shell_quote(tn)}.log 2>/dev/null | head -1"
+            )).strip()
+        if test_log_path:
+            result_lines = await shell_run(
+                f"(grep -E 'PASS|FAIL|Errors:|COMPLETE' {shell_quote(test_log_path)} || true) | tail -30"
+            )
+            per_test_results[tn] = result_lines.strip().splitlines() if result_lines.strip() else []
 
     all_parts: list[str] = []
     pass_count = 0
