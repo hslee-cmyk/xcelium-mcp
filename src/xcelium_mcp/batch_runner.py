@@ -277,11 +277,12 @@ async def launch_nohup_job(
         })
         b64 = _b64.b64encode(job_info.encode()).decode()
         # F-027: merged job-state write + PID watcher into single SSH call
+        # < /dev/null disconnects SSH stdin so the background watcher doesn't hold the session
         done_file = f"{log_file}.done"
         await ssh_run(
             f"echo {b64} | base64 -d > {job_file} && "
-            f"(while kill -0 {pid}; do sleep 2; done; touch {done_file}) >& /dev/null &",
-            timeout=5,
+            f"(while kill -0 {pid}; do sleep 2; done; touch {done_file}) < /dev/null >& /dev/null &",
+            timeout=15,
         )
 
     return pid
@@ -519,15 +520,16 @@ async def run_batch_regression(
             })
             b64 = _b64.b64encode(job_info.encode()).decode()
             # F-027: merged job-state write + PID watcher into single SSH call
+            # < /dev/null disconnects SSH stdin so the background watcher doesn't hold the session
             if test_pid:
                 test_done = f"{test_log}.done"
                 await ssh_run(
                     f"echo {b64} | base64 -d > {job_file} && "
-                    f"(while kill -0 {test_pid}; do sleep 2; done; touch {test_done}) >& /dev/null &",
-                    timeout=5,
+                    f"(while kill -0 {test_pid}; do sleep 2; done; touch {test_done}) < /dev/null >& /dev/null &",
+                    timeout=15,
                 )
             else:
-                await ssh_run(f"echo {b64} | base64 -d > {job_file}", timeout=5)
+                await ssh_run(f"echo {b64} | base64 -d > {job_file}", timeout=15)
 
             # Per-test poll (P6-1/P6-2/P6-5 via poll_batch_log)
             _, timed_out = await poll_batch_log(test_log, 600)

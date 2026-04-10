@@ -319,6 +319,52 @@ async def test_launch_nohup_no_pid() -> None:
         assert pid == 0
 
 
+@pytest.mark.asyncio
+async def test_launch_nohup_pid_watcher_disconnects_stdin() -> None:
+    """PID watcher SSH command must include '< /dev/null' to disconnect stdin.
+
+    Without '< /dev/null', the background PID watcher keeps SSH stdin open,
+    causing the ssh_run call to hang until the watcher exits (which can be
+    minutes). This test prevents regression of the F-027 SSH timeout bug.
+    """
+    captured_commands: list[str] = []
+
+    async def capturing_ssh_run(cmd: str, timeout: float = 30) -> str:
+        captured_commands.append(cmd)
+        return "42" if "cat" in cmd and "pid" in cmd else ""
+
+    with (
+        patch("xcelium_mcp.batch_runner.ssh_run", side_effect=capturing_ssh_run),
+        patch(
+            "xcelium_mcp.shell_utils.get_user_tmp_dir",
+            new_callable=AsyncMock,
+            return_value="/tmp/xcelium_mcp_1000",
+        ),
+    ):
+        await launch_nohup_job(
+            sim_dir="/sim",
+            run_cmd="env TEST_NAME=T1 ./run_sim.sh -test T1 --",
+            log_file="/tmp/batch_123.log",
+            test_name="T1",
+            job_file="/tmp/batch_job.json",
+        )
+
+    # Find the PID watcher command (the one with "while kill -0")
+    watcher_cmds = [c for c in captured_commands if "while kill -0" in c]
+    assert watcher_cmds, "Expected a PID watcher SSH command"
+    watcher_cmd = watcher_cmds[0]
+
+    # Must include '< /dev/null' BEFORE '>& /dev/null &' to detach stdin
+    assert "< /dev/null" in watcher_cmd, (
+        "PID watcher command missing '< /dev/null'. "
+        "Without it, SSH stdin stays open and the call hangs until simulation ends."
+    )
+    # Must redirect stdout+stderr away from SSH session
+    assert ">& /dev/null" in watcher_cmd, "PID watcher must redirect output with '>& /dev/null'"
+    # Must be backgrounded
+    assert watcher_cmd.strip().endswith("&"), "PID watcher must run in background with trailing '&'"
+
+
 # ---------------------------------------------------------------------------
 # Tests: watch_pid_and_poll
 # ---------------------------------------------------------------------------
