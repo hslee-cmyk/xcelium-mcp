@@ -220,7 +220,7 @@ async def setup_waveform(
                 pass
             await ps_to_png(ps_path, config=cfg)
             results.append("Screenshot captured.")
-        except Exception as e:
+        except (TclError, ConnectionError, RuntimeError, OSError, TimeoutError) as e:
             results.append(f"Screenshot failed: {e}")
 
     return "\n".join(results) if results else "No actions performed."
@@ -518,7 +518,7 @@ async def compare_simvision(
             f'database open {shm_after} -name cmp_after',
             timeout=30.0,
         )
-    except Exception as e:
+    except BRIDGE_ERRORS as e:
         return f"SimVision connected but failed to open shm_after: {e}"
 
     # 6. Add BEFORE group (signals from primary / default database)
@@ -528,7 +528,7 @@ async def compare_simvision(
             f"__WAVEFORM_ADD__ BEFORE {sig_str}",
             timeout=30.0,
         )
-    except Exception as e:
+    except BRIDGE_ERRORS as e:
         return f"SimVision open but BEFORE group add failed: {e}"
 
     # 7. Add AFTER group (signals qualified with cmp_after database scope)
@@ -538,7 +538,7 @@ async def compare_simvision(
             f"__WAVEFORM_ADD__ AFTER {after_signals}",
             timeout=30.0,
         )
-    except Exception as e:
+    except BRIDGE_ERRORS as e:
         return f"BEFORE group added but AFTER group failed: {e}"
 
     display_num = display.lstrip(":")

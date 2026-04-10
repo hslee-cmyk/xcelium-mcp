@@ -13,6 +13,7 @@ from xcelium_mcp.discovery import resolve_sim_dir
 from xcelium_mcp.env_detection import _load_or_detect_runner
 from xcelium_mcp.registry import load_sim_config
 from xcelium_mcp.shell_utils import UserInputRequired, validate_path
+from xcelium_mcp.tcl_bridge import TclError
 
 # Type alias for the restore_checkpoint callable passed from server.py
 RestoreCheckpointFn = Callable[..., Coroutine[Any, Any, str]]
@@ -129,7 +130,7 @@ def register(
                     await bridge.execute(
                         f"probe -create {{{sig_str}}} -shm -depth all", timeout=30.0
                     )
-                except Exception as e:
+                except (ConnectionError, TclError, TimeoutError) as e:
                     return f"Restore succeeded but probe_add_signals failed: {e}"
 
         # Execute simulation
@@ -158,7 +159,7 @@ def register(
                 sdf_file=sdf_file,
                 sdf_corner=sdf_corner,
             )
-        except Exception as e:
+        except (RuntimeError, ValueError, OSError, TimeoutError) as e:
             return f"ERROR running simulation: {e}"
 
         # Invalidate CSV cache for this sim_dir so next bisect_csv reads fresh SHM
@@ -268,7 +269,7 @@ def register(
                 sdf_file=sdf_file,
                 sdf_corner=sdf_corner,
             )
-        except Exception as e:
+        except (RuntimeError, ValueError, OSError, TimeoutError) as e:
             return f"ERROR running regression: {e}"
 
         return f"sim_regression completed.\n\n{summary}"

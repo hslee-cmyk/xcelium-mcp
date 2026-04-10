@@ -451,7 +451,7 @@ async def run_full_discovery(
     try:
         r = await ssh_run(f"cd {_sd} && {test_cmd}", timeout=30)
         cached_tests = [t.strip() for t in r.strip().splitlines() if t.strip()]
-    except Exception as e:
+    except (RuntimeError, OSError, asyncio.TimeoutError) as e:
         logger.debug("test discovery failed (non-fatal): %s", e)
 
     test_discovery = {

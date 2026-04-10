@@ -434,7 +434,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             png_bytes = await ps_to_png(ps_path, config=cfg)
             screenshot = Image(data=png_bytes, format="png")
             return [report, screenshot]
-        except Exception as e:
+        except (TclError, ConnectionError, RuntimeError, OSError, TimeoutError) as e:
             report += f"\n\n*(Screenshot unavailable: {e})*"
             return [report]
 

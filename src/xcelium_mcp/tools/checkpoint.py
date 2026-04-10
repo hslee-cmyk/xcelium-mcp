@@ -134,7 +134,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             try:
                 from xcelium_mcp.registry import load_sim_config
                 cfg = await load_sim_config(resolved_dir)
-            except Exception as e:
+            except (RuntimeError, ValueError, OSError) as e:
                 logger.debug("config load for checkpoint cleanup failed: %s", e)
             xmls_path = "xmls"
             if cfg and "eda_tools" in cfg:
@@ -205,7 +205,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             try:
                 from xcelium_mcp.registry import load_sim_config
                 cfg = await load_sim_config(resolved_dir)
-            except Exception as e:
+            except (RuntimeError, ValueError, OSError) as e:
                 logger.debug("config load for xmrm cleanup failed: %s", e)
             xmrm_path = "xmrm"
             login_shell = "/usr/bin/tcsh"
