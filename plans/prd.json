@@ -328,7 +328,8 @@
       "id": "F-023",
       "title": "Add internal signal name sanitization in csv_cache.extract",
       "priority": 2,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-04-10",
       "acceptanceCriteria": [
         "csv_cache.extract() 내부에서 각 signal에 sanitize_signal_name() 또는 shell_quote() 적용",
         "외부 caller 사전 검증에 의존하지 않는 defense-in-depth 구현",
@@ -341,7 +342,8 @@
       "id": "F-024",
       "title": "Move _validate_group_name inside _encode_group_arg",
       "priority": 3,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-04-10",
       "acceptanceCriteria": [
         "_encode_group_arg 내부에서 _validate_group_name 호출하여 self-contained 검증",
         "외부에서 별도 validate 호출 불필요",
@@ -354,7 +356,8 @@
       "id": "F-025",
       "title": "Remove sim_runner.py re-export stub",
       "priority": 2,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-04-10",
       "acceptanceCriteria": [
         "sim_runner.py 삭제 또는 빈 모듈로 축소",
         "모든 tools/*.py 및 내부 모듈이 실제 출처 모듈에서 직접 import 확인",
@@ -367,7 +370,8 @@
       "id": "F-026",
       "title": "Resolve discovery ↔ bridge_lifecycle circular dependency",
       "priority": 3,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-04-10",
       "acceptanceCriteria": [
         "_patch_legacy_run_script, _update_simvisionrc를 discovery.py로 이동 또는 별도 script_patching.py로 분리",
         "discovery.py의 lazy import 제거",
@@ -380,7 +384,8 @@
       "id": "F-027",
       "title": "Merge batch_runner job-state write + PID watcher into single SSH call",
       "priority": 3,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-04-10",
       "acceptanceCriteria": [
         "batch_runner.py의 job state write(line 541)와 PID watcher launch(line 548)를 && 체이닝으로 1회 ssh_run 호출로 병합",
         "테스트당 SSH 호출 1회 추가 절감",
@@ -393,7 +398,8 @@
       "id": "F-028",
       "title": "Rename sanitize_tcl_string to is_safe_tcl_string",
       "priority": 3,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-04-10",
       "acceptanceCriteria": [
         "shell_utils.py의 sanitize_tcl_string → is_safe_tcl_string으로 rename",
         "모든 caller (tools/*.py, shell_utils.py 내부) import/호출 변경",
@@ -406,7 +412,8 @@
       "id": "F-029",
       "title": "Fix env_detection.py private function export — add __all__ or remove _ prefix",
       "priority": 3,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-04-10",
       "acceptanceCriteria": [
         "외부에서 import되는 17개 함수의 _ prefix 제거, 또는 __all__ 정의로 public API 명시",
         "sim_runner.py stub의 re-export 목록과 일치 확인",
@@ -419,7 +426,8 @@
       "id": "F-030",
       "title": "Add return type hints to batch_runner and tools/*.py functions",
       "priority": 3,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-04-10",
       "acceptanceCriteria": [
         "batch_runner.py 6개 함수에 -> str, -> dict, -> int 등 return annotation 추가",
         "tools/*.py 9개 함수에 -> str return annotation 추가",
@@ -432,7 +440,8 @@
       "id": "F-031",
       "title": "Narrow except Exception to specific exceptions in tools/*.py",
       "priority": 3,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-04-10",
       "acceptanceCriteria": [
         "tools/*.py 11곳의 except Exception을 (RuntimeError, ValueError, ConnectionError, TclError) 등 구체적 예외로 교체",
         "F-009에서 적용한 BRIDGE_ERRORS 패턴과 일관성 유지",
