@@ -1,33 +1,14 @@
 """Tests for _replace_shm_stems() — SHM path preprocessing.
 
-Uses inline copy of the function to avoid circular import
-(batch_runner ↔ sim_runner dependency).
+Imports the real function from xcelium_mcp.tcl_preprocessing.
+(Previous version inlined a copy — see test_dump_strategy.py header.)
 """
-import re as _re
+from __future__ import annotations
+
+from xcelium_mcp.tcl_preprocessing import _replace_shm_stems
 
 
-def _replace_shm_stems(content: str, test_name: str) -> str:
-    """Copy of batch_runner._replace_shm_stems for isolated testing."""
-    pattern = r"database\s+-open\s+(?:\S*/)?(\S+)\.shm"
-    matches = _re.findall(pattern, content)
-    if not matches:
-        return content
-    replaced: set[str] = set()
-    for stem in matches:
-        if stem in replaced or test_name in stem:
-            continue
-        escaped = _re.escape(stem)
-        content = _re.sub(
-            r"((?:database\s+(?:-open|-close)|probe\s+.*?-database)\s+(?:\S*/)?)"
-            + escaped + r"\.shm",
-            rf"\1{stem}_{test_name}.shm",
-            content,
-        )
-        replaced.add(stem)
-    return content
-
-
-def test_replace_all_three_contexts():
+def test_replace_all_three_contexts() -> None:
     """database -open, probe -database, database -close all replaced."""
     content = (
         "database -open ../dump/ci_top.shm -shm\n"
@@ -41,7 +22,7 @@ def test_replace_all_three_contexts():
     assert result.count("ci_top_VENEZIA_TOP015.shm") == 3
 
 
-def test_already_tagged_skips():
+def test_already_tagged_skips() -> None:
     """If stem already contains test_name, no double-tagging."""
     content = (
         "database -open ../dump/ci_top_VENEZIA_TOP015.shm -shm\n"
@@ -52,14 +33,14 @@ def test_already_tagged_skips():
     assert result == content
 
 
-def test_no_database_open_no_replacement():
+def test_no_database_open_no_replacement() -> None:
     """Without database -open, stems are not discovered — no replacement."""
     content = "probe -create top -database ../dump/ci_top.shm\n"
     result = _replace_shm_stems(content, "VENEZIA_TOP015")
     assert result == content
 
 
-def test_comments_not_replaced():
+def test_comments_not_replaced() -> None:
     """SHM name in comments should not be touched."""
     content = (
         "database -open ../dump/ci_top.shm -shm\n"
@@ -71,7 +52,7 @@ def test_comments_not_replaced():
     assert result.count("ci_top_TOP004.shm") == 2
 
 
-def test_bare_shm_name_no_directory():
+def test_bare_shm_name_no_directory() -> None:
     """SHM without directory prefix."""
     content = (
         "database -open ci_top.shm -shm\n"
@@ -81,7 +62,7 @@ def test_bare_shm_name_no_directory():
     assert result.count("ci_top_TOP004.shm") == 2
 
 
-def test_different_shm_name():
+def test_different_shm_name() -> None:
     """Works with non-ci_top SHM names."""
     content = (
         "database -open ../dump/my_design.shm -shm\n"
@@ -93,7 +74,7 @@ def test_different_shm_name():
     assert result.count("my_design_TEST001.shm") == 3
 
 
-def test_no_shm_in_content():
+def test_no_shm_in_content() -> None:
     """Content without any .shm references returns unchanged."""
     content = "run 10ms\nexit\n"
     result = _replace_shm_stems(content, "TOP004")

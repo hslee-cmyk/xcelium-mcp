@@ -442,21 +442,12 @@ async def run_with_dump_window(bridges, dump_window: dict, timeout: float = 600)
 # ===================================================================
 
 
-async def _extract_top_module_from_script(sim_dir: str, runner: dict) -> str:
-    """Extract top module name from run_sim script.
+def _extract_top_module_from_content(content: str) -> str:
+    """Parse xmsim/xrun/irun invocation in a script to find the top module name.
 
-    Parses xmsim/xrun/irun invocation to find the last non-option argument.
-    Handles: eval prefix, backslash line continuations.
-
+    Pure helper (no I/O). Handles: eval prefix, backslash line continuations.
     Returns: top module name, or "" if not found.
     """
-    script_name = runner.get("script", "")
-    if not script_name:
-        return ""
-
-    content = await ssh_run(
-        f"cat {sq(sim_dir + '/' + script_name)}", timeout=10
-    )
     if not content:
         return ""
 
@@ -476,6 +467,18 @@ async def _extract_top_module_from_script(sim_dir: str, runner: dict) -> str:
                 return token
 
     return ""
+
+
+async def _extract_top_module_from_script(sim_dir: str, runner: dict) -> str:
+    """Read run_sim script via SSH and extract the top module name."""
+    script_name = runner.get("script", "")
+    if not script_name:
+        return ""
+
+    content = await ssh_run(
+        f"cat {sq(sim_dir + '/' + script_name)}", timeout=10
+    )
+    return _extract_top_module_from_content(content)
 
 
 def _parse_ifdef_around_sdf(content: str) -> dict:
