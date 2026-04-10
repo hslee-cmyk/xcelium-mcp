@@ -319,4 +319,6 @@ def clear_cache(shm_path: str | None = None) -> None:
     if shm_path is None:
         _cache.clear()
     else:
-        _cache = {k: v for k, v in _cache.items() if k[0] != shm_path}
+        keys_to_remove = [k for k in _cache if k[0] == shm_path]
+        for k in keys_to_remove:
+            del _cache[k]
