@@ -223,15 +223,16 @@ async def _analyze_sdf_annotate(
     sdf_source = top_v_path
 
     if "$sdf_annotate" not in content:
-        # 3a. includes
-        includes = await ssh_run(
-            f"grep -oP '`include\\s+\"\\K[^\"]+' {sq(top_v_path)}",
-            timeout=10,
-        )
-        # 3b. instantiations
-        instances = await ssh_run(
-            f"grep -oP '^\\s*(\\w+)\\s+\\w+\\s*\\(' {sq(top_v_path)}",
-            timeout=10,
+        # 3a. includes + 3b. instantiations (parallelized)
+        includes, instances = await asyncio.gather(
+            ssh_run(
+                f"grep -oP '`include\\s+\"\\K[^\"]+' {sq(top_v_path)}",
+                timeout=10,
+            ),
+            ssh_run(
+                f"grep -oP '^\\s*(\\w+)\\s+\\w+\\s*\\(' {sq(top_v_path)}",
+                timeout=10,
+            ),
         )
         # 3c. collect files
         search_files: list[str] = []
@@ -486,8 +487,9 @@ async def run_full_discovery(
     try:
         sdf_info = await _analyze_sdf_annotate(sim_dir, config["runner"], top_module)
         config["sdf_info"] = sdf_info
-    except UserInputRequired:
+    except UserInputRequired as e:
         # top module 자동 탐지 실패 -> sdf_info 없이 진행 (사용자가 재호출 시 top_module 제공)
+        logger.warning("SDF analysis skipped — top module not found: %s", e)
         config["sdf_info"] = {"has_sdf_annotate": False}
 
     await save_sim_config(sim_dir, config)

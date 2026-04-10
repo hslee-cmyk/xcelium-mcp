@@ -10,9 +10,12 @@ parameter resolution, and test name resolution.
 from __future__ import annotations
 
 import asyncio
+import base64 as _b64
 import json
 import re as _re
+import time as _time
 from dataclasses import dataclass
+from datetime import datetime
 
 from xcelium_mcp.registry import load_sim_config, save_sim_config
 from xcelium_mcp.shell_utils import (
@@ -23,20 +26,11 @@ from xcelium_mcp.shell_utils import (
 from xcelium_mcp.shell_utils import (
     shell_quote as sq,
 )
-
-# Re-export from tcl_preprocessing for backward compat
-from xcelium_mcp.tcl_preprocessing import (  # noqa: F401
-    BOUNDARY_SIGNALS,
+from xcelium_mcp.tcl_preprocessing import (
     _build_checkpoint_tcl,
-    _generate_probe_reset_tcl,
     _handle_sdf_override,
-    _inject_dump_window,
     _parse_l1_time_ns,
-    _patch_tb_sdf_guard,
     _preprocess_setup_tcl,
-    _replace_probe_lines,
-    _replace_shm_stems,
-    _resolve_probe_signals,
     extract_setup_lines,
     read_setup_tcl,
 )
@@ -66,14 +60,8 @@ def validate_extra_args(s: str) -> str:
 
 
 
-# ---------------------------------------------------------------------------
-# Tcl preprocessing functions moved to tcl_preprocessing.py (v4.4).
-# Re-exported above for backward compatibility.
-# ---------------------------------------------------------------------------
 
-
-
-# _build_checkpoint_tcl moved to tcl_preprocessing.py (re-exported above)
+# _build_checkpoint_tcl moved to tcl_preprocessing.py
 
 
 def _resolve_exec_cmd(runner: dict, regression: bool = False) -> ExecInfo:
@@ -238,8 +226,6 @@ async def launch_nohup_job(
     Returns:
         PID of the launched process (0 if unknown).
     """
-    import time as _time
-
     ts = int(_time.time())
     from xcelium_mcp.shell_utils import get_user_tmp_dir
     user_tmp = await get_user_tmp_dir()
@@ -253,19 +239,15 @@ async def launch_nohup_job(
         timeout=15.0,
     )
 
-    # Read PID from file
-    pid_str = await ssh_run(f"cat {pid_file} || true", timeout=5)
+    # Read PID from file + cleanup in single SSH call
+    pid_str = await ssh_run(f"(cat {pid_file} || true); rm -f {pid_file}", timeout=5)
     pid_str = pid_str.strip()
     # Fallback — use pgrep if pid file didn't yield a number
     if not pid_str.isdigit():
         pid_str = await ssh_run(f"(pgrep -f {sq(test_name)} || true) | tail -1")
     pid = int(pid_str.strip()) if pid_str.strip().isdigit() else 0
-    # Cleanup pid file
-    await ssh_run(f"rm -f {pid_file}", timeout=5)
 
     if pid:
-        import base64 as _b64
-        from datetime import datetime
         job_info = json.dumps({
             "pid": pid,
             "log_file": log_file,
@@ -331,8 +313,6 @@ async def _run_batch_single(
 
     Strategy: nohup + PID watcher + adaptive log polling (P6-1/P6-2/P6-5).
     """
-    import time as _time
-
     from xcelium_mcp.shell_utils import get_user_tmp_dir
     user_tmp = await get_user_tmp_dir()
     job_file = f"{user_tmp}/batch_job.json"
@@ -400,8 +380,6 @@ async def _run_batch_regression(
       These checkpoints are used later by sim_batch_run(from_checkpoint=...)
       for faster debugging (skip compile+init).
     """
-    import time as _time
-
     from xcelium_mcp.shell_utils import get_user_tmp_dir
     user_tmp = await get_user_tmp_dir()
     job_file = f"{user_tmp}/regression_job.json"
@@ -499,7 +477,6 @@ async def _run_batch_regression(
                     test_name, chk_dir, l1_time, setup_lines,
                 )
                 chk_tcl_path = f"{user_tmp}/chk_{sq(test_name)}.tcl"
-                import base64 as _b64
                 b64 = _b64.b64encode(chk_tcl.encode()).decode()
                 await ssh_run(
                     f"echo {sq(b64)} | base64 -d > {sq(chk_tcl_path)}",
@@ -524,8 +501,6 @@ async def _run_batch_regression(
             )
 
             # Read PID + save job state in single cycle (F-020: was 2 base64 writes)
-            import base64 as _b64
-            from datetime import datetime
             pid_str = await ssh_run(f"(cat {pid_file} || true); rm -f {pid_file}", timeout=5)
             test_pid = int(pid_str.strip()) if pid_str.strip().isdigit() else 0
             job_info = json.dumps({
@@ -637,7 +612,6 @@ async def _poll_batch_log(log_file: str, timeout: float, prefix: str = "") -> tu
 
     Returns: (result_str, timed_out) — timed_out=True when poll exhausted without completion.
     """
-    import time as _time
     deadline = _time.time() + timeout
     interval = 2.0          # P6-1: start at 2s
     done_file = f"{log_file}.done"
@@ -756,7 +730,6 @@ async def resolve_test_name(short_name: str, sim_dir: str = "") -> str:
                 cached = [t.strip() for t in r.strip().splitlines() if t.strip()]
                 if cached:
                     # Cache via config_action (write centralization)
-                    from datetime import datetime
                     cfg.setdefault("test_discovery", {})["cached_tests"] = cached
                     cfg["test_discovery"]["cached_at"] = datetime.now().isoformat()
                     await save_sim_config(resolved_dir, cfg)

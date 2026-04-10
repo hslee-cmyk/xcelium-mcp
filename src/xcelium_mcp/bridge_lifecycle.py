@@ -9,6 +9,7 @@ import asyncio
 import logging
 
 from xcelium_mcp.batch_runner import resolve_sim_params, validate_extra_args
+from xcelium_mcp.bridge_manager import BridgeManager
 from xcelium_mcp.discovery import resolve_sim_dir, run_full_discovery
 from xcelium_mcp.registry import load_sim_config
 from xcelium_mcp.shell_utils import (
@@ -34,7 +35,7 @@ logger = logging.getLogger(__name__)
 # ===================================================================
 
 
-async def run_with_dump_window(bridges, dump_window: dict, timeout: float = 600):
+async def run_with_dump_window(bridges: BridgeManager, dump_window: dict, timeout: float = 600):
     """Bridge mode dump_window: probe on/off sequencing.
 
     Assumes setup tcl started with probe -disable.
@@ -75,7 +76,7 @@ async def start_bridge_simulation(
     sim_mode: str = "",
     timeout: int = 120,
     extra_args: str = "",
-    bridges=None,
+    bridges: BridgeManager | None = None,
     dump_depth: str = "",
 ) -> str:
     """Start simulation in bridge (interactive) mode. Registry없으면 sim_discover 자동 호출."""
@@ -117,7 +118,7 @@ async def _start_bridge(
     sim_mode: str,
     timeout: int,
     extra_args: str = "",
-    bridges=None,
+    bridges: BridgeManager | None = None,
     dump_depth: str = "",
 ) -> str:
     """Start simulation in bridge mode via legacy run script + env vars."""

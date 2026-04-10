@@ -36,7 +36,8 @@ def save_registry(registry: dict) -> None:
     _REGISTRY_PATH.write_text(json.dumps(registry, indent=2))
 
 
-_config_cache: dict[str, tuple[float, dict]] = {}  # mtime → config
+_MAX_CONFIG_CACHE = 8
+_config_cache: dict[str, tuple[float, dict]] = {}  # sim_dir → (mtime, config)
 
 
 async def load_sim_config(sim_dir: str, *, force: bool = False) -> dict | None:
@@ -47,17 +48,23 @@ async def load_sim_config(sim_dir: str, *, force: bool = False) -> dict | None:
         force: Bypass cache (e.g. after sim_discover).
     """
     path = Path(sim_dir) / ".mcp_sim_config.json"
-    if not path.exists():
+    if not await asyncio.to_thread(path.exists):
         return None
-    mtime = path.stat().st_mtime
+    stat = await asyncio.to_thread(path.stat)
+    mtime = stat.st_mtime
     if not force and sim_dir in _config_cache:
         cached_mtime, cfg = _config_cache[sim_dir]
         if mtime == cached_mtime:
             return cfg
     try:
-        config = json.loads(path.read_text())
+        raw = await asyncio.to_thread(path.read_text)
+        config = json.loads(raw)
     except json.JSONDecodeError:
         return None
+    # LRU eviction: remove oldest entry when cache is full
+    if len(_config_cache) >= _MAX_CONFIG_CACHE and sim_dir not in _config_cache:
+        oldest = next(iter(_config_cache))
+        del _config_cache[oldest]
     _config_cache[sim_dir] = (mtime, config)
     return config
 

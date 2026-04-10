@@ -352,7 +352,8 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             target:  "xmsim" | "simvision" | "auto" (default: auto).
         """
         # Security: block dangerous Tcl commands that could execute arbitrary OS commands
-        _TCL_DENYLIST = ["exec", "open", "file delete", "file rename", "exit", "source"]
+        _TCL_DENYLIST = ["exec", "open", "file delete", "file rename", "exit", "source",
+                         "eval", "interp", "package", "load", "uplevel", "after"]
         # Normalize whitespace: collapse tabs/multiple spaces to single space
         cmd_normalized = re.sub(r'[ \t]+', ' ', tcl_cmd).strip().lower()
         # Split on ; and newline to check each segment independently

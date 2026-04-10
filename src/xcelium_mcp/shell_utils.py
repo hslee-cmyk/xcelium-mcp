@@ -200,6 +200,7 @@ def is_safe_tcl_string(s: str) -> bool:
 
 
 _USER_TMP: str = ""  # cached after first call
+_USER_TMP_LOCK = asyncio.Lock()
 
 
 async def get_user_tmp_dir() -> str:
@@ -211,11 +212,15 @@ async def get_user_tmp_dir() -> str:
     global _USER_TMP
     if _USER_TMP:
         return _USER_TMP
-    r = await ssh_run("id -u", timeout=5)
-    uid = r.strip()
-    _USER_TMP = f"/tmp/xcelium_mcp_{uid}"
-    await ssh_run(f"mkdir -p {_USER_TMP}", timeout=5)
-    return _USER_TMP
+    async with _USER_TMP_LOCK:
+        # Double-check after acquiring lock
+        if _USER_TMP:
+            return _USER_TMP
+        r = await ssh_run("id -u", timeout=5)
+        uid = r.strip()
+        _USER_TMP = f"/tmp/xcelium_mcp_{uid}"
+        await ssh_run(f"mkdir -p {_USER_TMP}", timeout=5)
+        return _USER_TMP
 
 
 def _parse_shm_path(db_list_output: str) -> str:

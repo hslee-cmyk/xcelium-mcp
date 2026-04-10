@@ -1,6 +1,7 @@
 """Debug and analysis tools."""
 from __future__ import annotations
 
+import asyncio as _asyncio
 import re
 import textwrap
 import time
@@ -463,7 +464,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             context_note=context_note,
         )
 
-        Path(output_path).write_text(content)
+        await _asyncio.to_thread(Path(output_path).write_text, content)
         return (
             f"Debug Tcl script written to: {output_path}\n"
             f"Run: simvision -input {output_path} {shm_path}"
@@ -492,6 +493,6 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             suggested_fix=suggested_fix,
         )
 
-        Path(output_path).write_text(content, encoding="utf-8")
+        await _asyncio.to_thread(Path(output_path).write_text, content, encoding="utf-8")
         return f"Debug context exported to: {output_path}"
 

@@ -15,6 +15,7 @@ from collections import OrderedDict, deque
 from pathlib import Path
 
 from xcelium_mcp.shell_utils import get_user_tmp_dir, sanitize_signal_name, ssh_run
+from xcelium_mcp.shell_utils import shell_quote as sq
 
 # ---------------------------------------------------------------------------
 # simvisdbutil path resolution — MCP server runs in bash without EDA PATH
@@ -106,7 +107,7 @@ async def extract(
     Result is cached; subsequent calls with same args return cached path directly.
     """
     key = _cache_key(shm_path, signals, start_ns, end_ns)
-    if key in _cache and Path(_cache[key]).exists():
+    if key in _cache:
         _cache.move_to_end(key)  # LRU: mark as recently used
         return _cache[key]
 
@@ -116,7 +117,7 @@ async def extract(
     # --- Build simvisdbutil command with EDA env ---
     svdb = await _resolve_simvisdbutil()
     # -timeunits ns: force nanosecond output regardless of SHM time resolution
-    parts = [svdb, shm_path, "-csv", "-output", output_path, "-overwrite", "-timeunits", "ns"]
+    parts = [svdb, sq(shm_path), "-csv", "-output", sq(output_path), "-overwrite", "-timeunits", "ns"]
 
     if start_ns or end_ns:
         parts += ["-range", f"{start_ns}:{end_ns}ns"]
@@ -148,7 +149,8 @@ async def extract(
     out = await ssh_run(cmd, timeout=120.0)
 
     # Validate output
-    if not Path(output_path).exists():
+    import asyncio as _asyncio
+    if not await _asyncio.to_thread(Path(output_path).exists):
         raise RuntimeError(
             f"simvisdbutil did not produce output file.\n"
             f"Command: {cmd}\n"

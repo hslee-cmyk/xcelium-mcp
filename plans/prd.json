@@ -449,6 +449,264 @@
         "pytest passes"
       ],
       "notes": "Pattern review N-003. F-009에서 connect/retry는 수정했으나 tools 내 일반 핸들러 11곳 잔존. batch:2, checkpoint:2, debug:1, simvision:3, discovery:1."
+    },
+    {
+      "id": "F-032",
+      "title": "Extend Tcl denylist: add eval, interp, uplevel, load, after",
+      "priority": 1,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "_TCL_DENYLIST에 eval, interp, package, load, uplevel, after 추가",
+        "\"eval {exec id}\" 등 우회 페이로드가 차단되는 테스트 추가",
+        "기존 정상 Tcl 명령 (run, stop, value 등)은 통과 확인",
+        "pytest passes"
+      ],
+      "notes": "Security review. execute_tcl denylist가 exec/open/source만 차단. eval/interp/uplevel로 임의 코드 실행 가능. sim_lifecycle.py:354-375."
+    },
+    {
+      "id": "F-033",
+      "title": "Sanitize shm_path before Tcl command interpolation in open_database",
+      "priority": 1,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "tools/simvision.py open_database에서 shm_path에 validate_path() 적용",
+        "tools/debug.py generate_debug_tcl_content에서 shm_path에 validate_path() 적용",
+        "Tcl metachar 포함 shm_path (세미콜론, 대괄호 등) 차단 테스트 추가",
+        "pytest passes"
+      ],
+      "notes": "Security review. simvision.py:61-73 — shm_path가 f\"database open {shm_path}\"로 직접 삽입. compare_waveforms에는 validate_path 있지만 open_database에는 없음."
+    },
+    {
+      "id": "F-034",
+      "title": "Wrap blocking file I/O in asyncio.to_thread for async functions",
+      "priority": 1,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "registry.py load_sim_config의 path.exists()/stat()/read_text()를 asyncio.to_thread로 래핑",
+        "csv_cache.py:109 Path.exists()를 asyncio.to_thread 또는 캐시 플래그로 대체",
+        "debug.py Path.write_text()를 asyncio.to_thread로 래핑",
+        "event loop 차단 없이 동작 확인",
+        "pytest passes"
+      ],
+      "notes": "Performance+Python review. async 함수 내 동기 I/O가 event loop 차단. registry.py:49-58, csv_cache.py:109,151, debug.py:467."
+    },
+    {
+      "id": "F-035",
+      "title": "Add asyncio.Lock to get_user_tmp_dir global cache initialization",
+      "priority": 1,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "shell_utils.py get_user_tmp_dir()에 asyncio.Lock 추가하여 동시 초기화 방지",
+        "두 번째 호출은 lock 경합 없이 캐시 반환 확인",
+        "pytest passes"
+      ],
+      "notes": "Python review. _USER_TMP global 캐시에 lock 없음. 두 coroutine이 동시에 첫 호출 시 SSH 명령 중복 실행 가능. shell_utils.py:202-218."
+    },
+    {
+      "id": "F-036",
+      "title": "Parallelize batch regression test execution with asyncio.gather",
+      "priority": 2,
+      "passes": false,
+      "skip": true,
+      "skipReason": "Too large and risky for a batch change. Regression parallelization requires careful worklib locking and per-test log isolation.",
+      "acceptanceCriteria": [
+        "_run_batch_regression에서 독립 테스트를 asyncio.gather + Semaphore로 병렬 실행",
+        "max_parallel 파라미터 추가 (기본값 4)",
+        "순차 실행 대비 2+ 테스트에서 총 시간 단축 확인",
+        "기존 단일 테스트 동작 변경 없음",
+        "pytest passes"
+      ],
+      "notes": "Performance review. batch_runner.py:477-594 — N개 독립 테스트를 직렬 루프로 실행. 각 테스트는 nohup subprocess로 독립적이므로 병렬화 가능."
+    },
+    {
+      "id": "F-037",
+      "title": "Add shell_quote to shm_path/output_path in csv_cache command construction",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "csv_cache.py extract()에서 shm_path, output_path에 sq() 적용",
+        "공백/특수문자 포함 경로에서도 명령 정상 실행",
+        "pytest passes"
+      ],
+      "notes": "Security review. csv_cache.py:119-131 — parts list에 shm_path/output_path가 shell_quote 없이 삽입. 파일시스템 접근 필요하므로 Low이지만 defense-in-depth."
+    },
+    {
+      "id": "F-038",
+      "title": "Split batch_runner.py: extract test_resolution and batch_polling modules",
+      "priority": 2,
+      "passes": false,
+      "skip": true,
+      "skipReason": "Large structural refactor requiring import path updates across many files. Risky for batch change.",
+      "acceptanceCriteria": [
+        "test_resolution.py 신규: resolve_test_name, resolve_sim_params, _resolve_test_name_cached 이동",
+        "batch_polling.py 신규: _poll_batch_log, watch_pid_and_poll 이동",
+        "batch_runner.py 400줄 이하로 축소",
+        "기존 import 경로 업데이트 (tools/batch.py 등)",
+        "python -c 'import xcelium_mcp.server' 성공",
+        "pytest passes"
+      ],
+      "notes": "Architecture review. batch_runner.py 783줄 — test resolution, polling, execution, regression 혼재. 400줄 이하 목표로 분리."
+    },
+    {
+      "id": "F-039",
+      "title": "Extract simvision orchestration into simvision_ops.py domain module",
+      "priority": 2,
+      "passes": false,
+      "skip": true,
+      "skipReason": "Large structural refactor moving 7 functions to new module. Risky for batch change.",
+      "acceptanceCriteria": [
+        "simvision_ops.py 신규: open_database, start_simvision, setup_waveform, live_start, reload_waveform, compare_csv_diff, compare_simvision, _load_rows 이동",
+        "tools/simvision.py는 thin registration wrapper만 유지 (300줄 이하)",
+        "python -c 'import xcelium_mcp.server' 성공",
+        "pytest passes"
+      ],
+      "notes": "Architecture review. tools/simvision.py 712줄 — 7개 orchestration 함수가 도메인 로직. tools는 thin wrapper 원칙에 위배."
+    },
+    {
+      "id": "F-040",
+      "title": "Add type annotation to bridges parameter in bridge_lifecycle.py",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "bridge_lifecycle.py의 start_bridge_simulation, _start_bridge에 bridges: BridgeManager | None = None 타입 힌트 추가",
+        "ruff check 통과",
+        "pytest passes"
+      ],
+      "notes": "Python review. bridge_lifecycle.py:78 — bridges 파라미터가 bare None default로 타입 정보 없음."
+    },
+    {
+      "id": "F-041",
+      "title": "Add logger.warning for swallowed UserInputRequired in discovery.py",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "discovery.py:488-491 except UserInputRequired에 logger.warning() 추가",
+        "SDF 분석 스킵 사유가 사용자에게 전달됨",
+        "pytest passes"
+      ],
+      "notes": "Python review. discovery.py:389-395 — UserInputRequired 예외 시 sdf_info를 기본값으로 대체하면서 무시. 사용자에게 스킵 사실 미통보."
+    },
+    {
+      "id": "F-042",
+      "title": "Merge PID read + cleanup into single SSH call in launch_nohup_job",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "batch_runner.py launch_nohup_job에서 PID file read와 cleanup을 && 체이닝으로 1회 ssh_run 호출로 병합",
+        "테스트당 SSH 호출 1회 절감",
+        "기존 동작 변경 없음",
+        "pytest passes"
+      ],
+      "notes": "Performance review. batch_runner.py:249-264 — PID read(1 SSH) + cleanup(1 SSH) 분리. regression 경로(line 529)에서는 이미 병합됨."
+    },
+    {
+      "id": "F-043",
+      "title": "Parallelize _analyze_sdf_annotate SSH calls with asyncio.gather",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "discovery.py _analyze_sdf_annotate에서 독립적인 grep SSH 호출을 asyncio.gather로 병렬화",
+        "discovery 시간 600ms+ 절감",
+        "기존 결과 동일",
+        "pytest passes"
+      ],
+      "notes": "Performance review. discovery.py:189-268 — 6+ 순차 SSH 호출 (grep top module, cat, grep includes 등). 독립적인 호출은 병렬화 가능."
+    },
+    {
+      "id": "F-044",
+      "title": "Rename private _ functions to public in env_detection.py",
+      "priority": 3,
+      "passes": false,
+      "skip": true,
+      "skipReason": "Large rename across 18 functions and 5+ caller files. Risky for batch change.",
+      "acceptanceCriteria": [
+        "외부에서 import되는 함수의 _ prefix 제거 (_load_or_detect_runner → load_or_detect_runner, _detect_vnc_display → detect_vnc_display 등)",
+        "__all__ 정의로 public API 명시",
+        "caller (tools/batch.py, tools/simvision.py 등) import 문 업데이트",
+        "pytest passes"
+      ],
+      "notes": "Architecture review. env_detection.py 18개 _-prefixed 함수를 외부 모듈에서 직접 import — private naming 위반. F-029와 동일 패턴."
+    },
+    {
+      "id": "F-045",
+      "title": "Remove tcl_preprocessing re-exports from batch_runner.py",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "batch_runner.py lines 27-41의 noqa: F401 re-export 블록 제거",
+        "외부 consumer가 batch_runner에서 import하는 경로 없음 확인",
+        "python -c 'import xcelium_mcp.server' 성공",
+        "pytest passes"
+      ],
+      "notes": "Architecture review. 14개 심볼 re-export는 sim_runner.py 분할 당시 호환성용. 외부 consumer 없으면 제거 가능."
+    },
+    {
+      "id": "F-046",
+      "title": "Add unit tests for pure functions: discovery, env_detection, bridge_lifecycle",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "discovery.py 순수 함수 (resolve 계열) 테스트 추가",
+        "env_detection.py 순수 함수 테스트 추가",
+        "bridge_lifecycle.py 순수 함수 테스트 추가",
+        "csv_cache.bisect_csv, sanitize_signal_name, validate_extra_args 테스트 추가",
+        "테스트 커버리지 15% → 25%+ 향상",
+        "pytest passes"
+      ],
+      "notes": "Architecture+Python review. 1026줄 테스트 / 6929줄 소스 = 15%. 추출된 순수 함수는 MCP 프레임워크 없이 단위 테스트 가능."
+    },
+    {
+      "id": "F-047",
+      "title": "Move stdlib imports to module level in batch_runner.py",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "batch_runner.py의 함수 내 import time, import base64를 모듈 상단으로 이동",
+        "bridge_lifecycle.py의 lazy import from tcl_bridge를 함수 상단 1회로 변경",
+        "PEP 8 준수",
+        "pytest passes"
+      ],
+      "notes": "Python review. stdlib import를 함수 body에 배치. circular dep 회피용은 프로젝트 모듈만 해당, stdlib은 모듈 레벨이 원칙."
+    },
+    {
+      "id": "F-048",
+      "title": "Add warnings.warn to deprecated sq alias in shell_utils.py",
+      "priority": 3,
+      "passes": false,
+      "skip": true,
+      "skipReason": "sq is actively used in 50+ locations, deprecation warning would be too noisy.",
+      "acceptanceCriteria": [
+        "shell_utils.py sq()에 warnings.warn('sq is deprecated, use shell_quote', DeprecationWarning, stacklevel=2) 추가",
+        "또는 모든 caller를 shell_quote로 변경하고 sq 제거",
+        "ruff check 통과",
+        "pytest passes"
+      ],
+      "notes": "Python review. shell_utils.py:30-31 — 주석에 'will be removed in v5'이지만 경고 없음. 여러 파일에서 sq로 import 중."
+    },
+    {
+      "id": "F-049",
+      "title": "Add eviction to _config_cache and remove Path.exists on csv_cache hit",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "registry.py _config_cache를 maxsize 있는 LRU 또는 TTL 캐시로 변경 (maxsize=8 등)",
+        "csv_cache.py cache hit 시 Path.exists() 제거 — extraction 실패 시에만 재검증",
+        "pytest passes"
+      ],
+      "notes": "Performance review. _config_cache 무제한 dict (실질 1-2건이지만 형식적 unbounded). csv_cache hit마다 stat 호출은 hot-path에서 불필요."
     }
   ]
 }

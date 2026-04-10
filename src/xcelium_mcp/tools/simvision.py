@@ -41,6 +41,9 @@ _DISPLAY_RE = re.compile(r'^:?[0-9]+(\.[0-9]+)?$')
 
 async def open_database(bridges: BridgeManager, shm_path: str, name: str = "") -> str:
     """Open SHM database. Uses correct syntax based on bridge type."""
+    err = validate_path(shm_path, "shm_path")
+    if err:
+        return err
     # SimVision bridge first
     if bridges.simvision_raw and bridges.simvision_raw.connected:
         bridge = bridges.simvision_raw
