@@ -264,16 +264,16 @@
       "id": "F-019",
       "title": "Extract simvision.py orchestration logic into testable functions",
       "priority": 2,
-      "passes": false,
-      "skip": true,
-      "skipReason": "Large structural refactor requiring extensive testing. Do after security and dedup fixes.",
+      "passes": true,
+      "completed_at": "2026-04-10",
       "acceptanceCriteria": [
-        "VNC detection, SimVision launch, bridge polling, waveform state capture/restore extracted from register() closures",
-        "Extracted functions are independently unit-testable without MCP framework",
-        "simvision.py register() closures become thin orchestrators",
+        "start_simvision, open_database, setup_waveform, live_start, reload_waveform, compare_csv_diff, compare_simvision — 7개 모듈 레벨 async 함수로 추출",
+        "bridges, waveform_add_impl_fn 등 클로저 캡처 → 명시적 파라미터 전달로 변경",
+        "register() 내 @mcp.tool 클로저는 각 30줄 이내 thin wrapper",
+        "추출된 함수는 MCP 프레임워크 없이 단위 테스트 가능",
         "pytest passes"
       ],
-      "notes": "Arch review. 667-line simvision.py packs complex multi-step orchestration inside closures. Untestable."
+      "notes": "Arch review. 654-line simvision.py — 3 MCP tools + 2 internal fns all inside register() closure. 7 orchestration flows (each 30-100 lines) untestable without MCP boot. F-016~F-018 dedup completed, ready for extraction."
     },
     {
       "id": "F-020",

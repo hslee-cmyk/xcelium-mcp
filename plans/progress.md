@@ -28,6 +28,17 @@ python -m pytest && python -m ruff check src/
 
 ---
 
+### Task: Ralph loop — F-019 (simvision extraction)
+
+**Completed:**
+- **F-019** — Extracted 7 module-level async functions from register() closures
+  - open_database, start_simvision, setup_waveform, live_start, reload_waveform, compare_csv_diff, compare_simvision
+  - Closure captures → explicit parameters
+  - register() wrappers now thin dispatchers (8-19 lines each)
+  - _load_rows helper also extracted to module level
+
+---
+
 ### Task: Ralph loop — F-011 through F-018 (security + dedup batch)
 
 **Completed (8 tasks):**
