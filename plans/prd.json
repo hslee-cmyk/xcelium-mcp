@@ -703,6 +703,203 @@
         "pytest passes"
       ],
       "notes": "Performance review. _config_cache 무제한 dict (실질 1-2건이지만 형식적 unbounded). csv_cache hit마다 stat 호출은 hot-path에서 불필요."
+    },
+    {
+      "id": "F-050",
+      "title": "Wrap registry save/write functions in asyncio.to_thread",
+      "priority": 1,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "registry.py save_sim_config (line 75) path.write_text를 asyncio.to_thread로 래핑",
+        "registry.py save_registry / _write_json (line 33,83) 동일 적용",
+        "registry.py load_registry (line 25-26) Path.exists/read_text를 asyncio.to_thread로 래핑",
+        "event loop 차단 없이 동작 확인",
+        "pytest passes"
+      ],
+      "notes": "2차 Review #1. load_sim_config은 to_thread 적용됨, write 경로는 누락. registry.py:33,75,83."
+    },
+    {
+      "id": "F-051",
+      "title": "Wrap simvision_ops._load_rows in asyncio.to_thread",
+      "priority": 1,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "simvision_ops.py _load_rows (line 388) 또는 caller compare_csv_diff에서 asyncio.to_thread로 래핑",
+        "대용량 CSV에서도 event loop 차단 없음",
+        "pytest passes"
+      ],
+      "notes": "2차 Review #2. _load_rows는 동기 open()으로 CSV 읽기. caller compare_csv_diff가 async 함수. simvision_ops.py:388-395."
+    },
+    {
+      "id": "F-052",
+      "title": "Apply shell_quote to DISPLAY in start_simvision setenv command",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "simvision_ops.py start_simvision에서 setenv DISPLAY {display}를 shell_quote(display)로 변경",
+        "또는 _DISPLAY_RE 검증을 start_simvision 진입점에 추가",
+        "compare_simvision과 동일 수준 보호 달성",
+        "pytest passes"
+      ],
+      "notes": "2차 Security #3. simvision_ops.py:142 — xdpyinfo는 shell_quote 적용, setenv는 미적용. \":1; exec sh\" 페이로드 가능."
+    },
+    {
+      "id": "F-053",
+      "title": "Validate or document test_discovery.command trust boundary",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "test_resolution.py에서 test_discovery.command에 기본 denylist 검증 추가 (;, |, && 외 메타문자 차단)",
+        "또는 config 파일을 trusted input으로 명시하는 docstring/주석 추가",
+        "선택한 방식에 대한 테스트 또는 문서 추가",
+        "pytest passes"
+      ],
+      "notes": "2차 Security #4. test_resolution.py:99, tools/sim_lifecycle.py:100 — config에서 읽은 명령을 ssh_run으로 무검증 실행."
+    },
+    {
+      "id": "F-054",
+      "title": "Wrap tcl_preprocessing file I/O in asyncio.to_thread",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "tcl_preprocessing.py read_setup_tcl (line 62-64) Path.exists/read_text를 asyncio.to_thread로 래핑",
+        "tcl_preprocessing.py line 353 Path.write_text를 asyncio.to_thread로 래핑",
+        "async caller에서 event loop 차단 없음",
+        "pytest passes"
+      ],
+      "notes": "2차 Perf #5. tcl_preprocessing.py:62,353 — 동기 Path I/O가 async 경로에서 호출."
+    },
+    {
+      "id": "F-055",
+      "title": "Parallelize discover_sim_dir SSH calls with asyncio.gather",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "env_detection.py discover_sim_dir (line 336-351) 내부 루프를 asyncio.gather로 병렬화",
+        "각 후보 디렉토리의 analyze_tb_type + auto_detect_runner를 동시 실행",
+        "기존 결과 동일",
+        "pytest passes"
+      ],
+      "notes": "2차 Perf #6. env_detection.py:336-351 — 후보 디렉토리별 순차 SSH N*M 호출."
+    },
+    {
+      "id": "F-056",
+      "title": "Batch _detect_eda_env find+grep into single SSH per directory",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "env_detection.py _detect_eda_env (line 105-111) find+grep을 단일 SSH 명령으로 병합",
+        "또는 asyncio.gather로 디렉토리별 병렬 실행",
+        "SSH 호출 8+ → 2-4로 절감",
+        "pytest passes"
+      ],
+      "notes": "2차 Perf #7. env_detection.py:105-111 — 4개 search dir × 2 SSH = 8+ 순차 호출."
+    },
+    {
+      "id": "F-057",
+      "title": "Split env_detection.py into runner_detection and sim_env_detection",
+      "priority": 2,
+      "skip": true,
+      "skipReason": "Large structural refactor of 660+ line module.",
+      "passes": false,
+      "acceptanceCriteria": [
+        "runner_detection.py 신규: runner/shell/EDA 관련 함수 이동 (load_or_detect_runner, detect_eda_env 등)",
+        "sim_env_detection.py 신규: bridge/port/VNC/directory 관련 함수 이동 (detect_vnc_display, discover_sim_dir 등)",
+        "env_detection.py 삭제 또는 re-export stub",
+        "각 모듈 400줄 이하",
+        "python -c 'import xcelium_mcp.server' 성공",
+        "pytest passes"
+      ],
+      "notes": "2차 Arch #8. env_detection.py 682줄 15개 함수 — runner vs environment 두 가지 관심사 혼재."
+    },
+    {
+      "id": "F-058",
+      "title": "Add asyncio.Lock to csv_cache._simvisdbutil_path global write",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "csv_cache.py _resolve_simvisdbutil (line 45) global write에 asyncio.Lock 추가",
+        "get_user_tmp_dir와 동일한 double-checked locking 패턴 적용",
+        "pytest passes"
+      ],
+      "notes": "2차 Python #9. csv_cache.py:45 — asyncio.to_thread에서 race 가능. get_user_tmp_dir는 Lock 있으나 여기는 없음."
+    },
+    {
+      "id": "F-059",
+      "title": "Extend is_safe_tcl_string bracket denylist (socket, file delete, interp eval)",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "shell_utils.py is_safe_tcl_string에 [socket, [file delete, [interp eval 등 위험 bracket 명령 추가",
+        "execute_tcl denylist와 일관된 차단 범위",
+        "기존 정상 입력 통과 확인",
+        "pytest passes"
+      ],
+      "notes": "2차 Security #10. shell_utils.py:179 — [exec], [open]만 차단. [socket localhost 4444] 등 우회 가능."
+    },
+    {
+      "id": "F-060",
+      "title": "Add test_name regex validation at batch_runner entry point",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "batch_runner.py build_batch_cmd 진입점에서 test_name을 [A-Za-z0-9_-]+ regex 검증",
+        "tcl_preprocessing._preprocess_setup_tcl과 동일 기준 적용",
+        "잘못된 test_name에 명확한 에러 메시지",
+        "pytest passes"
+      ],
+      "notes": "2차 Security #11. batch_runner.py:194 — shell_quote만 적용, regex 미검증. tcl_preprocessing은 검증하지만 entry point에서 누락."
+    },
+    {
+      "id": "F-061",
+      "title": "Rename _poll_batch_log and other cross-module private functions to public",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "batch_polling.py _poll_batch_log → poll_batch_log 로 rename",
+        "batch_runner.py _run_batch_single, _run_batch_regression → public name으로 변경 (tools/batch.py에서 import)",
+        "caller import 문 업데이트",
+        "pytest passes"
+      ],
+      "notes": "2차 Arch #12. cross-module import되는 private 함수 — naming convention 위반."
+    },
+    {
+      "id": "F-062",
+      "title": "Add tests for validate_extra_args and sanitize_signal_name",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "validate_extra_args: forbidden chars (; | & $ ` ' \\n) 차단 + 정상 args 통과 parameterized 테스트",
+        "sanitize_signal_name: bracket-content 로직, edge case (빈 문자열, 중첩 bracket) 테스트",
+        "is_safe_tcl_string: denylist 차단 + 정상 Tcl 통과 테스트",
+        "pytest passes"
+      ],
+      "notes": "2차 Python #13. 보안 핵심 함수에 전용 테스트 없음. shell_utils.py:146,179, batch_runner.py:62-75."
+    },
+    {
+      "id": "F-063",
+      "title": "Remove unnecessary lazy imports in batch_runner.py",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "batch_runner.py line 241,302,369의 from xcelium_mcp.shell_utils import를 모듈 상단 import로 통합",
+        "shell_utils는 이미 line 22에서 import 중 — 중복 lazy import 제거",
+        "pytest passes"
+      ],
+      "notes": "2차 Python #14. shell_utils는 circular dep 아님. 불필요한 lazy import 잔존."
     }
   ]
 }
