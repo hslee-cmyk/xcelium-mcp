@@ -280,7 +280,7 @@ async def load_or_detect_runner(sim_dir: str) -> dict:
         return cfg.get("runner", cfg)
 
     # v4: delegate to sim_discover instead of self-detecting
-    # Lazy import to avoid circular dependency (sim_runner -> env_detection -> sim_runner)
+    # Lazy import to avoid circular dependency (runner_detection -> discovery -> sim_env_detection -> runner_detection)
     from xcelium_mcp.discovery import run_full_discovery
     await run_full_discovery(sim_dir)
     cfg = await load_sim_config(sim_dir)

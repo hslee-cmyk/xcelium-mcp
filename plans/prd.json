@@ -991,6 +991,74 @@
         "추후 기능 추가 시 400줄 초과 여부 재검토"
       ],
       "notes": "3차 Arch #6. 3개 모듈이 400줄 초과하지만 내부 응집도 높아 추가 분할은 과도. 모니터링 항목으로 등록."
+    },
+    {
+      "id": "F-071",
+      "title": "Wrap cleanup_checkpoints and rebuild_manifest in asyncio.to_thread at call sites",
+      "priority": 1,
+      "passes": true,
+      "acceptanceCriteria": [
+        "tools/checkpoint.py:162 cleanup_checkpoints 호출을 await asyncio.to_thread(checkpoint_manager.cleanup_checkpoints, ...) 로 변경",
+        "tools/checkpoint.py:180 rebuild_manifest 호출을 await asyncio.to_thread(checkpoint_manager.rebuild_manifest, ...) 로 변경",
+        "register action (line 111)은 이미 to_thread 적용 — 변경 불필요",
+        "pytest passes"
+      ],
+      "notes": "4차 Review #1. tools/checkpoint.py:162,180 — cleanup/rebuild action이 sync 함수를 직접 호출. os.walk 포함한 블로킹 경로가 event loop 차단. register action(line 111)은 이미 수정됨.",
+      "completed_at": "2026-04-11"
+    },
+    {
+      "id": "F-072",
+      "title": "Fix dead except ValueError on validate_path in tools/debug.py probe handler",
+      "priority": 2,
+      "passes": true,
+      "acceptanceCriteria": [
+        "tools/debug.py:123-127 try/except ValueError 블록을 err = validate_path(shm_path); if err: return err 패턴으로 교체",
+        "다른 호출부(tools/batch.py:96, simvision_ops.py:41)와 동일한 패턴 적용",
+        "shm_path에 .. 또는 null byte 포함 시 에러 반환 확인",
+        "pytest passes"
+      ],
+      "notes": "4차 Security #2. validate_path는 ValueError를 raise하지 않고 error string을 반환. dead except 블록으로 인해 probe handler의 shm_path traversal 검증이 무효화됨.",
+      "completed_at": "2026-04-11"
+    },
+    {
+      "id": "F-073",
+      "title": "Fix tools/debug.py write_text encoding mismatch and wrap in asyncio.to_thread",
+      "priority": 3,
+      "passes": true,
+      "acceptanceCriteria": [
+        "tools/debug.py:392 write_text 호출에 encoding='utf-8' 인수 추가 (line 421과 일관성)",
+        "tools/debug.py:392,421 write_text 호출을 asyncio.to_thread로 래핑",
+        "pytest passes"
+      ],
+      "notes": "4차 Python #3. line 392는 encoding 없음, line 421은 있음 — 불일치. 비 UTF-8 시스템에서 latent bug. 두 호출 모두 async 함수 내 sync file write.",
+      "completed_at": "2026-04-11"
+    },
+    {
+      "id": "F-074",
+      "title": "Add unit tests for csv_cache.bisect_csv and bisect_signal_dump",
+      "priority": 3,
+      "passes": true,
+      "acceptanceCriteria": [
+        "tests/에 bisect_csv fixture CSV로 단위 테스트 추가 (정상 bisect, edge case: 빈 파일, 신호 미존재)",
+        "bisect_signal_dump의 결과 포맷 검증 테스트 추가",
+        "_bisect_signal_dump_impl 이동 후 회귀 방지 목적",
+        "pytest passes"
+      ],
+      "notes": "4차 Python #4. csv_cache.py로 이동 후 bisect_csv, bisect_signal_dump 테스트 없음. pure 함수로 fixture CSV로 쉽게 테스트 가능.",
+      "completed_at": "2026-04-11"
+    },
+    {
+      "id": "F-075",
+      "title": "Fix stale comment in runner_detection.py referencing deleted env_detection",
+      "priority": 3,
+      "passes": true,
+      "acceptanceCriteria": [
+        "runner_detection.py:283 주석의 'env_detection'을 'sim_env_detection'으로 수정",
+        "실제 순환 의존 경로(runner_detection -> discovery -> sim_env_detection -> runner_detection)를 정확히 반영",
+        "pytest passes"
+      ],
+      "notes": "4차 Arch #5. runner_detection.py:283 — 삭제된 env_detection 참조 주석. 미래 독자가 잘못된 의존성 경로를 파악할 수 있음.",
+      "completed_at": "2026-04-11"
     }
   ]
 }

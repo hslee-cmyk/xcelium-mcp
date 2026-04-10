@@ -121,10 +121,9 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             if depth != "all" and not depth.isdigit():
                 return f"ERROR: depth must be 'all' or a numeric value, got: {depth!r}"
             if shm_path:
-                try:
-                    validate_path(shm_path)
-                except ValueError as e:
-                    return f"ERROR: {e}"
+                err = validate_path(shm_path, "shm_path")
+                if err:
+                    return err
             sig_str = " ".join(signals)
             if shm_path:
                 cmd = f"probe -create {{{sig_str}}} -shm {shm_path} -depth {depth}"
@@ -389,7 +388,8 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             context_note=context_note,
         )
 
-        Path(output_path).write_text(content)
+        import asyncio as _asyncio
+        await _asyncio.to_thread(Path(output_path).write_text, content, "utf-8")
         return (
             f"Debug Tcl script written to: {output_path}\n"
             f"Run: simvision -input {output_path} {shm_path}"
@@ -418,6 +418,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             suggested_fix=suggested_fix,
         )
 
-        Path(output_path).write_text(content, encoding="utf-8")
+        import asyncio as _asyncio
+        await _asyncio.to_thread(Path(output_path).write_text, content, "utf-8")
         return f"Debug context exported to: {output_path}"
 

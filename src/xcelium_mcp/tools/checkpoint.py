@@ -159,7 +159,9 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
                 login_shell_cmd(login_shell, xmls_cmd),
                 timeout=30,
             )
-            result = checkpoint_manager.rebuild_manifest(resolved_dir, xmls_out)
+            result = await asyncio.to_thread(
+                checkpoint_manager.rebuild_manifest, resolved_dir, xmls_out
+            )
             lines = [
                 f"sim_dir: {resolved_dir}",
                 f"Scanned worklib: {abs_worklib}",
@@ -177,7 +179,8 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
                 lines.append("No snapshots found in worklib.")
             return "\n".join(lines)
 
-        result = checkpoint_manager.cleanup_checkpoints(
+        result = await asyncio.to_thread(
+            checkpoint_manager.cleanup_checkpoints,
             resolved_dir, mode=mode, filter_value=filter_value, dry_run=dry_run, invert=invert,
         )
 
