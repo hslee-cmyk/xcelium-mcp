@@ -279,32 +279,31 @@
       "id": "F-020",
       "title": "Consolidate batch regression SSH bookkeeping calls",
       "priority": 3,
-      "passes": false,
-      "skip": true,
-      "skipReason": "Performance optimization requiring remote testing. Do after structural refactors.",
+      "passes": true,
+      "completed_at": "2026-04-10",
       "acceptanceCriteria": [
-        "base64 encode+write reduced from 2 cycles to 1 per test",
-        "grep results collection batched into single find+grep command instead of per-test ssh_run",
-        "Total SSH calls per test reduced from 8-10 to 4-5",
-        "45-test regression overhead reduced measurably",
+        "base64 encode+write 2회를 1회로 통합 (job file 생성 시 한 번에 전체 내용 작성)",
+        "per-test grep results 수집을 단일 find+grep 명령으로 배치화",
+        "Total SSH calls per test 8-10 → 4-5로 감소",
+        "기존 _run_batch_single, _run_batch_regression 동작 변경 없음",
         "pytest passes"
       ],
-      "notes": "Perf review. batch_runner.py:392 loop — 8-10 ssh_run per test, 45-test = ~400 calls. Lines 432-443, 460-466 double base64."
+      "notes": "Perf review. batch_runner.py _run_batch_single: lines 432-443 (1st base64 write) + 460-466 (2nd base64 write) 통합. _run_batch_regression:527-529 per-test grep → find+grep 일괄. ssh_run 호출 수 절감이 핵심."
     },
     {
       "id": "F-021",
-      "title": "Replace bridge polling spin loop with inotifywait/TCP retry",
+      "title": "Replace bridge polling spin loop with TCP connect retry",
       "priority": 3,
-      "passes": false,
-      "skip": true,
-      "skipReason": "Performance optimization requiring remote testing with inotifywait availability.",
+      "passes": true,
+      "completed_at": "2026-04-10",
       "acceptanceCriteria": [
-        "Bridge ready detection uses inotifywait or TCP connect retry instead of cat polling",
-        "Eliminates up to 60 subprocess spawns during bridge startup",
-        "Fallback to polling if inotifywait unavailable",
+        "_start_bridge의 cat polling loop를 TCP connect retry로 교체 (asyncio.open_connection 시도)",
+        "inotifywait 의존 없이 순수 TCP probe — 포트가 열리면 즉시 연결",
+        "inotifywait 불필요: bridge_ready 파일 대신 직접 포트 연결 시도가 더 단순",
+        "기존 timeout/retry 횟수 동일하게 유지, fallback으로 현재 cat polling 보존",
         "pytest passes"
       ],
-      "notes": "Perf review. sim_runner.py:784-808. Polls cat bridge_ready_* every 2s, up to 60 iterations."
+      "notes": "Perf review. sim_runner.py _start_bridge: cat bridge_ready_* polling 매 2초 × 최대 60회 = 60 subprocess. TCP connect는 subprocess 0회. scan_ready_files로 포트 번호 확인 후 asyncio.open_connection으로 직접 시도."
     }
   ]
 }

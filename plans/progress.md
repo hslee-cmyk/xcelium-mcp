@@ -28,6 +28,14 @@ python -m pytest && python -m ruff check src/
 
 ---
 
+### Task: Ralph loop — F-020, F-021 (performance optimization)
+
+**Completed:**
+- **F-020** — Consolidated batch regression SSH calls: merged 2 base64 writes → 1, per-test grep → single glob grep
+- **F-021** — TCP connect retry for bridge: first half uses direct TCP (0 subprocess), fallback to scan_ready_files
+
+---
+
 ### Task: Ralph loop — F-019 (simvision extraction)
 
 **Completed:**
