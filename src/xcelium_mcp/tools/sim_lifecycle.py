@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from datetime import datetime
 
 from mcp.server.fastmcp import FastMCP
@@ -308,6 +309,8 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         else:
             return f"ERROR: Unknown action '{action}'. Use 'bridge' or 'shutdown'."
 
+    _DURATION_RE = re.compile(r'^\d+\s*(ns|us|ms|s|ps|fs)?$', re.IGNORECASE)
+
     @mcp.tool()
     async def sim_run(duration: str = "", timeout: float = 600.0) -> str:
         """Run the simulation, optionally for a specified duration.
@@ -316,6 +319,11 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             duration: Simulation time to run (e.g. "100ns", "1us"). Empty = run until breakpoint or end.
             timeout: MCP response timeout in seconds (default 600s for gate-level sim support).
         """
+        if duration and not _DURATION_RE.fullmatch(duration.strip()):
+            return (
+                f"ERROR: Invalid duration {duration!r}. "
+                "Expected format like '100ns', '1us', '500ps'."
+            )
         bridge = bridges.xmsim
         # Single round-trip: run + where combined in Tcl
         where = await bridge.execute(f"__RUN_AND_REPORT__ {duration}", timeout=timeout)
@@ -361,10 +369,9 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         # Security: block dangerous Tcl commands that could execute arbitrary OS commands
         _TCL_DENYLIST = ["exec", "open", "file delete", "file rename", "exit", "source"]
         # Normalize whitespace: collapse tabs/multiple spaces to single space
-        import re as _re
-        cmd_normalized = _re.sub(r'[ \t]+', ' ', tcl_cmd).strip().lower()
+        cmd_normalized = re.sub(r'[ \t]+', ' ', tcl_cmd).strip().lower()
         # Split on ; and newline to check each segment independently
-        for segment in _re.split(r'[;\n]', cmd_normalized):
+        for segment in re.split(r'[;\n]', cmd_normalized):
             first_token = segment.strip().split(' ')[0] if segment.strip() else ""
             for denied in _TCL_DENYLIST:
                 denied_parts = denied.split()
