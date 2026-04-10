@@ -126,16 +126,26 @@ def _resolve_exec_cmd(runner: dict, regression: bool = False) -> ExecInfo:
     return ExecInfo(cmd=cmd, needs_test_name=needs_test_name)
 
 
-async def parse_existing_job(job_file: str, timeout: int) -> str | None:
+async def _kill_stale_pid(pid: int) -> None:
+    """Kill a stale simulation process and wait briefly for cleanup."""
+    if pid > 0:
+        await shell_run(f"kill {pid} 2>/dev/null || true", timeout=5)
+        # Also kill any child xmsim process that may have been spawned
+        await shell_run(f"pkill -P {pid} 2>/dev/null || true", timeout=5)
+
+
+async def parse_existing_job(job_file: str, timeout: int, test_name: str = "") -> str | None:
     """Check for an existing batch job file and resume if the process is alive.
 
-    If a valid job file exists and its PID is still alive, resumes polling
-    and returns the result string. If PID is dead or file is invalid,
-    cleans up the stale file and returns None.
+    If a valid job file exists and its PID is still alive:
+      - Same test_name (or empty) → resume polling and return result
+      - Different test_name → kill existing process, cleanup, return None (fresh start)
+    If PID is dead or file is invalid, cleans up and returns None.
 
     Args:
         job_file: Path to the batch job JSON file.
         timeout: Timeout in seconds for log polling if resuming.
+        test_name: Current test name. If different from saved, kill and restart.
 
     Returns:
         Result string if an alive job was resumed, None otherwise.
@@ -152,13 +162,17 @@ async def parse_existing_job(job_file: str, timeout: int) -> str | None:
         else:
             pid_alive = "DEAD"
         if "ALIVE" in pid_alive:
-            # Previous batch still running → resume polling
-            result, _ = await poll_batch_log(
-                job["log_file"], timeout,
-                f"(Resumed monitoring existing batch PID {pid})\n"
-            )
-            await shell_run(f"rm -f {job_file}", timeout=5)
-            return result
+            saved_test = job.get("test_name", "")
+            if not test_name or not saved_test or saved_test == test_name:
+                # Same test → resume polling
+                result, _ = await poll_batch_log(
+                    job["log_file"], timeout,
+                    f"(Resumed monitoring existing batch PID {pid})\n"
+                )
+                await shell_run(f"rm -f {job_file}", timeout=5)
+                return result
+            # Different test → kill existing and start fresh
+            await _kill_stale_pid(pid)
         # PID dead → stale job file, remove and start fresh
         await shell_run(f"rm -f {job_file}", timeout=5)
     except (json.JSONDecodeError, KeyError):
@@ -315,7 +329,7 @@ async def run_batch_single(
     # Resume existing job if alive
     params = resolve_sim_params(runner, sim_mode, extra_args, timeout, dump_depth=dump_depth)
     effective_timeout = params["timeout"]
-    resumed = await parse_existing_job(job_file, effective_timeout)
+    resumed = await parse_existing_job(job_file, effective_timeout, test_name)
     if resumed is not None:
         return resumed
 
@@ -419,16 +433,20 @@ async def run_batch_regression(
                     )
                 else:
                     pid_alive = "DEAD"
-                if "ALIVE" in pid_alive and _should_resume_regression(job, test_list):
-                    # Current test still running → resume polling
-                    current = job.get("current", "")
-                    completed_tests = job.get("completed", [])
-                    log_file = job.get("log_file", log_file)
-                    current_log = job.get("current_log", "")
-                    if current_log:
-                        _, _ = await poll_batch_log(current_log, 600)
-                        completed_tests.append(current)
-                # else: PID dead OR different test_list → discard and start fresh
+                if "ALIVE" in pid_alive:
+                    if _should_resume_regression(job, test_list):
+                        # Same test_list → resume polling
+                        current = job.get("current", "")
+                        completed_tests = job.get("completed", [])
+                        log_file = job.get("log_file", log_file)
+                        current_log = job.get("current_log", "")
+                        if current_log:
+                            _, _ = await poll_batch_log(current_log, 600)
+                            completed_tests.append(current)
+                    else:
+                        # Different test_list → kill existing and start fresh
+                        await _kill_stale_pid(pid)
+                # else: PID dead → discard and start fresh
         except (json.JSONDecodeError, KeyError):
             pass
         await shell_run(f"rm -f {job_file}", timeout=5)
