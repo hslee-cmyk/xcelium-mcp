@@ -437,6 +437,12 @@ async def run_batch_regression(
     ts = int(_time.time())
     log_file = f"{user_tmp}/regression_{ts}.log"
 
+    def _extract_ts_from_log(lf: str) -> int:
+        """Extract timestamp from log filename: /tmp/.../regression_12345.log → 12345."""
+        import re as _re2
+        m = _re2.search(r'regression_(\d+)\.log', lf)
+        return int(m.group(1)) if m else ts
+
     # v4.1: resolve sim_mode/extra_args for regression
     validate_extra_args(extra_args)
     effective_sim_mode = sim_mode or runner.get("default_mode", "rtl")
@@ -472,6 +478,7 @@ async def run_batch_regression(
                         current = job.get("current", "")
                         completed_tests = job.get("completed", [])
                         log_file = job.get("log_file", log_file)
+                        ts = _extract_ts_from_log(log_file)
                         current_log = job.get("current_log", "")
                         if current_log:
                             _, _ = await poll_batch_log(current_log, 600)
@@ -487,6 +494,7 @@ async def run_batch_regression(
                         # Same test_list → recover completed tests from job
                         completed_tests = job.get("completed", [])
                         log_file = job.get("log_file", log_file)
+                        ts = _extract_ts_from_log(log_file)
                         # Check if current test also completed (check its log)
                         current_log = job.get("current_log", "")
                         if current and current_log:
