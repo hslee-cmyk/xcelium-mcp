@@ -277,6 +277,7 @@ async def test_launch_nohup_returns_pid() -> None:
     """Verify PID extraction from pid file."""
     with (
         patch("xcelium_mcp.batch_runner.shell_run", new_callable=AsyncMock) as mock_ssh,
+        patch("xcelium_mcp.batch_runner.shell_run_fire_and_forget", new_callable=AsyncMock),
         patch(
             "xcelium_mcp.shell_utils.get_user_tmp_dir",
             new_callable=AsyncMock,
@@ -286,9 +287,7 @@ async def test_launch_nohup_returns_pid() -> None:
         mock_ssh.side_effect = [
             "",       # nohup launch
             "42",     # cat pid_file
-            "",       # rm -f pid_file
-            "",       # echo base64 > job_file
-            "",       # PID watcher background
+            "",       # printf job_file
         ]
         pid = await launch_nohup_job(
             sim_dir="/sim",
@@ -305,6 +304,7 @@ async def test_launch_nohup_pid_fallback_pgrep() -> None:
     """When pid file is empty, falls back to pgrep."""
     with (
         patch("xcelium_mcp.batch_runner.shell_run", new_callable=AsyncMock) as mock_ssh,
+        patch("xcelium_mcp.batch_runner.shell_run_fire_and_forget", new_callable=AsyncMock),
         patch(
             "xcelium_mcp.shell_utils.get_user_tmp_dir",
             new_callable=AsyncMock,
@@ -315,9 +315,7 @@ async def test_launch_nohup_pid_fallback_pgrep() -> None:
             "",       # nohup launch
             "",       # cat pid_file (empty)
             "55",     # pgrep fallback
-            "",       # rm -f pid_file
-            "",       # echo base64 > job_file
-            "",       # PID watcher background
+            "",       # printf job_file
         ]
         pid = await launch_nohup_job(
             sim_dir="/sim",
@@ -357,21 +355,26 @@ async def test_launch_nohup_no_pid() -> None:
 
 
 @pytest.mark.asyncio
-async def test_launch_nohup_pid_watcher_merged_command() -> None:
-    """PID watcher and job file write are merged in single shell_run call.
+async def test_launch_nohup_pid_watcher_fire_and_forget() -> None:
+    """PID watcher uses shell_run_fire_and_forget (Popen with DEVNULL).
 
-    shell_run uses subprocess.run which returns when bash exits —
-    background PID watcher doesn't block. This test verifies the
-    merged command structure: printf + && + (watcher) &
+    Job file write uses shell_run (captures output).
+    PID watcher uses shell_run_fire_and_forget (returns immediately, no stdout capture).
+    This ensures the watcher never blocks the caller regardless of background process behavior.
     """
-    captured_commands: list[str] = []
+    shell_cmds: list[str] = []
+    fire_cmds: list[str] = []
 
     async def capturing_shell_run(cmd: str, timeout: float = 30) -> str:
-        captured_commands.append(cmd)
+        shell_cmds.append(cmd)
         return "42" if "cat" in cmd and "pid" in cmd else ""
+
+    async def capturing_fire(cmd: str, timeout: float = 10) -> None:
+        fire_cmds.append(cmd)
 
     with (
         patch("xcelium_mcp.batch_runner.shell_run", side_effect=capturing_shell_run),
+        patch("xcelium_mcp.batch_runner.shell_run_fire_and_forget", side_effect=capturing_fire),
         patch(
             "xcelium_mcp.shell_utils.get_user_tmp_dir",
             new_callable=AsyncMock,
@@ -386,17 +389,19 @@ async def test_launch_nohup_pid_watcher_merged_command() -> None:
             job_file="/tmp/batch_job.json",
         )
 
-    # Find the merged command (job write + PID watcher)
-    watcher_cmds = [c for c in captured_commands if "while kill -0" in c]
-    assert watcher_cmds, "Expected a PID watcher command"
-    watcher_cmd = watcher_cmds[0]
+    # Job file write must use shell_run (not fire_and_forget)
+    job_writes = [c for c in shell_cmds if "printf" in c and "batch_job" in c]
+    assert job_writes, "Job file write must use shell_run with printf"
 
-    # Must include printf for job file write (merged in same command)
-    assert "printf" in watcher_cmd, "Job file write (printf) must be in same command as PID watcher"
-    # Must redirect watcher output
-    assert ">& /dev/null" in watcher_cmd, "PID watcher must redirect output with '>& /dev/null'"
-    # Must be backgrounded
-    assert watcher_cmd.strip().endswith("&"), "PID watcher must run in background with trailing '&'"
+    # PID watcher must use fire_and_forget (not shell_run)
+    assert fire_cmds, "PID watcher must use shell_run_fire_and_forget"
+    watcher_cmd = fire_cmds[0]
+    assert "while kill -0" in watcher_cmd, "PID watcher must contain 'while kill -0'"
+    assert ".done" in watcher_cmd, "PID watcher must touch .done file"
+
+    # PID watcher must NOT appear in shell_run calls (it would block)
+    shell_watchers = [c for c in shell_cmds if "while kill -0" in c]
+    assert not shell_watchers, "PID watcher must NOT use shell_run (would block on capture_output)"
 
 
 # ---------------------------------------------------------------------------

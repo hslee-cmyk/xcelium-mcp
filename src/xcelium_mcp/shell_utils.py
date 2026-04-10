@@ -93,10 +93,7 @@ async def shell_run(cmd: str, timeout: float = 60.0, log_file: str = "") -> str:
     """Run a shell command as a local subprocess.
 
     Since xcelium-mcp runs on cloud0, this is a local subprocess —
-    not an SSH call. Uses subprocess.run via asyncio.to_thread to avoid
-    blocking the event loop while remaining immune to background child
-    processes inheriting stdout (the root cause of the old communicate()
-    timeout issue).
+    not an SSH call. Uses subprocess.run via asyncio.to_thread.
     """
     if "2>&1" in cmd:
         raise ValueError(
@@ -123,6 +120,28 @@ async def shell_run(cmd: str, timeout: float = 60.0, log_file: str = "") -> str:
             raise asyncio.TimeoutError(f"shell_run timeout ({timeout}s): {cmd}")
 
     return await asyncio.to_thread(_run)
+
+
+async def shell_run_fire_and_forget(cmd: str, timeout: float = 10.0) -> None:
+    """Launch a shell command and return immediately without waiting for output.
+
+    Uses subprocess.Popen with stdin/stdout/stderr all set to DEVNULL.
+    The launched process runs independently — survives xcelium-mcp exit.
+    Use this for PID watchers and other background helpers that should
+    not block the caller.
+    """
+    import subprocess
+
+    def _fire() -> None:
+        subprocess.Popen(
+            ["bash", "-c", cmd],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+
+    await asyncio.to_thread(_fire)
 
 
 def login_shell_cmd(login_shell: str, cmd: str) -> str:
