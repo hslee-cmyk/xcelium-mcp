@@ -6,9 +6,18 @@ import json
 from pathlib import Path
 from typing import Any
 
+from xcelium_mcp.tcl_bridge import DEFAULT_BRIDGE_PORT
+
 _REGISTRY_PATH = Path.home() / ".xcelium_mcp" / "mcp_registry.json"
 
 _MISSING = object()
+
+_PROTECTED_KEYS = {
+    "runner.script", "runner.login_shell", "runner.env_shell",
+    "eda_tools.simvisdbutil", "eda_tools.xmsim", "eda_tools.xrun",
+    "external_tools.gs", "external_tools.convert", "external_tools.magick",
+    "test_discovery.command",
+}
 
 
 def load_registry() -> dict:
@@ -91,7 +100,7 @@ async def _update_registry_from_config(sim_dir: str, tb_type: str, config: dict)
         "tb_type": tb_type,
         "is_default": len(envs) == 0 or envs.get(sim_dir, {}).get("is_default", False),
         "config_version": config.get("version", 2),
-        "bridge_port": config.get("bridge", {}).get("port", 9876),
+        "bridge_port": config.get("bridge", {}).get("port", DEFAULT_BRIDGE_PORT),
     }
 
     save_registry(registry)
@@ -207,12 +216,6 @@ async def config_action(action: str, file: str, key: str, value: str) -> str:
 
     if action == "set":
         # Security: block overwriting critical keys that could lead to command injection
-        _PROTECTED_KEYS = {
-            "runner.script", "runner.login_shell", "runner.env_shell",
-            "eda_tools.simvisdbutil", "eda_tools.xmsim", "eda_tools.xrun",
-            "external_tools.gs", "external_tools.convert", "external_tools.magick",
-            "test_discovery.command",
-        }
         if key in _PROTECTED_KEYS:
             return f"ERROR: Key '{key}' is protected. Re-run sim_discover to update it."
 

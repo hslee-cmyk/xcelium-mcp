@@ -19,7 +19,7 @@ from xcelium_mcp.sim_runner import (
     ssh_run,
     start_bridge_simulation,
 )
-from xcelium_mcp.tcl_bridge import TclBridge, TclError
+from xcelium_mcp.tcl_bridge import BRIDGE_ERRORS, TclBridge, TclError
 
 # ---------------------------------------------------------------------------
 # Module-level helpers (don't need bridges closure)
@@ -63,7 +63,7 @@ async def _auto_connect_all(bridges: BridgeManager, host: str, timeout: float) -
             else:
                 bridges.set_xmsim(bridge)
             results.append(f"  {btype}:{p} (ping={ping})")
-        except (ConnectionError, asyncio.TimeoutError, OSError, TclError) as e:
+        except BRIDGE_ERRORS as e:
             results.append(f"  {btype}:{p} FAILED ({e})")
 
     if not results:
@@ -227,7 +227,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         bridge = TclBridge(host=host, port=port, timeout=timeout)
         try:
             ping = await bridge.connect()
-        except (ConnectionError, asyncio.TimeoutError, OSError, TclError) as e:
+        except BRIDGE_ERRORS as e:
             return f"ERROR: Connection failed: {type(e).__name__}: {e}"
 
         if target == "simvision":

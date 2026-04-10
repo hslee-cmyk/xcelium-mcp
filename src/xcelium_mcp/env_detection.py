@@ -562,7 +562,8 @@ async def _detect_bridge_port(sim_dir: str, bridge_tcl: str) -> int:
             return int(r.strip().split()[-1])
         except ValueError:
             pass
-    return 9876
+    from xcelium_mcp.tcl_bridge import DEFAULT_BRIDGE_PORT
+    return DEFAULT_BRIDGE_PORT
 
 
 # ---------------------------------------------------------------------------

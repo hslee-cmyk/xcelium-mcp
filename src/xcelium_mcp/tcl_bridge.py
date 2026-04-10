@@ -5,6 +5,9 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
+DEFAULT_BRIDGE_PORT = 9876
+
+
 
 @dataclass
 class TclResponse:
@@ -22,6 +25,9 @@ class TclError(Exception):
     """Error returned by Tcl command evaluation."""
 
 
+BRIDGE_ERRORS = (ConnectionError, asyncio.TimeoutError, OSError, TclError)
+
+
 class TclBridge:
     """Asyncio TCP client for the SimVision Tcl bridge.
 
@@ -29,7 +35,7 @@ class TclBridge:
     interpreter inside SimVision is single-threaded.
     """
 
-    def __init__(self, host: str = "localhost", port: int = 9876,
+    def __init__(self, host: str = "localhost", port: int = DEFAULT_BRIDGE_PORT,
                  timeout: float = 30.0):
         self.host = host
         self.port = port
@@ -56,12 +62,12 @@ class TclBridge:
         if self._writer and not self._writer.is_closing():
             try:
                 await self.execute_safe("__QUIT__")
-            except (ConnectionError, asyncio.TimeoutError, OSError):
+            except BRIDGE_ERRORS:
                 pass
             self._writer.close()
             try:
                 await self._writer.wait_closed()
-            except (ConnectionError, OSError):
+            except BRIDGE_ERRORS:
                 pass
         self._reader = None
         self._writer = None

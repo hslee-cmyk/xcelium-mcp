@@ -24,7 +24,7 @@ from xcelium_mcp.sim_runner import (
     sq,
     ssh_run,
 )
-from xcelium_mcp.tcl_bridge import TclBridge, TclError
+from xcelium_mcp.tcl_bridge import BRIDGE_ERRORS, TclBridge, TclError
 
 # Type aliases for cross-tool callable references
 WaveformAddImplFn = Callable[..., Coroutine[Any, Any, str]]
@@ -137,7 +137,7 @@ def register(
                 ping = await bridge.connect()
                 bridges.set_simvision(bridge)
                 return f"SimVision already running — connected to port {port} (ping={ping})"
-            except (ConnectionError, asyncio.TimeoutError, OSError, TclError):
+            except BRIDGE_ERRORS:
                 pass
 
         # 2. Resolve sim_dir + config
@@ -220,7 +220,7 @@ def register(
                         f"  shm: {shm_path or '(none)'}\n"
                         f"  log: {log_file}"
                     )
-                except (ConnectionError, asyncio.TimeoutError, OSError, TclError):
+                except BRIDGE_ERRORS:
                     continue
 
         log_tail = await ssh_run(f"tail -10 {log_file} || true")

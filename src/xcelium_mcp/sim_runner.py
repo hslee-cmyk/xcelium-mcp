@@ -75,6 +75,7 @@ from xcelium_mcp.shell_utils import (  # noqa: E402
 from xcelium_mcp.shell_utils import (  # noqa: E402, F401
     shell_quote as sq,
 )
+from xcelium_mcp.tcl_bridge import DEFAULT_BRIDGE_PORT  # noqa: E402
 
 # ===================================================================
 # Utility functions (used by tools)
@@ -245,6 +246,7 @@ async def run_full_discovery(
     sim_dir: str = "", force: bool = False, top_module: str = "",
 ) -> str:
     """Main discovery orchestrator. Called by sim_discover MCP tool."""
+
     if not sim_dir:
         envs = await _discover_sim_dir()
         sim_dir = envs[0]["sim_dir"]
@@ -395,7 +397,7 @@ def _format_discovery_result(
         f"  default_mode:   {runner.get('default_mode', 'rtl')}\n"
         f"  simvisdbutil:   {eda.get('simvisdbutil', '?')}\n"
         f"  external_tools: {ext_summary}\n"
-        f"  bridge_port:    {bridge.get('port', 9876)}\n"
+        f"  bridge_port:    {bridge.get('port', DEFAULT_BRIDGE_PORT)}\n"
         f"  .simvisionrc:   {simvisionrc_result}\n"
         f"\nSaved to: ~/.xcelium_mcp/mcp_registry.json\n"
         f"          {sim_dir}/.mcp_sim_config.json"
@@ -704,7 +706,7 @@ async def _start_bridge(
     """Start simulation in bridge mode via legacy run script + env vars."""
     runner = config["runner"]
     bridge = config["bridge"]
-    port = bridge.get("port", 9876)
+    port = bridge.get("port", DEFAULT_BRIDGE_PORT)
     bridge_tcl = bridge.get("tcl_path", "")
     script = runner.get("script", "run_sim")
 
@@ -773,8 +775,8 @@ async def _start_bridge(
     )
     await ssh_run(cmd, timeout=15)
 
+    from xcelium_mcp.tcl_bridge import BRIDGE_ERRORS as _BRIDGE_ERRORS
     from xcelium_mcp.tcl_bridge import TclBridge as _TB
-    from xcelium_mcp.tcl_bridge import TclError as _TclError
 
     if bridges is not None and bridges.xmsim_raw and bridges.xmsim_raw.connected:
         await bridges.xmsim_raw.disconnect()
@@ -800,7 +802,7 @@ async def _start_bridge(
                     f"  log: {log_file}\n\n"
                     f"Ready. sim_run, get_signal_value etc. available immediately."
                 )
-            except (ConnectionError, asyncio.TimeoutError, OSError, _TclError) as e:
+            except _BRIDGE_ERRORS as e:
                 last_exc = e
                 logger.debug("bridge connect attempt failed: %s", e)
                 continue
