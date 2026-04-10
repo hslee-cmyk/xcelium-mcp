@@ -170,11 +170,12 @@ async def parse_existing_job(job_file: str, timeout: int, test_name: str = "") -
         else:
             pid_alive = "DEAD"
         saved_test = job.get("test_name", "")
+        saved_log = job.get("log_file", "")
         if "ALIVE" in pid_alive:
             if not test_name or not saved_test or saved_test == test_name:
-                # Same test → resume polling
+                # Same test, still running → resume polling
                 result, _ = await poll_batch_log(
-                    job["log_file"], timeout,
+                    saved_log, timeout,
                     f"(Resumed monitoring existing batch PID {pid})\n"
                 )
                 await shell_run(f"rm -f {job_file}", timeout=5)
@@ -182,8 +183,18 @@ async def parse_existing_job(job_file: str, timeout: int, test_name: str = "") -
             # Different test → kill existing and start fresh
             await _kill_stale_sim(pid, saved_test)
         else:
-            # PID dead → kill orphaned xmsim (nohup makes it survive wrapper death)
-            if saved_test and test_name and saved_test != test_name:
+            # PID dead — simulation finished while disconnected
+            if not test_name or not saved_test or saved_test == test_name:
+                # Same test, already finished → return existing log results
+                if saved_log:
+                    result = await shell_run(
+                        f"(grep -E 'PASS|FAIL|Errors:|\\$finish|COMPLETE' {saved_log} || true) | tail -30"
+                    )
+                    if result.strip():
+                        await shell_run(f"rm -f {job_file}", timeout=5)
+                        return f"(Completed while disconnected)\n{result}"
+            else:
+                # Different test → kill orphaned xmsim
                 await _kill_stale_sim(0, saved_test)
         await shell_run(f"rm -f {job_file}", timeout=5)
     except (json.JSONDecodeError, KeyError):

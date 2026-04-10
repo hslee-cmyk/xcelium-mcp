@@ -56,18 +56,52 @@ async def test_parse_existing_job_no_file() -> None:
 
 
 @pytest.mark.asyncio
-async def test_parse_existing_job_dead_pid() -> None:
-    """Dead PID in job file: cleans up and returns None."""
+async def test_parse_existing_job_dead_pid_same_test_with_log() -> None:
+    """Dead PID + same test + log has results → return existing log (completed while disconnected)."""
+    job = json.dumps({"pid": 12345, "log_file": "/tmp/batch.log", "test_name": "T1"})
+    with patch("xcelium_mcp.batch_runner.shell_run", new_callable=AsyncMock) as mock_ssh:
+        mock_ssh.side_effect = [
+            job,                        # cat job_file
+            "DEAD",                     # kill -0 check
+            "[PASS] Test completed",    # grep log for results
+            "",                         # rm -f job_file
+        ]
+        result = await parse_existing_job("/tmp/batch_job.json", timeout=600, test_name="T1")
+        assert result is not None
+        assert "Completed while disconnected" in result
+        assert "PASS" in result
+
+
+@pytest.mark.asyncio
+async def test_parse_existing_job_dead_pid_same_test_empty_log() -> None:
+    """Dead PID + same test + log empty → cleanup and return None (re-run needed)."""
     job = json.dumps({"pid": 12345, "log_file": "/tmp/batch.log", "test_name": "T1"})
     with patch("xcelium_mcp.batch_runner.shell_run", new_callable=AsyncMock) as mock_ssh:
         mock_ssh.side_effect = [
             job,       # cat job_file
             "DEAD",    # kill -0 check
+            "",        # grep log → empty (no results)
             "",        # rm -f job_file
         ]
-        result = await parse_existing_job("/tmp/batch_job.json", timeout=600)
+        result = await parse_existing_job("/tmp/batch_job.json", timeout=600, test_name="T1")
         assert result is None
-        assert mock_ssh.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_parse_existing_job_dead_pid_no_test_name_returns_log() -> None:
+    """Dead PID + no test_name (legacy) + log has results → return existing log."""
+    job = json.dumps({"pid": 12345, "log_file": "/tmp/batch.log", "test_name": "T1"})
+    with patch("xcelium_mcp.batch_runner.shell_run", new_callable=AsyncMock) as mock_ssh:
+        mock_ssh.side_effect = [
+            job,                        # cat job_file
+            "DEAD",                     # kill -0 check
+            "FAIL: assertion error",    # grep log for results
+            "",                         # rm -f job_file
+        ]
+        result = await parse_existing_job("/tmp/batch_job.json", timeout=600)
+        assert result is not None
+        assert "Completed while disconnected" in result
+        assert "FAIL" in result
 
 
 @pytest.mark.asyncio
@@ -162,7 +196,8 @@ async def test_parse_existing_job_zero_pid() -> None:
     with patch("xcelium_mcp.batch_runner.shell_run", new_callable=AsyncMock) as mock_ssh:
         mock_ssh.side_effect = [
             job,   # cat job_file
-            "",    # rm -f job_file (pid_alive = "DEAD" without SSH call)
+            "",    # grep log → empty (no results, PID=0 means never ran properly)
+            "",    # rm -f job_file
         ]
         result = await parse_existing_job("/tmp/batch_job.json", timeout=600)
         assert result is None
