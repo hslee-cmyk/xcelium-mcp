@@ -359,11 +359,24 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             target:  "xmsim" | "simvision" | "auto" (default: auto).
         """
         # Security: block dangerous Tcl commands that could execute arbitrary OS commands
-        _TCL_DENYLIST = ["exec ", "open ", "file delete", "file rename", "exit", "source "]
-        cmd_lower = tcl_cmd.strip().lower()
-        for denied in _TCL_DENYLIST:
-            if cmd_lower.startswith(denied) or f"\n{denied}" in cmd_lower or f"; {denied}" in cmd_lower:
-                return f"ERROR: Tcl command '{denied.strip()}' is blocked for security. Use dedicated MCP tools instead."
+        _TCL_DENYLIST = ["exec", "open", "file delete", "file rename", "exit", "source"]
+        # Normalize whitespace: collapse tabs/multiple spaces to single space
+        import re as _re
+        cmd_normalized = _re.sub(r'[ \t]+', ' ', tcl_cmd).strip().lower()
+        # Split on ; and newline to check each segment independently
+        for segment in _re.split(r'[;\n]', cmd_normalized):
+            first_token = segment.strip().split(' ')[0] if segment.strip() else ""
+            for denied in _TCL_DENYLIST:
+                denied_parts = denied.split()
+                # Single-word denylist entry: match first token exactly
+                if len(denied_parts) == 1:
+                    if first_token == denied_parts[0]:
+                        return f"ERROR: Tcl command '{denied}' is blocked for security. Use dedicated MCP tools instead."
+                # Multi-word denylist entry: match first N tokens
+                else:
+                    seg_tokens = segment.strip().split()
+                    if len(seg_tokens) >= len(denied_parts) and seg_tokens[:len(denied_parts)] == denied_parts:
+                        return f"ERROR: Tcl command '{denied}' is blocked for security. Use dedicated MCP tools instead."
         # S-6 fix: also block embedded [exec ...] and [open ...] in Tcl substitution brackets
         from xcelium_mcp.shell_utils import sanitize_tcl_string
         if not sanitize_tcl_string(tcl_cmd):
