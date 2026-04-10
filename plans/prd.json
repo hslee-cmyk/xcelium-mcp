@@ -512,7 +512,7 @@
       "priority": 2,
       "passes": false,
       "skip": true,
-      "skipReason": "Large parallelization refactor requiring remote testing",
+      "skipReason": "Functionally not parallelizable — tests have shared resource dependencies",
       "acceptanceCriteria": [
         "_run_batch_regression에서 독립 테스트를 asyncio.gather + Semaphore로 병렬 실행",
         "max_parallel 파라미터 추가 (기본값 4)",
@@ -539,9 +539,7 @@
       "id": "F-038",
       "title": "Split batch_runner.py: extract test_resolution and batch_polling modules",
       "priority": 2,
-      "passes": false,
-      "skip": true,
-      "skipReason": "Large structural refactor of batch_runner.py",
+      "passes": true,
       "acceptanceCriteria": [
         "test_resolution.py 신규: resolve_test_name, resolve_sim_params, _resolve_test_name_cached 이동",
         "batch_polling.py 신규: _poll_batch_log, watch_pid_and_poll 이동",
@@ -550,22 +548,22 @@
         "python -c 'import xcelium_mcp.server' 성공",
         "pytest passes"
       ],
-      "notes": "Architecture review. batch_runner.py 783줄 — test resolution, polling, execution, regression 혼재. 400줄 이하 목표로 분리."
+      "notes": "Architecture review. batch_runner.py 783줄 — test resolution, polling, execution, regression 혼재. 400줄 이하 목표로 분리.",
+      "completed_at": "2026-04-11"
     },
     {
       "id": "F-039",
       "title": "Extract simvision orchestration into simvision_ops.py domain module",
       "priority": 2,
-      "passes": false,
-      "skip": true,
-      "skipReason": "Large structural refactor of simvision orchestration",
+      "passes": true,
       "acceptanceCriteria": [
         "simvision_ops.py 신규: open_database, start_simvision, setup_waveform, live_start, reload_waveform, compare_csv_diff, compare_simvision, _load_rows 이동",
         "tools/simvision.py는 thin registration wrapper만 유지 (300줄 이하)",
         "python -c 'import xcelium_mcp.server' 성공",
         "pytest passes"
       ],
-      "notes": "Architecture review. tools/simvision.py 712줄 — 7개 orchestration 함수가 도메인 로직. tools는 thin wrapper 원칙에 위배."
+      "notes": "Architecture review. tools/simvision.py 712줄 — 7개 orchestration 함수가 도메인 로직. tools는 thin wrapper 원칙에 위배.",
+      "completed_at": "2026-04-11"
     },
     {
       "id": "F-040",
@@ -625,16 +623,15 @@
       "id": "F-044",
       "title": "Rename private _ functions to public in env_detection.py",
       "priority": 3,
-      "passes": false,
-      "skip": true,
-      "skipReason": "Large rename across many files",
+      "passes": true,
       "acceptanceCriteria": [
         "외부에서 import되는 함수의 _ prefix 제거 (_load_or_detect_runner → load_or_detect_runner, _detect_vnc_display → detect_vnc_display 등)",
         "__all__ 정의로 public API 명시",
         "caller (tools/batch.py, tools/simvision.py 등) import 문 업데이트",
         "pytest passes"
       ],
-      "notes": "Architecture review. env_detection.py 18개 _-prefixed 함수를 외부 모듈에서 직접 import — private naming 위반. F-029와 동일 패턴."
+      "notes": "Architecture review. env_detection.py 18개 _-prefixed 함수를 외부 모듈에서 직접 import — private naming 위반. F-029와 동일 패턴.",
+      "completed_at": "2026-04-11"
     },
     {
       "id": "F-045",
@@ -684,16 +681,15 @@
       "id": "F-048",
       "title": "Add warnings.warn to deprecated sq alias in shell_utils.py",
       "priority": 3,
-      "passes": false,
-      "skip": true,
-      "skipReason": "sq alias actively used in 50+ locations, deprecation warning too noisy",
+      "passes": true,
       "acceptanceCriteria": [
         "shell_utils.py sq()에 warnings.warn('sq is deprecated, use shell_quote', DeprecationWarning, stacklevel=2) 추가",
         "또는 모든 caller를 shell_quote로 변경하고 sq 제거",
         "ruff check 통과",
         "pytest passes"
       ],
-      "notes": "Python review. shell_utils.py:30-31 — 주석에 'will be removed in v5'이지만 경고 없음. 여러 파일에서 sq로 import 중."
+      "notes": "Python review. shell_utils.py:30-31 — 주석에 'will be removed in v5'이지만 경고 없음. 여러 파일에서 sq로 import 중.",
+      "completed_at": "2026-04-11"
     },
     {
       "id": "F-049",
