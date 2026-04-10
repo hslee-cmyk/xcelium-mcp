@@ -107,7 +107,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
                 except ValueError as e:
                     return f"ERROR: {e}"
                 dump_dir = f"{resolved_dir}/dump"
-                r = await ssh_run(f"ls -td {dump_dir}/*.shm 2>/dev/null | head -1")
+                r = await ssh_run(f"(ls -td {dump_dir}/*.shm || true) | head -1")
                 shm_path = r.strip()
                 if not shm_path:
                     return "ERROR: No SHM found in dump directory"

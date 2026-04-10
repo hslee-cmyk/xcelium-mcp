@@ -132,7 +132,7 @@ def register(
 
         # 1. Check existing SimVision bridge → auto-connect
         user_tmp = await get_user_tmp_dir()
-        r = await ssh_run(f"cat {user_tmp}/bridge_ready_* 2>/dev/null")
+        r = await ssh_run(f"cat {user_tmp}/bridge_ready_* || true")
         for line in r.strip().splitlines():
             parts = line.strip().split()
             if len(parts) >= 2 and parts[1] == "simvision":
@@ -159,11 +159,11 @@ def register(
                 test_name = await resolve_test_name(test_name, resolved_dir)
             dump_dir = f"{resolved_dir}/dump"
             if test_name:
-                r2 = await ssh_run(f"ls -td {dump_dir}/*{test_name}*.shm 2>/dev/null | head -1")
+                r2 = await ssh_run(f"(ls -td {dump_dir}/*{test_name}*.shm || true) | head -1")
                 if not r2.strip():
-                    r2 = await ssh_run(f"ls -td {dump_dir}/*.shm 2>/dev/null | head -1")
+                    r2 = await ssh_run(f"(ls -td {dump_dir}/*.shm || true) | head -1")
             else:
-                r2 = await ssh_run(f"ls -td {dump_dir}/*.shm 2>/dev/null | head -1")
+                r2 = await ssh_run(f"(ls -td {dump_dir}/*.shm || true) | head -1")
             shm_path = r2.strip() if r2.strip() else ""
 
         # 4. Display
@@ -212,7 +212,7 @@ def register(
         # 7. Wait for bridge ready + auto-connect
         for i in range(30):
             await asyncio.sleep(2)
-            r = await ssh_run(f"cat {user_tmp}/bridge_ready_* 2>/dev/null")
+            r = await ssh_run(f"cat {user_tmp}/bridge_ready_* || true")
             for line in r.strip().splitlines():
                 parts = line.strip().split()
                 if len(parts) >= 2 and parts[1] == "simvision":
@@ -232,7 +232,7 @@ def register(
                     except (ConnectionError, asyncio.TimeoutError, OSError, TclError):
                         continue
 
-        log_tail = await ssh_run(f"tail -10 {log_file} 2>/dev/null")
+        log_tail = await ssh_run(f"tail -10 {log_file} || true")
         return f"ERROR: SimVision bridge not ready after 60s.\nLog:\n{log_tail}"
 
     @mcp.tool()
@@ -515,7 +515,7 @@ def register(
 
             # 1. VNC check
             vnc_check = await ssh_run(
-                f"vncserver -list 2>/dev/null | grep '{display}' || echo NONE",
+                f"(vncserver -list || true) | grep '{display}' || echo NONE",
                 timeout=10.0,
             )
             if "NONE" in vnc_check or display not in vnc_check:
@@ -538,7 +538,7 @@ def register(
             bridge_ready = False
             for _i in range(15):
                 await asyncio.sleep(2)
-                r = await ssh_run(f"cat {user_tmp}/bridge_ready_* 2>/dev/null")
+                r = await ssh_run(f"cat {user_tmp}/bridge_ready_* || true")
                 for line in r.strip().splitlines():
                     parts = line.strip().split()
                     if len(parts) >= 2 and parts[1] == "simvision":

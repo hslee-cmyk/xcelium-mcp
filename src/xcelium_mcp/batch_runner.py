@@ -197,14 +197,14 @@ async def _run_batch_single(
     job_file = f"{user_tmp}/batch_job.json"
 
     # Check for existing job (reconnection scenario)
-    existing_job = await ssh_run(f"cat {job_file} 2>/dev/null")
+    existing_job = await ssh_run(f"cat {job_file} || true")
     if existing_job.strip():
         try:
             job = json.loads(existing_job)
             pid = job.get("pid", 0)
             # Guard: pid must be > 0 (kill -0 0 signals own process group → always ALIVE)
             if pid > 0:
-                pid_alive = await ssh_run(f"kill -0 {pid} 2>/dev/null && echo ALIVE || echo DEAD")
+                pid_alive = await ssh_run(f"(kill -0 {pid}) && echo ALIVE || echo DEAD")
             else:
                 pid_alive = "DEAD"
             if "ALIVE" in pid_alive:
@@ -239,11 +239,11 @@ async def _run_batch_single(
     )
 
     # Read PID from file
-    pid_str = await ssh_run(f"cat {pid_file} 2>/dev/null", timeout=5)
+    pid_str = await ssh_run(f"cat {pid_file} || true", timeout=5)
     pid_str = pid_str.strip()
     # Fallback — use pgrep if pid file didn't yield a number
     if not pid_str.isdigit():
-        pid_str = await ssh_run(f"pgrep -f {sq(test_name)} 2>/dev/null | tail -1")
+        pid_str = await ssh_run(f"(pgrep -f {sq(test_name)} || true) | tail -1")
     pid = int(pid_str.strip()) if pid_str.strip().isdigit() else 0
     # Cleanup pid file
     await ssh_run(f"rm -f {pid_file}", timeout=5)
@@ -262,7 +262,7 @@ async def _run_batch_single(
         # P6-5: background watcher — touch {log}.done when PID exits
         done_file = f"{log_file}.done"
         await ssh_run(
-            f"(while kill -0 {pid} 2>/dev/null; do sleep 2; done; touch {done_file}) >& /dev/null &",
+            f"(while kill -0 {pid}; do sleep 2; done; touch {done_file}) >& /dev/null &",
             timeout=5,
         )
 
@@ -339,7 +339,7 @@ async def _run_batch_regression(
 
     # Check for existing regression job (reconnection scenario)
     completed_tests: list[str] = []
-    existing_job = await ssh_run(f"cat {job_file} 2>/dev/null")
+    existing_job = await ssh_run(f"cat {job_file} || true")
     if existing_job.strip():
         try:
             job = json.loads(existing_job)
@@ -348,7 +348,7 @@ async def _run_batch_regression(
                 # Guard: pid must be > 0 (kill -0 0 signals own process group → always ALIVE)
                 if pid > 0:
                     pid_alive = await ssh_run(
-                        f"kill -0 {pid} 2>/dev/null && echo ALIVE || echo DEAD"
+                        f"(kill -0 {pid}) && echo ALIVE || echo DEAD"
                     )
                 else:
                     pid_alive = "DEAD"
@@ -454,7 +454,7 @@ async def _run_batch_regression(
             )
 
             # Read PID from pid_file (pgrep -f {test_name} fails: xmsim cmdline has no test name)
-            pid_str = await ssh_run(f"cat {pid_file} 2>/dev/null; rm -f {pid_file}", timeout=5)
+            pid_str = await ssh_run(f"(cat {pid_file} || true); rm -f {pid_file}", timeout=5)
             if pid_str.strip().isdigit():
                 test_pid = int(pid_str.strip())
                 job_update = json.dumps({
@@ -468,7 +468,7 @@ async def _run_batch_regression(
                 # >& /dev/null: B-0 fix — detach from asyncio PIPE fds
                 test_done = f"{test_log}.done"
                 await ssh_run(
-                    f"(while kill -0 {test_pid} 2>/dev/null; do sleep 2; done; touch {test_done}) >& /dev/null &",
+                    f"(while kill -0 {test_pid}; do sleep 2; done; touch {test_done}) >& /dev/null &",
                     timeout=5,
                 )
 
@@ -479,10 +479,10 @@ async def _run_batch_regression(
                 # Guard: kill stale xmsim/xmrm to prevent worklib lock on next test
                 if pid_str.strip().isdigit():
                     await ssh_run(
-                        f"kill -0 {test_pid} 2>/dev/null && kill {test_pid}",
+                        f"(kill -0 {test_pid}) && kill {test_pid}",
                         timeout=5,
                     )
-                await ssh_run("pkill -f xmrm 2>/dev/null", timeout=5)
+                await ssh_run("pkill -f xmrm || true", timeout=5)
                 # Append TIMEOUT marker to per-test log
                 await ssh_run(
                     f"echo '[TIMEOUT] Test did not complete within 600s' >> {test_log}",
@@ -512,7 +512,7 @@ async def _run_batch_regression(
             # Append per-test result to main log
             await ssh_run(
                 f"echo {sq('=== ' + test_name + ' ===')} >> {log_file} && "
-                f"grep -E 'PASS|FAIL|Errors:' {test_log} 2>/dev/null >> {log_file}",
+                f"(grep -E 'PASS|FAIL|Errors:' {test_log} || true) >> {log_file}",
                 timeout=10.0,
             )
 
@@ -559,7 +559,7 @@ async def _poll_batch_log(log_file: str, timeout: float, prefix: str = "") -> tu
     while _time.time() < deadline:
         # P6-2: single SSH call — tail for keyword scan + done-file sentinel
         out = await ssh_run(
-            f"tail -10 {log_file} 2>/dev/null; "
+            f"(tail -10 {log_file} || true); "
             f"test -f {done_file} && echo __DONE__"
         )
         if "__DONE__" in out or any(
@@ -572,7 +572,7 @@ async def _poll_batch_log(log_file: str, timeout: float, prefix: str = "") -> tu
         interval = min(interval * 1.5, 10.0)
 
     result = await ssh_run(
-        f"grep -E 'PASS|FAIL|Errors:|\\$finish|COMPLETE' {log_file} 2>/dev/null | tail -30"
+        f"(grep -E 'PASS|FAIL|Errors:|\\$finish|COMPLETE' {log_file} || true) | tail -30"
     )
     await ssh_run(f"rm -f {done_file}", timeout=5)   # P6-5: cleanup marker
     return prefix + result, timed_out

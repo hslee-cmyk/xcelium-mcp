@@ -28,7 +28,7 @@ from xcelium_mcp.tcl_bridge import TclBridge, TclError
 async def _find_ready_file(target: str) -> tuple[int, str]:
     """Find ready file matching target type."""
     user_tmp = await get_user_tmp_dir()
-    r = await ssh_run(f"cat {user_tmp}/bridge_ready_* 2>/dev/null")
+    r = await ssh_run(f"cat {user_tmp}/bridge_ready_* || true")
     for line in r.strip().splitlines():
         parts = line.strip().split()
         if len(parts) >= 2 and parts[1] == target:
@@ -39,7 +39,7 @@ async def _find_ready_file(target: str) -> tuple[int, str]:
 async def _read_bridge_type(port: int) -> str:
     """Read bridge type from ready file for given port."""
     user_tmp = await get_user_tmp_dir()
-    r = await ssh_run(f"cat {user_tmp}/bridge_ready_{port} 2>/dev/null")
+    r = await ssh_run(f"cat {user_tmp}/bridge_ready_{port} || true")
     parts = r.strip().split()
     if len(parts) >= 2:
         return parts[1]
@@ -55,7 +55,7 @@ async def _auto_connect_all(bridges: BridgeManager, host: str, timeout: float) -
     results = []
 
     user_tmp = await get_user_tmp_dir()
-    r = await ssh_run(f"cat {user_tmp}/bridge_ready_* 2>/dev/null")
+    r = await ssh_run(f"cat {user_tmp}/bridge_ready_* || true")
     if not r.strip():
         return "No bridges found. Run sim_bridge_run or simvision_start first."
 

@@ -168,11 +168,11 @@ async def _patch_legacy_run_script(sim_dir: str, runner_info: dict) -> str:
     if "YES" not in exists:
         return "run script not found"
 
-    r = await ssh_run(f"grep -c 'MCP_INPUT_TCL' {_sp} 2>/dev/null")
+    r = await ssh_run(f"grep -c 'MCP_INPUT_TCL' {_sp} || true")
     if r.strip() and r.strip() != "0":
         return "already patched"
 
-    r = await ssh_run(f"grep -n 'xmsim.*-input' {_sp} 2>/dev/null")
+    r = await ssh_run(f"grep -n 'xmsim.*-input' {_sp} || true")
     if not r.strip():
         return "no xmsim -input found — manual patch needed"
 
@@ -189,7 +189,7 @@ async def _patch_legacy_run_script(sim_dir: str, runner_info: dict) -> str:
     sed_cmd = f"sed -i -e {sq(sed_pattern)} {_sp}"
     await ssh_run(sed_cmd, timeout=10)
 
-    r = await ssh_run(f"grep -c 'MCP_INPUT_TCL' {_sp} 2>/dev/null")
+    r = await ssh_run(f"grep -c 'MCP_INPUT_TCL' {_sp} || true")
     if r.strip() and r.strip() != "0":
         return f"patched: -input {original_tcl} -> -input {replacement}"
     return "patch failed — manual edit needed"
@@ -201,7 +201,7 @@ async def _update_simvisionrc(bridge_tcl: str) -> str:
     rc_path = f"{home}/.simvisionrc"
     source_line = f"source {bridge_tcl}"
 
-    content = await ssh_run(f"cat {rc_path} 2>/dev/null")
+    content = await ssh_run(f"cat {rc_path} || true")
 
     if _SIMVISIONRC_MARKER in content:
         lines = content.splitlines()
@@ -261,7 +261,7 @@ async def run_full_discovery(
     tb_type, runner_info, r_root, bridge_tcl = await asyncio.gather(
         _analyze_tb_type(sim_dir),
         _auto_detect_runner(sim_dir),
-        ssh_run("git rev-parse --show-toplevel 2>/dev/null || echo ~"),
+        ssh_run("git rev-parse --show-toplevel || echo ~"),
         _detect_bridge_tcl(),
     )
 
@@ -308,16 +308,16 @@ async def run_full_discovery(
     _sd = sq(sim_dir)
     if tb_type == "uvm":
         test_cmd = (
-            f"grep -rh 'extends uvm_test' {_sd} --include='*.sv' --include='*.svh' 2>/dev/null "
+            f"(grep -rh 'extends uvm_test' {_sd} --include='*.sv' --include='*.svh' || true) "
             f"| grep -oE 'class \\w+' | sed 's/class //' | sort -u"
         )
     elif tb_type == "sv_directed":
         test_cmd = (
-            f"grep -rh '^\\s*program ' {_sd} --include='*.sv' 2>/dev/null "
+            f"(grep -rh '^\\s*program ' {_sd} --include='*.sv' || true) "
             f"| grep -oE 'program \\w+' | sed 's/program //' | sort -u"
         )
     else:
-        test_cmd = f"ls {_sd}/tb_tests/*.v 2>/dev/null | xargs -I{{}} basename {{}} .v"
+        test_cmd = f"(ls {_sd}/tb_tests/*.v || true) | xargs -I{{}} basename {{}} .v"
 
     cached_tests = []
     try:
@@ -708,7 +708,7 @@ async def _start_bridge(
     bridge_tcl = bridge.get("tcl_path", "")
     script = runner.get("script", "run_sim")
 
-    ps = await ssh_run("pgrep -la xmsim 2>/dev/null", timeout=5)
+    ps = await ssh_run("pgrep -la xmsim || true", timeout=5)
     if ps.strip():
         return (
             f"ERROR: xmsim already running:\n{ps.strip()}\n"
@@ -783,7 +783,7 @@ async def _start_bridge(
     last_exc: Exception | None = None
     for i in range(effective_timeout // 2):
         await asyncio.sleep(2)
-        r = await ssh_run(f"cat {user_tmp}/bridge_ready_* 2>/dev/null")
+        r = await ssh_run(f"cat {user_tmp}/bridge_ready_* || true")
         for line in r.strip().splitlines():
             parts = line.strip().split()
             if len(parts) >= 2 and parts[1] == "xmsim":
@@ -808,11 +808,11 @@ async def _start_bridge(
                     continue
 
     # P-1 fix: kill orphaned xmsim process on timeout
-    ps = await ssh_run("pgrep -la xmsim 2>/dev/null", timeout=5)
+    ps = await ssh_run("pgrep -la xmsim || true", timeout=5)
     if ps.strip():
         logger.warning("Bridge timeout — killing orphaned xmsim: %s", ps.strip())
-        await ssh_run("pkill -f xmsim 2>/dev/null", timeout=5)
+        await ssh_run("pkill -f xmsim || true", timeout=5)
 
-    log_tail = await ssh_run(f"tail -20 {log_file} 2>/dev/null", timeout=5)
+    log_tail = await ssh_run(f"tail -20 {log_file} || true", timeout=5)
     exc_info = f"\nLast error: {last_exc}" if last_exc else ""
     return f"ERROR: bridge not ready after {timeout}s.{exc_info}\nLog tail:\n{log_tail}"

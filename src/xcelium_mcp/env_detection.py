@@ -24,7 +24,7 @@ async def _detect_env_shell(env_file: str, login_shell: str) -> str:
     Priority: shebang → file extension → content patterns → login_shell fallback.
     """
     # 1. shebang
-    shebang = await ssh_run(f"head -1 {sq(env_file)} 2>/dev/null")
+    shebang = await ssh_run(f"head -1 {sq(env_file)} || true")
     if shebang.startswith("#!"):
         return shebang[2:].strip().split()[0]
 
@@ -42,7 +42,7 @@ async def _detect_env_shell(env_file: str, login_shell: str) -> str:
             return shell
 
     # 3. content patterns
-    content = await ssh_run(f"head -30 {sq(env_file)} 2>/dev/null")
+    content = await ssh_run(f"head -30 {sq(env_file)} || true")
     if "foreach" in content or "breaksw" in content:
         return "/bin/tcsh"
     if "setenv" in content:
@@ -87,11 +87,11 @@ async def _detect_eda_env(sim_dir: str, project_root: str, login_shell: str) -> 
     candidates: list[str] = []
 
     for search_dir, pat in search_specs:
-        r = await ssh_run(f"find {sq(search_dir)} -maxdepth 1 \\( -type f -o -type l \\) {pat} 2>/dev/null")
+        r = await ssh_run(f"find {sq(search_dir)} -maxdepth 1 \\( -type f -o -type l \\) {pat} || true")
         for f in r.strip().splitlines():
             if not f:
                 continue
-            r2 = await ssh_run(f"grep -lE '{kw_grep}' {sq(f)} 2>/dev/null")
+            r2 = await ssh_run(f"grep -lE '{kw_grep}' {sq(f)} || true")
             if r2.strip():
                 candidates.append(f)
 
@@ -126,7 +126,7 @@ async def _detect_shell_and_env(sim_dir: str, script: str, project_root: str) ->
 
     # script_shell from shebang
     script_path = f"{sim_dir}/{script}"
-    shebang = await ssh_run(f"head -1 {sq(script_path)} 2>/dev/null")
+    shebang = await ssh_run(f"head -1 {sq(script_path)} || true")
     script_shell: str | None = None
     if shebang.strip().startswith("#!"):
         script_shell = shebang.strip()[2:].split()[0]
@@ -154,7 +154,7 @@ async def _auto_detect_runner(sim_dir: str) -> dict:
     candidates: list[dict] = []
 
     # 1. Makefile with sim/test/run target
-    r = await ssh_run(f"grep -lE 'sim:|test:|run:' {sq(sim_dir + '/Makefile')} 2>/dev/null")
+    r = await ssh_run(f"grep -lE 'sim:|test:|run:' {sq(sim_dir + '/Makefile')} || true")
     if r.strip():
         targets = await ssh_run(
             f"grep -oE '^(sim|test|run|simulate|regression)[^:]*:' {sq(sim_dir + '/Makefile')} "
@@ -170,12 +170,12 @@ async def _auto_detect_runner(sim_dir: str) -> dict:
     # 2. Executable shell scripts with recognized names
     r = await ssh_run(
         f"find {sq(sim_dir)} -maxdepth 1 -perm /111 "
-        r"\( -name 'run_sim*' -o -name 'run_test*' -o -name '*.sh' \) 2>/dev/null"
+        r"\( -name 'run_sim*' -o -name 'run_test*' -o -name '*.sh' \) || true"
     )
     for script in r.strip().splitlines():
         if not script:
             continue
-        shebang = await ssh_run(f"head -1 {sq(script)} 2>/dev/null")
+        shebang = await ssh_run(f"head -1 {sq(script)} || true")
         if shebang.strip().startswith("#!"):
             candidates.append({
                 "runner": "shell",
@@ -184,9 +184,9 @@ async def _auto_detect_runner(sim_dir: str) -> dict:
             })
 
     # 3. *.f filelist + xrun/irun available
-    r = await ssh_run(f"ls {sq(sim_dir)}/*.f 2>/dev/null | head -1")
+    r = await ssh_run(f"(ls {sq(sim_dir)}/*.f || true) | head -1")
     if r.strip():
-        tool = await ssh_run("which xrun 2>/dev/null || which irun 2>/dev/null | head -1")
+        tool = await ssh_run("(which xrun || which irun || true) | head -1")
         if tool.strip():
             tool_name = tool.strip().split("/")[-1]
             candidates.append({
@@ -196,9 +196,9 @@ async def _auto_detect_runner(sim_dir: str) -> dict:
             })
 
     # 4. Python runner
-    r = await ssh_run(f"ls {sq(sim_dir + '/run_sim.py')} {sq(sim_dir + '/sim.py')} 2>/dev/null | head -1")
+    r = await ssh_run(f"(ls {sq(sim_dir + '/run_sim.py')} {sq(sim_dir + '/sim.py')} || true) | head -1")
     if r.strip():
-        py = await ssh_run("which python3 2>/dev/null || which python 2>/dev/null | head -1")
+        py = await ssh_run("(which python3 || which python || true) | head -1")
         py_cmd = py.strip().split("/")[-1] if py.strip() else "python3"
         candidates.append({
             "runner": "python",
@@ -251,13 +251,13 @@ async def _analyze_tb_type(sim_dir: str) -> str:
     # UVM markers
     _sd = sq(sim_dir)
     r_uvm = await ssh_run(
-        f"grep -rl 'uvm_component\\|uvm_test\\|UVM_TEST' {_sd} "
-        f"--include='*.sv' --include='*.svh' 2>/dev/null | head -1"
+        f"(grep -rl 'uvm_component\\|uvm_test\\|UVM_TEST' {_sd} "
+        f"--include='*.sv' --include='*.svh' || true) | head -1"
     )
     has_uvm = bool(r_uvm.strip())
 
     # ncsim_legacy markers: run_sim script + *.f filelist
-    r_legacy = await ssh_run(f"ls {sq(sim_dir + '/run_sim')} {sq(sim_dir)}/*.f 2>/dev/null")
+    r_legacy = await ssh_run(f"ls {sq(sim_dir + '/run_sim')} {sq(sim_dir)}/*.f || true")
     has_legacy = bool(r_legacy.strip())
 
     if has_uvm and has_legacy:
@@ -269,7 +269,7 @@ async def _analyze_tb_type(sim_dir: str) -> str:
 
     # sv_directed: non-UVM SystemVerilog with interface/program
     r = await ssh_run(
-        f"grep -rl 'interface\\|program ' {sq(sim_dir)} --include='*.sv' 2>/dev/null | head -1"
+        f"(grep -rl 'interface\\|program ' {sq(sim_dir)} --include='*.sv' || true) | head -1"
     )
     if r.strip():
         return "sv_directed"
@@ -295,7 +295,7 @@ async def _discover_sim_dir(hint: str = "") -> list[dict]:
     if hint:
         project_root = hint
     else:
-        r = await ssh_run("git rev-parse --show-toplevel 2>/dev/null || echo ~")
+        r = await ssh_run("git rev-parse --show-toplevel || echo ~")
         project_root = r.strip()
 
     # 2. find candidate directories by name pattern, maxdepth 3
@@ -304,7 +304,7 @@ async def _discover_sim_dir(hint: str = "") -> list[dict]:
         r"-o -name 'verif*' -o -name 'bench*' -o -name 'dv'"
     )
     r = await ssh_run(
-        f"find {sq(project_root)} -maxdepth 3 -mindepth 1 -type d \\( {patterns} \\) 2>/dev/null | sort"
+        f"(find {sq(project_root)} -maxdepth 3 -mindepth 1 -type d \\( {patterns} \\) || true) | sort"
     )
     raw = r.strip().splitlines()
 
@@ -318,7 +318,7 @@ async def _discover_sim_dir(hint: str = "") -> list[dict]:
     # 4. analyze each candidate
     envs: list[dict] = []
     for sim_root in deduped:
-        r = await ssh_run(f"find {sq(sim_root)} -maxdepth 1 -mindepth 1 -type d 2>/dev/null")
+        r = await ssh_run(f"find {sq(sim_root)} -maxdepth 1 -mindepth 1 -type d || true")
         subdirs = [s for s in r.strip().splitlines() if s]
         found_in_sub = False
         for sub in subdirs:
@@ -404,7 +404,7 @@ async def _detect_bridge_tcl() -> str:
     """
     # 1. Package path (works for both regular and editable install)
     pkg_init = await ssh_run(
-        "python3 -c \"import xcelium_mcp; print(xcelium_mcp.__file__)\" 2>/dev/null",
+        "python3 -c \"import xcelium_mcp; print(xcelium_mcp.__file__)\" || true",
         timeout=10,
     )
     if pkg_init.strip():
@@ -419,7 +419,7 @@ async def _detect_bridge_tcl() -> str:
         return "/opt/xcelium-mcp/tcl/mcp_bridge.tcl"
 
     # 3. pip show fallback
-    r = await ssh_run("pip3 show xcelium-mcp 2>/dev/null | grep Location", timeout=10)
+    r = await ssh_run("(pip3 show xcelium-mcp || true) | grep Location", timeout=10)
     if r.strip():
         loc = r.strip().split(":", 1)[-1].strip()
         candidate = str(Path(loc).parent / "tcl" / "mcp_bridge.tcl")
@@ -444,7 +444,7 @@ async def _detect_setup_tcls(sim_dir: str) -> dict[str, str]:
     Returns: {"rtl": "scripts/setup_rtl.tcl", "gate": "scripts/setup_gate.tcl", ...}
     """
     r = await ssh_run(
-        f"find {sq(sim_dir + '/scripts')} -maxdepth 1 -name 'setup*.tcl' 2>/dev/null | sort"
+        f"(find {sq(sim_dir + '/scripts')} -maxdepth 1 -name 'setup*.tcl' || true) | sort"
     )
     setup_tcls: dict[str, str] = {}
     for line in r.strip().splitlines():
@@ -555,7 +555,7 @@ async def _resolve_external_tools(shell_env: dict) -> dict[str, str]:
 async def _detect_bridge_port(sim_dir: str, bridge_tcl: str) -> int:
     """Parse bridge port from mcp_bridge.tcl. Default 9876."""
     r = await ssh_run(
-        f"grep -oE 'variable port [0-9]+' {bridge_tcl} 2>/dev/null"
+        f"grep -oE 'variable port [0-9]+' {bridge_tcl} || true"
     )
     if r.strip():
         try:
@@ -580,7 +580,7 @@ async def _detect_run_dir(sim_dir: str, runner_info: dict) -> dict:
 
     # 1. run*/ directories with cds.lib or hdl.var
     r = await ssh_run(
-        f"find {_sd} -maxdepth 1 -type d -name 'run*' 2>/dev/null"
+        f"find {_sd} -maxdepth 1 -type d -name 'run*' || true"
     )
     for d in r.strip().splitlines():
         if not d.strip():
@@ -595,7 +595,7 @@ async def _detect_run_dir(sim_dir: str, runner_info: dict) -> dict:
     script_name = _extract_script_name(runner_info.get("exec_cmd", ""))
     script_path = f"{sim_dir}/{script_name}"
     cd_targets: list[str] = []
-    r = await ssh_run(f"grep -E '^[[:space:]]*cd[[:space:]]+' {sq(script_path)} 2>/dev/null | head -3")
+    r = await ssh_run(f"(grep -E '^[[:space:]]*cd[[:space:]]+' {sq(script_path)} || true) | head -3")
     for line in r.strip().splitlines():
         parts = line.strip().split()
         if len(parts) >= 2 and '$' not in parts[1]:
@@ -647,13 +647,13 @@ async def _detect_vnc_display() -> str:
     Returns: ":N" or "" if not found.
     """
     # 1. vncserver -list
-    r = await ssh_run("vncserver -list 2>/dev/null | grep -E '^:'")
+    r = await ssh_run("(vncserver -list || true) | grep -E '^:'")
     if r.strip():
         display = r.strip().splitlines()[0].split()[0]
         return display
 
     # 2. Xvnc process
-    r = await ssh_run("ps -u $(whoami) -o args 2>/dev/null | grep Xvnc | grep -v grep | grep -oE ':[0-9]+'")
+    r = await ssh_run("(ps -u $(whoami) -o args || true) | grep Xvnc | grep -v grep | grep -oE ':[0-9]+'")
     if r.strip():
         return r.strip().splitlines()[0]
 
