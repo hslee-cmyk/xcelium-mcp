@@ -1,11 +1,16 @@
 """Signal inspection and manipulation tools."""
 from __future__ import annotations
 
+import re
+
 from mcp.server.fastmcp import FastMCP
 
 from xcelium_mcp.bridge_manager import BridgeManager
 from xcelium_mcp.shell_utils import sanitize_signal_name
 from xcelium_mcp.tcl_bridge import TclError
+
+# Verilog/SystemVerilog value literals: 1'b0, 8'hFF, 32'd100, 16'bxxxx, plain digits
+_DEPOSIT_VALUE_RE = re.compile(r"^[\d'bhBHdDoOxXzZ_]+$")
 
 
 def register(mcp: FastMCP, bridges: BridgeManager) -> None:
@@ -188,5 +193,10 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
         else:
             if not value:
                 return "ERROR: 'value' is required for deposit (or set release=True)."
+            if not _DEPOSIT_VALUE_RE.fullmatch(value):
+                return (
+                    f"ERROR: Invalid deposit value {value!r}. "
+                    "Only Verilog literals allowed (e.g. 1'b1, 8'hFF, 32'd100)."
+                )
             readback = await bridge.execute(f"__DEPOSIT_AND_VERIFY__ {signal} {value}")
             return f"Deposited {value} on {signal}. Readback: {readback}"
