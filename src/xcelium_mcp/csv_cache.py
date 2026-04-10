@@ -11,7 +11,6 @@ Architecture note:
 from __future__ import annotations
 
 import hashlib
-import shlex
 from collections import OrderedDict, deque
 from pathlib import Path
 
@@ -132,22 +131,15 @@ async def extract(
 
     # simvisdbutil is a wrapper script that needs EDA env (cds_root in PATH).
     # Source env from registry before execution.
-    from xcelium_mcp.sim_runner import load_sim_config, login_shell_cmd, resolve_sim_dir
+    from xcelium_mcp.shell_utils import build_eda_command
+    from xcelium_mcp.sim_runner import load_sim_config, resolve_sim_dir
     try:
         sim_dir = await resolve_sim_dir()
     except ValueError as e:
         raise RuntimeError(str(e))
     cfg = await load_sim_config(sim_dir)
     if cfg:
-        runner = cfg.get("runner", {})
-        env_files = runner.get("env_files", [])
-        if runner.get("source_separately") and env_files:
-            env_shell = runner.get("env_shell", "/bin/csh")
-            source_cmd = "; ".join(f"source {shlex.quote(f)}" for f in env_files)
-            cmd = f"{env_shell} -c '{source_cmd}; {svdb_cmd}'"
-        else:
-            login_shell = runner.get("login_shell", "/bin/sh")
-            cmd = login_shell_cmd(login_shell, svdb_cmd)
+        cmd = build_eda_command(cfg.get("runner", {}), svdb_cmd)
     else:
         cmd = svdb_cmd  # fallback: try direct
 

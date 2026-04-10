@@ -106,6 +106,30 @@ def login_shell_cmd(login_shell: str, cmd: str) -> str:
     return f"{login_shell} -l -c '{safe_cmd}'"
 
 
+def build_eda_command(runner: dict, inner_cmd: str) -> str:
+    """Build a shell command that sources EDA environment before execution.
+
+    Uses runner config to determine environment sourcing strategy:
+    - source_separately=True: explicit source commands in env_shell
+    - Otherwise: login_shell_cmd for login shell environment
+
+    Args:
+        runner: runner config dict with keys: env_files, env_shell,
+                login_shell, source_separately.
+        inner_cmd: The command to run after environment setup.
+
+    Returns:
+        Shell command string ready for ssh_run().
+    """
+    env_files = runner.get("env_files", [])
+    if runner.get("source_separately") and env_files:
+        env_shell = runner.get("env_shell", runner.get("login_shell", "/bin/csh"))
+        source_cmds = "; ".join(f"source {shell_quote(f)}" for f in env_files)
+        return f"{env_shell} -c '{source_cmds}; {inner_cmd}'"
+    login_shell = runner.get("login_shell", "/bin/sh")
+    return login_shell_cmd(login_shell, inner_cmd)
+
+
 # ===================================================================
 # Path & input validation
 # ===================================================================
