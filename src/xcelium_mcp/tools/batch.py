@@ -11,11 +11,8 @@ from xcelium_mcp.batch_runner import _run_batch_regression, _run_batch_single, r
 from xcelium_mcp.bridge_manager import BridgeManager
 from xcelium_mcp.env_detection import _load_or_detect_runner
 from xcelium_mcp.registry import load_sim_config
-from xcelium_mcp.sim_runner import (
-    UserInputRequired,
-    resolve_sim_dir,
-    validate_path,
-)
+from xcelium_mcp.shell_utils import UserInputRequired, validate_path
+from xcelium_mcp.sim_runner import resolve_sim_dir
 
 # Type alias for the restore_checkpoint callable passed from server.py
 RestoreCheckpointFn = Callable[..., Coroutine[Any, Any, str]]
