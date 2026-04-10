@@ -534,7 +534,7 @@ async def run_batch_regression(
         remaining = [t for t in test_list if t not in completed_tests]
 
         for test_name in remaining:
-            test_log = f"{user_tmp}/regression_{ts}_{shell_quote(test_name)}.log"
+            test_log = f"{user_tmp}/regression_{ts}_{test_name}.log"
             env_prefix = f"TEST_NAME={shell_quote(test_name)} "
 
             # SHM naming + probe scope + dump window: preprocess setup_tcl.
@@ -616,7 +616,7 @@ async def run_batch_regression(
                 await shell_run("pkill -f xmrm || true", timeout=5)
                 # Append TIMEOUT marker to per-test log
                 await shell_run(
-                    f"echo '[TIMEOUT] Test did not complete within 600s' >> {test_log}",
+                    f"echo '[TIMEOUT] Test did not complete within 600s' >> {shell_quote(test_log)}",
                     timeout=5,
                 )
 
@@ -644,7 +644,7 @@ async def run_batch_regression(
             # Append per-test result to main log
             await shell_run(
                 f"echo {shell_quote('=== ' + test_name + ' ===')} >> {log_file} && "
-                f"(grep -E 'PASS|FAIL|Errors:' {test_log} || true) >> {log_file}",
+                f"(grep -E 'PASS|FAIL|Errors:' {shell_quote(test_log)} || true) >> {log_file}",
                 timeout=10.0,
             )
 
