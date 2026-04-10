@@ -56,12 +56,12 @@ class TclBridge:
         if self._writer and not self._writer.is_closing():
             try:
                 await self.execute_safe("__QUIT__")
-            except Exception:
+            except (ConnectionError, asyncio.TimeoutError, OSError):
                 pass
             self._writer.close()
             try:
                 await self._writer.wait_closed()
-            except Exception:
+            except (ConnectionError, OSError):
                 pass
         self._reader = None
         self._writer = None

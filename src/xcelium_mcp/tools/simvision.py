@@ -145,7 +145,7 @@ def register(
                     ping = await bridge.connect()
                     bridges.set_simvision(bridge)
                     return f"SimVision already running — connected to port {port} (ping={ping})"
-                except Exception:
+                except (ConnectionError, asyncio.TimeoutError, OSError, TclError):
                     pass
 
         # 2. Resolve sim_dir + config
@@ -232,7 +232,7 @@ def register(
                             f"  shm: {shm_path or '(none)'}\n"
                             f"  log: {log_file}"
                         )
-                    except Exception:
+                    except (ConnectionError, asyncio.TimeoutError, OSError, TclError):
                         continue
 
         log_tail = await ssh_run(f"tail -10 {log_file} 2>/dev/null")

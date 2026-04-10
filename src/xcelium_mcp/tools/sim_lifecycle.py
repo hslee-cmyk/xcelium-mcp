@@ -72,7 +72,7 @@ async def _auto_connect_all(bridges: BridgeManager, host: str, timeout: float) -
             else:
                 bridges.set_xmsim(bridge)
             results.append(f"  {btype}:{p} (ping={ping})")
-        except Exception as e:
+        except (ConnectionError, asyncio.TimeoutError, OSError, TclError) as e:
             results.append(f"  {btype}:{p} FAILED ({e})")
 
     if not results:
@@ -236,7 +236,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         bridge = TclBridge(host=host, port=port, timeout=timeout)
         try:
             ping = await bridge.connect()
-        except Exception as e:
+        except (ConnectionError, asyncio.TimeoutError, OSError, TclError) as e:
             return f"ERROR: Connection failed: {type(e).__name__}: {e}"
 
         if target == "simvision":

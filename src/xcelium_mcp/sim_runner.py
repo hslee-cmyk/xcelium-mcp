@@ -774,11 +774,13 @@ async def _start_bridge(
     await ssh_run(cmd, timeout=15)
 
     from xcelium_mcp.tcl_bridge import TclBridge as _TB
+    from xcelium_mcp.tcl_bridge import TclError as _TclError
 
     if bridges is not None and bridges.xmsim_raw and bridges.xmsim_raw.connected:
         await bridges.xmsim_raw.disconnect()
         bridges.set_xmsim(None)
 
+    last_exc: Exception | None = None
     for i in range(effective_timeout // 2):
         await asyncio.sleep(2)
         r = await ssh_run(f"cat {user_tmp}/bridge_ready_* 2>/dev/null")
@@ -800,7 +802,8 @@ async def _start_bridge(
                         f"  log: {log_file}\n\n"
                         f"Ready. sim_run, get_signal_value etc. available immediately."
                     )
-                except Exception as e:
+                except (ConnectionError, asyncio.TimeoutError, OSError, _TclError) as e:
+                    last_exc = e
                     logger.debug("bridge connect attempt failed: %s", e)
                     continue
 
@@ -811,4 +814,5 @@ async def _start_bridge(
         await ssh_run("pkill -f xmsim 2>/dev/null", timeout=5)
 
     log_tail = await ssh_run(f"tail -20 {log_file} 2>/dev/null", timeout=5)
-    return f"ERROR: bridge not ready after {timeout}s.\nLog tail:\n{log_tail}"
+    exc_info = f"\nLast error: {last_exc}" if last_exc else ""
+    return f"ERROR: bridge not ready after {timeout}s.{exc_info}\nLog tail:\n{log_tail}"
