@@ -10,7 +10,8 @@
       "id": "F-001",
       "title": "Fix Tcl injection gap in watch/probe/waveform tools",
       "priority": 1,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-04-10",
       "acceptanceCriteria": [
         "sanitize_signal_name() called on signal params in tools/debug.py watch (L131-156) and probe (L177-196)",
         "sanitize_signal_name() called on signal params in tools/waveform.py add (L55) and remove (L107)",
@@ -23,7 +24,8 @@
       "id": "F-002",
       "title": "Fix compare_waveforms: injection + fd leak + validate_path",
       "priority": 1,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-04-10",
       "acceptanceCriteria": [
         "display param validated against regex ^:?[0-9]+(\\.[0-9]+)?$",
         "simvision launch uses (nohup ... &) subshell pattern + build_redirect like batch_runner B-0 fix",
@@ -36,7 +38,8 @@
       "id": "F-003",
       "title": "Fix screenshot.py temp file leak on double-exception",
       "priority": 2,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-04-10",
       "acceptanceCriteria": [
         "try/finally wraps both _convert_gs and _convert_imagemagick paths",
         "Temp file is always cleaned up if cleanup=True, even on exception",
@@ -48,7 +51,8 @@
       "id": "F-004",
       "title": "Fix csv_cache.clear_cache OrderedDict downgrade",
       "priority": 2,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-04-10",
       "acceptanceCriteria": [
         "clear_cache(shm_path=...) preserves OrderedDict type after filtering",
         "Subsequent move_to_end/popitem calls do not raise AttributeError",
@@ -105,7 +109,8 @@
       "id": "F-008",
       "title": "Add Tcl escaping to debug_tools.generate_debug_tcl_content",
       "priority": 2,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-04-10",
       "acceptanceCriteria": [
         "shm_path validated as filesystem path (no shell metachars)",
         "signals pass through sanitize_signal_name",
@@ -118,7 +123,8 @@
       "id": "F-009",
       "title": "Narrow bare except Exception in connect/retry loops",
       "priority": 3,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-04-10",
       "acceptanceCriteria": [
         "TclBridge.disconnect catches (ConnectionError, asyncio.TimeoutError, OSError) not Exception",
         "Retry loops in simvision.py, sim_lifecycle.py catch specific exceptions",
@@ -131,7 +137,8 @@
       "id": "F-010",
       "title": "Clean up dead code in register() return dicts",
       "priority": 3,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-04-10",
       "acceptanceCriteria": [
         "generate_debug_tcl_fn param removed from simvision.register and server.py",
         "waveform.register lambda replaced with functools.partial",
