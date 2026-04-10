@@ -1,0 +1,9 @@
+{
+  "repo": "hslee-cmyk/xcelium-mcp",
+  "verifyCommand": "python -m pytest && python -m ruff check src/",
+  "acceptanceCriteria": [
+    "Verification command passes (pytest + ruff)",
+    "All non-skipped tasks marked passes: true"
+  ],
+  "features": []
+}

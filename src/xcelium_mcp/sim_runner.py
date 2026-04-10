@@ -24,63 +24,57 @@ logger = logging.getLogger(__name__)
 # Core utilities — re-exported from shell_utils for backward compat
 # ===================================================================
 
-from xcelium_mcp.shell_utils import (  # noqa: E402, F401
-    shell_quote as sq,
-    shell_quote,
-    build_redirect,
-    UserInputRequired,
-    ssh_run,
-    login_shell_cmd,
-    validate_path,
-    sanitize_signal_name,
-    sanitize_tcl_string,
+from xcelium_mcp.batch_runner import (  # noqa: E402, F401
+    ExecInfo,
+    _poll_batch_log,
+    _resolve_exec_cmd,
+    _run_batch_regression,
+    _run_batch_single,
+    resolve_sim_params,
+    resolve_test_name,
+    validate_extra_args,
 )
-
+from xcelium_mcp.env_detection import (  # noqa: E402, F401
+    _analyze_tb_type,
+    _ask_user_runner,
+    _auto_detect_runner,
+    _detect_bridge_port,
+    _detect_bridge_tcl,
+    _detect_eda_env,
+    _detect_env_shell,
+    _detect_run_dir,
+    _detect_setup_tcls,
+    _detect_shell_and_env,
+    _detect_vnc_display,
+    _discover_sim_dir,
+    _extract_script_name,
+    _load_or_detect_runner,
+    _pick_default_mode,
+    _resolve_eda_tools,
+    _resolve_external_tools,
+)
 
 # ===================================================================
 # Re-exports from new modules (backward compatibility)
 # tools/*.py import these names from sim_runner
 # ===================================================================
 from xcelium_mcp.registry import (  # noqa: E402, F401
-    load_registry,
-    save_registry,
-    load_sim_config,
-    save_sim_config,
     _update_registry_from_config,
     config_action,
+    load_registry,
+    load_sim_config,
+    save_registry,
+    save_sim_config,
 )
-
-from xcelium_mcp.batch_runner import (  # noqa: E402, F401
-    ExecInfo,
-    validate_extra_args,
-    _resolve_exec_cmd,
-    _run_batch_single,
-    _run_batch_regression,
-    _poll_batch_log,
-    resolve_sim_params,
-    resolve_test_name,
+from xcelium_mcp.shell_utils import (  # noqa: E402
+    UserInputRequired,
+    build_redirect,
+    login_shell_cmd,
+    ssh_run,
 )
-
-from xcelium_mcp.env_detection import (  # noqa: E402, F401
-    _detect_env_shell,
-    _detect_eda_env,
-    _detect_shell_and_env,
-    _auto_detect_runner,
-    _ask_user_runner,
-    _analyze_tb_type,
-    _discover_sim_dir,
-    _load_or_detect_runner,
-    _extract_script_name,
-    _detect_bridge_tcl,
-    _detect_setup_tcls,
-    _pick_default_mode,
-    _resolve_eda_tools,
-    _resolve_external_tools,
-    _detect_bridge_port,
-    _detect_run_dir,
-    _detect_vnc_display,
+from xcelium_mcp.shell_utils import (  # noqa: E402, F401
+    shell_quote as sq,
 )
-
 
 # ===================================================================
 # Utility functions (used by tools)

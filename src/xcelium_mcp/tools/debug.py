@@ -1,7 +1,6 @@
 """Debug and analysis tools."""
 from __future__ import annotations
 
-import json
 import re
 import textwrap
 import time
@@ -9,24 +8,16 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP, Image
 
+import xcelium_mcp.csv_cache as csv_cache
+import xcelium_mcp.debug_tools as debug_tools
 from xcelium_mcp.bridge_manager import BridgeManager
-from xcelium_mcp.tcl_bridge import TclBridge, TclError
+from xcelium_mcp.registry import load_sim_config
 from xcelium_mcp.screenshot import ps_to_png
 from xcelium_mcp.shell_utils import sanitize_signal_name, validate_path
 from xcelium_mcp.sim_runner import (
-    UserInputRequired,
-    ssh_run,
-    build_redirect,
     resolve_sim_dir,
-    _parse_shm_path,
-    _parse_time_ns,
 )
-from xcelium_mcp.registry import load_sim_config
-from xcelium_mcp.env_detection import _load_or_detect_runner
-from xcelium_mcp.batch_runner import _resolve_exec_cmd, extract_setup_lines
-import xcelium_mcp.csv_cache as csv_cache
-import xcelium_mcp.debug_tools as debug_tools
-
+from xcelium_mcp.tcl_bridge import TclError
 
 # ---------------------------------------------------------------------------
 # Internal helpers

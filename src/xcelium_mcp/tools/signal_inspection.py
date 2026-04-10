@@ -4,8 +4,8 @@ from __future__ import annotations
 from mcp.server.fastmcp import FastMCP
 
 from xcelium_mcp.bridge_manager import BridgeManager
-from xcelium_mcp.tcl_bridge import TclError
 from xcelium_mcp.shell_utils import sanitize_signal_name
+from xcelium_mcp.tcl_bridge import TclError
 
 
 def register(mcp: FastMCP, bridges: BridgeManager) -> None:
@@ -86,10 +86,14 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
                 return "ERROR: 'signals' list is required for action='check_dump'."
 
             from xcelium_mcp.csv_cache import _resolve_simvisdbutil
-            from xcelium_mcp.sim_runner import (
-                ssh_run, sq, login_shell_cmd, resolve_sim_dir, get_user_tmp_dir,
-            )
             from xcelium_mcp.registry import load_sim_config
+            from xcelium_mcp.sim_runner import (
+                get_user_tmp_dir,
+                login_shell_cmd,
+                resolve_sim_dir,
+                sq,
+                ssh_run,
+            )
 
             # 1. Resolve SHM path
             if not shm_path:

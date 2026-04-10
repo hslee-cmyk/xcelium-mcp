@@ -3,25 +3,22 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 from datetime import datetime
 
 from mcp.server.fastmcp import FastMCP
 
+from xcelium_mcp.batch_runner import resolve_test_name
 from xcelium_mcp.bridge_manager import BridgeManager
-from xcelium_mcp.tcl_bridge import TclBridge, TclError
+from xcelium_mcp.registry import config_action, load_sim_config
 from xcelium_mcp.sim_runner import (
     UserInputRequired,
+    get_user_tmp_dir,
+    resolve_sim_dir,
+    run_full_discovery,
     ssh_run,
     start_bridge_simulation,
-    run_full_discovery,
-    resolve_sim_dir,
-    get_user_tmp_dir,
 )
-from xcelium_mcp.registry import load_sim_config, load_registry, config_action, _update_registry_from_config
-from xcelium_mcp.batch_runner import resolve_test_name
-from xcelium_mcp.env_detection import _detect_vnc_display
-
+from xcelium_mcp.tcl_bridge import TclBridge, TclError
 
 # ---------------------------------------------------------------------------
 # Module-level helpers (don't need bridges closure)
@@ -329,7 +326,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         """Stop a running simulation."""
         bridge = bridges.xmsim
         await bridge.execute("stop")
-        return f"Simulation stopped."
+        return "Simulation stopped."
 
     @mcp.tool()
     async def sim_restart() -> str:

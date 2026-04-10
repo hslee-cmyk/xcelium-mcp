@@ -13,7 +13,6 @@ import asyncio
 import logging
 import re
 import shlex
-from typing import Any
 
 logger = logging.getLogger(__name__)
 

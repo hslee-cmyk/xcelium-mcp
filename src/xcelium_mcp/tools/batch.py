@@ -6,17 +6,16 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+import xcelium_mcp.csv_cache as _csv_cache
+from xcelium_mcp.batch_runner import _run_batch_regression, _run_batch_single, resolve_test_name
 from xcelium_mcp.bridge_manager import BridgeManager
+from xcelium_mcp.env_detection import _load_or_detect_runner
+from xcelium_mcp.registry import load_sim_config
 from xcelium_mcp.sim_runner import (
     UserInputRequired,
     resolve_sim_dir,
     validate_path,
 )
-from xcelium_mcp.registry import load_sim_config
-from xcelium_mcp.env_detection import _load_or_detect_runner
-from xcelium_mcp.batch_runner import _run_batch_single, _run_batch_regression, resolve_test_name
-import xcelium_mcp.csv_cache as _csv_cache
-
 
 # Type alias for the restore_checkpoint callable passed from server.py
 RestoreCheckpointFn = Callable[..., Coroutine[Any, Any, str]]

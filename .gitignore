@@ -9,3 +9,9 @@ build/
 *.egg
 .venv/
 venv/
+
+# Ralph loop state (local only)
+.claude/ralph-loop.local.md
+.claude/ralph-state.local.md
+.claude/ralph-status.local.json
+.claude/settings.local.json

@@ -12,11 +12,10 @@ from __future__ import annotations
 
 import hashlib
 import shlex
-from collections import deque, OrderedDict
+from collections import OrderedDict, deque
 from pathlib import Path
 
 from xcelium_mcp.shell_utils import ssh_run
-
 
 # ---------------------------------------------------------------------------
 # simvisdbutil path resolution — MCP server runs in bash without EDA PATH
@@ -35,7 +34,7 @@ async def _resolve_simvisdbutil() -> str:
         return _simvisdbutil_path
 
     # Try registry first
-    from xcelium_mcp.sim_runner import resolve_sim_dir, load_sim_config
+    from xcelium_mcp.sim_runner import load_sim_config, resolve_sim_dir
     try:
         sim_dir = await resolve_sim_dir()
     except ValueError as e:
@@ -131,7 +130,7 @@ async def extract(
 
     # simvisdbutil is a wrapper script that needs EDA env (cds_root in PATH).
     # Source env from registry before execution.
-    from xcelium_mcp.sim_runner import resolve_sim_dir, load_sim_config, login_shell_cmd
+    from xcelium_mcp.sim_runner import load_sim_config, login_shell_cmd, resolve_sim_dir
     try:
         sim_dir = await resolve_sim_dir()
     except ValueError as e:

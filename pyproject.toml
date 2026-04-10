@@ -15,7 +15,15 @@ dependencies = [
 
 [project.optional-dependencies]
 screenshot = ["Pillow"]
-dev = ["pytest", "pytest-asyncio"]
+dev = ["pytest", "pytest-asyncio", "ruff"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
 
 [project.scripts]
 xcelium-mcp = "xcelium_mcp.server:main"

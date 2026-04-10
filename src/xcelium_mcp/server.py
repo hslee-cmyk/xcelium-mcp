@@ -10,8 +10,8 @@ import functools
 
 from mcp.server.fastmcp import FastMCP
 
-from xcelium_mcp.bridge_manager import BridgeManager
 import xcelium_mcp.csv_cache as csv_cache
+from xcelium_mcp.bridge_manager import BridgeManager
 
 # ---------------------------------------------------------------------------
 # Server & bridge state
@@ -30,13 +30,13 @@ bridges = BridgeManager()
 # waveform, sim_lifecycle, and debug modules (cross-tool calls).
 # ---------------------------------------------------------------------------
 from xcelium_mcp.tools import (  # noqa: E402
-    sim_lifecycle,
-    signal_inspection,
-    waveform,
     batch,
     checkpoint,
-    simvision,
     debug,
+    signal_inspection,
+    sim_lifecycle,
+    simvision,
+    waveform,
 )
 from xcelium_mcp.tools.checkpoint import restore_checkpoint_impl  # noqa: E402
 

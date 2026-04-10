@@ -5,16 +5,17 @@ Contains all environment/shell/runner/directory detection logic.
 """
 from __future__ import annotations
 
-import shlex
 from pathlib import Path
 
-from xcelium_mcp.shell_utils import (
-    ssh_run,
-    shell_quote as sq,
-    login_shell_cmd,
-    UserInputRequired,
-)
 from xcelium_mcp.registry import load_sim_config
+from xcelium_mcp.shell_utils import (
+    UserInputRequired,
+    login_shell_cmd,
+    ssh_run,
+)
+from xcelium_mcp.shell_utils import (
+    shell_quote as sq,
+)
 
 
 async def _detect_env_shell(env_file: str, login_shell: str) -> str:
@@ -622,7 +623,7 @@ async def _detect_run_dir(sim_dir: str, runner_info: dict) -> dict:
     # 5. Multiple → ask user
     if len(candidates) > 1:
         raise UserInputRequired(
-            f"Multiple run directories found. Select one:\n"
+            "Multiple run directories found. Select one:\n"
             + "\n".join(f"  {i+1}. {c}" for i, c in enumerate(candidates))
         )
 

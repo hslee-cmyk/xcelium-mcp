@@ -4,13 +4,13 @@ from __future__ import annotations
 import logging
 import os
 
-logger = logging.getLogger(__name__)
-
 from mcp.server.fastmcp import FastMCP
 
-from xcelium_mcp.bridge_manager import BridgeManager
-from xcelium_mcp.sim_runner import get_user_tmp_dir, resolve_sim_dir, ssh_run, sq
 import xcelium_mcp.checkpoint_manager as checkpoint_manager
+from xcelium_mcp.bridge_manager import BridgeManager
+from xcelium_mcp.sim_runner import get_user_tmp_dir, resolve_sim_dir, sq, ssh_run
+
+logger = logging.getLogger(__name__)
 
 
 async def restore_checkpoint_impl(bridges: BridgeManager, name: str, sim_dir: str) -> str:

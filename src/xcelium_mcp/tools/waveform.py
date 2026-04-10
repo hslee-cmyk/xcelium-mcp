@@ -143,8 +143,8 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
 
         Returns the screenshot as a PNG image that Claude can analyze.
         """
-        from xcelium_mcp.sim_runner import resolve_sim_dir
         from xcelium_mcp.registry import load_sim_config
+        from xcelium_mcp.sim_runner import resolve_sim_dir
         cfg = None
         try:
             sim_dir = await resolve_sim_dir()

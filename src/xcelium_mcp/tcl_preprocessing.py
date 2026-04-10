@@ -6,13 +6,13 @@ SDF override, checkpoint Tcl generation, setup Tcl preprocessing.
 """
 from __future__ import annotations
 
+# Re-export for batch_runner backward compat
+import base64 as _b64
 import re as _re
 from pathlib import Path
 
-from xcelium_mcp.shell_utils import ssh_run, shell_quote as sq, sanitize_signal_name
-
-# Re-export for batch_runner backward compat
-import base64 as _b64
+from xcelium_mcp.shell_utils import shell_quote as sq
+from xcelium_mcp.shell_utils import ssh_run
 
 
 def _parse_l1_time_ns(l1_time: str) -> int:
@@ -239,8 +239,8 @@ async def _handle_sdf_override(
     if not _re.fullmatch(r"[\w./\-]+", sdf_file):
         raise ValueError(f"Invalid sdf_file path: {sdf_file!r}")
 
-    from xcelium_mcp.sim_runner import get_user_tmp_dir
     from xcelium_mcp.registry import load_sim_config
+    from xcelium_mcp.sim_runner import get_user_tmp_dir
 
     config = await load_sim_config(sim_dir)
     sdf_info = (config or {}).get("sdf_info", {})

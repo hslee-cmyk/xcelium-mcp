@@ -8,21 +8,21 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from xcelium_mcp.batch_runner import resolve_test_name
 from xcelium_mcp.bridge_manager import BridgeManager
-from xcelium_mcp.tcl_bridge import TclBridge, TclError
+from xcelium_mcp.env_detection import _detect_vnc_display
+from xcelium_mcp.registry import load_sim_config
 from xcelium_mcp.sim_runner import (
-    ssh_run,
-    sq,
-    login_shell_cmd,
-    build_redirect,
     _parse_shm_path,
     _parse_time_ns,
+    build_redirect,
     get_user_tmp_dir,
+    login_shell_cmd,
     resolve_sim_dir,
+    sq,
+    ssh_run,
 )
-from xcelium_mcp.registry import load_sim_config
-from xcelium_mcp.env_detection import _detect_vnc_display
-from xcelium_mcp.batch_runner import resolve_test_name
+from xcelium_mcp.tcl_bridge import TclBridge, TclError
 
 # Type aliases for cross-tool callable references
 WaveformAddImplFn = Callable[..., Coroutine[Any, Any, str]]
@@ -292,7 +292,7 @@ def register(
                         cfg = await load_sim_config(sim_dir)
                     except ValueError:
                         pass
-                    png_bytes = await ps_to_png(ps_path, config=cfg)
+                    await ps_to_png(ps_path, config=cfg)
                     results.append("Screenshot captured.")
                 except Exception as e:
                     results.append(f"Screenshot failed: {e}")
@@ -620,7 +620,7 @@ def register(
                     diffs[sig].append((t, vb, va))
 
         lines = [
-            f"=== Waveform Comparison ===",
+            "=== Waveform Comparison ===",
             f"BEFORE: {shm_before}",
             f"AFTER:  {shm_after}",
         ]

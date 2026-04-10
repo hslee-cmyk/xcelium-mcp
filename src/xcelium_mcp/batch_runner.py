@@ -10,35 +10,35 @@ parameter resolution, and test name resolution.
 from __future__ import annotations
 
 import asyncio
-import base64 as _b64
 import json
-from pathlib import Path
 import re as _re
 from dataclasses import dataclass
 
+from xcelium_mcp.registry import load_sim_config, save_sim_config
 from xcelium_mcp.shell_utils import (
-    ssh_run,
-    shell_quote as sq,
     build_redirect,
     login_shell_cmd,
+    ssh_run,
 )
-from xcelium_mcp.registry import load_sim_config, save_sim_config
+from xcelium_mcp.shell_utils import (
+    shell_quote as sq,
+)
 
 # Re-export from tcl_preprocessing for backward compat
 from xcelium_mcp.tcl_preprocessing import (  # noqa: F401
-    extract_setup_lines,
-    read_setup_tcl,
-    _replace_shm_stems,
     BOUNDARY_SIGNALS,
-    _resolve_probe_signals,
+    _build_checkpoint_tcl,
     _generate_probe_reset_tcl,
-    _replace_probe_lines,
-    _inject_dump_window,
     _handle_sdf_override,
+    _inject_dump_window,
+    _parse_l1_time_ns,
     _patch_tb_sdf_guard,
     _preprocess_setup_tcl,
-    _build_checkpoint_tcl,
-    _parse_l1_time_ns,
+    _replace_probe_lines,
+    _replace_shm_stems,
+    _resolve_probe_signals,
+    extract_setup_lines,
+    read_setup_tcl,
 )
 
 
@@ -249,8 +249,8 @@ async def _run_batch_single(
     await ssh_run(f"rm -f {pid_file}", timeout=5)
 
     if pid:
-        from datetime import datetime
         import base64 as _b64
+        from datetime import datetime
         job_info = json.dumps({
             "pid": pid,
             "log_file": log_file,
@@ -428,8 +428,8 @@ async def _run_batch_regression(
                 cmd = f"{cmd} {params['extra_args']}"
 
             # Save job state (for resume on reconnection)
-            from datetime import datetime
             import base64 as _b64
+            from datetime import datetime
             job_info = json.dumps({
                 "type": "regression",
                 "pid": 0,  # updated after nohup
