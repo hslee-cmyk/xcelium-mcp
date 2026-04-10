@@ -806,9 +806,7 @@
       "id": "F-057",
       "title": "Split env_detection.py into runner_detection and sim_env_detection",
       "priority": 2,
-      "skip": true,
-      "skipReason": "Large structural refactor of 660+ line module.",
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "runner_detection.py 신규: runner/shell/EDA 관련 함수 이동 (load_or_detect_runner, detect_eda_env 등)",
         "sim_env_detection.py 신규: bridge/port/VNC/directory 관련 함수 이동 (detect_vnc_display, discover_sim_dir 등)",
@@ -817,7 +815,8 @@
         "python -c 'import xcelium_mcp.server' 성공",
         "pytest passes"
       ],
-      "notes": "2차 Arch #8. env_detection.py 682줄 15개 함수 — runner vs environment 두 가지 관심사 혼재."
+      "notes": "2차 Arch #8. env_detection.py 682줄 15개 함수 — runner vs environment 두 가지 관심사 혼재.",
+      "completed_at": "2026-04-11"
     },
     {
       "id": "F-058",
