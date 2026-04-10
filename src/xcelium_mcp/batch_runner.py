@@ -481,9 +481,22 @@ async def run_batch_regression(
                         current = job.get("current", "")
                         await _kill_stale_sim(pid, current)
                 else:
-                    # PID dead → kill orphaned xmsim from previous test
+                    # PID dead — sim finished while disconnected
                     current = job.get("current", "")
-                    if current:
+                    if _should_resume_regression(job, test_list):
+                        # Same test_list → recover completed tests from job
+                        completed_tests = job.get("completed", [])
+                        log_file = job.get("log_file", log_file)
+                        # Check if current test also completed (check its log)
+                        current_log = job.get("current_log", "")
+                        if current and current_log:
+                            log_check = await shell_run(
+                                f"grep -cE 'PASS|FAIL|\\$finish|COMPLETE' {current_log} || echo 0"
+                            )
+                            if log_check.strip() != "0":
+                                completed_tests.append(current)
+                    elif current:
+                        # Different test_list → kill orphaned xmsim
                         await _kill_stale_sim(0, current)
         except (json.JSONDecodeError, KeyError):
             pass
