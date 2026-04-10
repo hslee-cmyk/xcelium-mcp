@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import functools
+import re
 
 from mcp.server.fastmcp import FastMCP, Image
 
@@ -9,6 +10,9 @@ from xcelium_mcp.bridge_manager import BridgeManager
 from xcelium_mcp.screenshot import ps_to_png
 from xcelium_mcp.shell_utils import sanitize_signal_name
 from xcelium_mcp.tcl_bridge import TclBridge, TclError
+
+_TIME_RE = re.compile(r'^\d+(\.\d+)?\s*(ns|us|ms|s|ps|fs)?$', re.IGNORECASE)
+_CURSOR_NAME_RE = re.compile(r'^[A-Za-z0-9_]+$')
 
 
 def _encode_group_arg(group_name: str) -> str:
@@ -134,6 +138,10 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         elif action == "zoom":
             if not start_time or not end_time:
                 return "ERROR: 'start_time' and 'end_time' are required for action='zoom'."
+            if not _TIME_RE.fullmatch(start_time.strip()):
+                return f"ERROR: Invalid start_time {start_time!r}. Expected format like '100ns', '0', '50.5us'."
+            if not _TIME_RE.fullmatch(end_time.strip()):
+                return f"ERROR: Invalid end_time {end_time!r}. Expected format like '100ns', '0', '50.5us'."
             bridge = bridges.simvision
             result = await bridge.execute(
                 f"waveform xview limits {start_time} {end_time}"
@@ -143,6 +151,10 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         elif action == "cursor":
             if not time:
                 return "ERROR: 'time' is required for action='cursor'."
+            if not _TIME_RE.fullmatch(time.strip()):
+                return f"ERROR: Invalid time {time!r}. Expected format like '50ns', '100us'."
+            if not _CURSOR_NAME_RE.fullmatch(cursor_name):
+                return f"ERROR: Invalid cursor_name {cursor_name!r}. Only alphanumeric and underscore allowed."
             bridge = bridges.simvision
             result = await bridge.execute(
                 f"cursor set -using {cursor_name} -time {time}"
