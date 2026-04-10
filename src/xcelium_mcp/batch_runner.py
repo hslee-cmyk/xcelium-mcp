@@ -345,6 +345,16 @@ async def run_batch_single(
     return result
 
 
+def _should_resume_regression(job: dict, test_list: list[str]) -> bool:
+    """Return True if the existing regression job matches the requested test_list.
+
+    An empty saved test_list (legacy job) is treated as a match to preserve
+    backward-compatible resume behavior.
+    """
+    saved_list = job.get("test_list", [])
+    return not saved_list or set(saved_list) == set(test_list)
+
+
 async def run_batch_regression(
     sim_dir: str,
     test_list: list[str],
@@ -409,7 +419,7 @@ async def run_batch_regression(
                     )
                 else:
                     pid_alive = "DEAD"
-                if "ALIVE" in pid_alive:
+                if "ALIVE" in pid_alive and _should_resume_regression(job, test_list):
                     # Current test still running → resume polling
                     current = job.get("current", "")
                     completed_tests = job.get("completed", [])
@@ -418,7 +428,7 @@ async def run_batch_regression(
                     if current_log:
                         _, _ = await poll_batch_log(current_log, 600)
                         completed_tests.append(current)
-                # else: PID dead → stale job, discard and start fresh
+                # else: PID dead OR different test_list → discard and start fresh
         except (json.JSONDecodeError, KeyError):
             pass
         await ssh_run(f"rm -f {job_file}", timeout=5)
@@ -504,6 +514,7 @@ async def run_batch_regression(
                 "current": test_name,
                 "current_log": test_log,
                 "completed": completed_tests,
+                "test_list": test_list,
                 "started_at": datetime.now().isoformat(),
             })
             b64 = _b64.b64encode(job_info.encode()).decode()

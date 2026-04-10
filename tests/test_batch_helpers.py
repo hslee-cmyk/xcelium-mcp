@@ -16,6 +16,7 @@ import pytest
 
 from xcelium_mcp.batch_runner import (
     _resolve_exec_cmd,
+    _should_resume_regression,
     build_batch_cmd,
     launch_nohup_job,
     parse_existing_job,
@@ -422,3 +423,50 @@ def test_resolve_exec_cmd_override() -> None:
     info = _resolve_exec_cmd(runner, regression=False)
     assert info.cmd == "custom_cmd --all"
     assert info.needs_test_name is False
+
+
+# ---------------------------------------------------------------------------
+# Tests: _should_resume_regression
+# ---------------------------------------------------------------------------
+
+
+def test_should_resume_same_list() -> None:
+    """Same test_list → resume."""
+    job = {"test_list": ["TOP015", "TOP016"]}
+    assert _should_resume_regression(job, ["TOP015", "TOP016"]) is True
+
+
+def test_should_resume_same_list_different_order() -> None:
+    """Order doesn't matter — set comparison."""
+    job = {"test_list": ["TOP016", "TOP015"]}
+    assert _should_resume_regression(job, ["TOP015", "TOP016"]) is True
+
+
+def test_should_not_resume_different_list() -> None:
+    """Different test_list (e.g. TOP000 running, new request for TOP015/TOP016) → fresh start."""
+    job = {
+        "type": "regression",
+        "pid": 20455,
+        "current": "VENEZIA_TOP000_stimulation_test",
+        "test_list": ["VENEZIA_TOP000_stimulation_test"],
+    }
+    new_list = ["VENEZIA_TOP015_i2c_8bit_offset_test", "VENEZIA_TOP016_sync_xfr_en_gating_test"]
+    assert _should_resume_regression(job, new_list) is False
+
+
+def test_should_not_resume_partial_overlap() -> None:
+    """Partial overlap is still a mismatch → fresh start."""
+    job = {"test_list": ["TOP015", "TOP016", "TOP017"]}
+    assert _should_resume_regression(job, ["TOP015", "TOP016"]) is False
+
+
+def test_should_resume_legacy_job_no_test_list() -> None:
+    """Legacy job without test_list field → always resume (backward compat)."""
+    job = {"type": "regression", "pid": 999, "current": "TOP015"}
+    assert _should_resume_regression(job, ["TOP015", "TOP016"]) is True
+
+
+def test_should_resume_empty_saved_list() -> None:
+    """Explicitly empty test_list in job → treated as legacy → resume."""
+    job = {"test_list": []}
+    assert _should_resume_regression(job, ["TOP015"]) is True
