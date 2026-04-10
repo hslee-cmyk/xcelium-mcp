@@ -455,7 +455,7 @@
       "title": "Extend Tcl denylist: add eval, interp, uplevel, load, after",
       "priority": 1,
       "passes": true,
-      "completed_at": "2026-04-10",
+      "completed_at": "2026-04-11",
       "acceptanceCriteria": [
         "_TCL_DENYLIST에 eval, interp, package, load, uplevel, after 추가",
         "\"eval {exec id}\" 등 우회 페이로드가 차단되는 테스트 추가",
@@ -469,7 +469,7 @@
       "title": "Sanitize shm_path before Tcl command interpolation in open_database",
       "priority": 1,
       "passes": true,
-      "completed_at": "2026-04-10",
+      "completed_at": "2026-04-11",
       "acceptanceCriteria": [
         "tools/simvision.py open_database에서 shm_path에 validate_path() 적용",
         "tools/debug.py generate_debug_tcl_content에서 shm_path에 validate_path() 적용",
@@ -483,7 +483,7 @@
       "title": "Wrap blocking file I/O in asyncio.to_thread for async functions",
       "priority": 1,
       "passes": true,
-      "completed_at": "2026-04-10",
+      "completed_at": "2026-04-11",
       "acceptanceCriteria": [
         "registry.py load_sim_config의 path.exists()/stat()/read_text()를 asyncio.to_thread로 래핑",
         "csv_cache.py:109 Path.exists()를 asyncio.to_thread 또는 캐시 플래그로 대체",
@@ -498,7 +498,7 @@
       "title": "Add asyncio.Lock to get_user_tmp_dir global cache initialization",
       "priority": 1,
       "passes": true,
-      "completed_at": "2026-04-10",
+      "completed_at": "2026-04-11",
       "acceptanceCriteria": [
         "shell_utils.py get_user_tmp_dir()에 asyncio.Lock 추가하여 동시 초기화 방지",
         "두 번째 호출은 lock 경합 없이 캐시 반환 확인",
@@ -512,7 +512,7 @@
       "priority": 2,
       "passes": false,
       "skip": true,
-      "skipReason": "Too large and risky for a batch change. Regression parallelization requires careful worklib locking and per-test log isolation.",
+      "skipReason": "Large parallelization refactor requiring remote testing",
       "acceptanceCriteria": [
         "_run_batch_regression에서 독립 테스트를 asyncio.gather + Semaphore로 병렬 실행",
         "max_parallel 파라미터 추가 (기본값 4)",
@@ -527,7 +527,7 @@
       "title": "Add shell_quote to shm_path/output_path in csv_cache command construction",
       "priority": 2,
       "passes": true,
-      "completed_at": "2026-04-10",
+      "completed_at": "2026-04-11",
       "acceptanceCriteria": [
         "csv_cache.py extract()에서 shm_path, output_path에 sq() 적용",
         "공백/특수문자 포함 경로에서도 명령 정상 실행",
@@ -541,7 +541,7 @@
       "priority": 2,
       "passes": false,
       "skip": true,
-      "skipReason": "Large structural refactor requiring import path updates across many files. Risky for batch change.",
+      "skipReason": "Large structural refactor of batch_runner.py",
       "acceptanceCriteria": [
         "test_resolution.py 신규: resolve_test_name, resolve_sim_params, _resolve_test_name_cached 이동",
         "batch_polling.py 신규: _poll_batch_log, watch_pid_and_poll 이동",
@@ -558,7 +558,7 @@
       "priority": 2,
       "passes": false,
       "skip": true,
-      "skipReason": "Large structural refactor moving 7 functions to new module. Risky for batch change.",
+      "skipReason": "Large structural refactor of simvision orchestration",
       "acceptanceCriteria": [
         "simvision_ops.py 신규: open_database, start_simvision, setup_waveform, live_start, reload_waveform, compare_csv_diff, compare_simvision, _load_rows 이동",
         "tools/simvision.py는 thin registration wrapper만 유지 (300줄 이하)",
@@ -572,7 +572,7 @@
       "title": "Add type annotation to bridges parameter in bridge_lifecycle.py",
       "priority": 2,
       "passes": true,
-      "completed_at": "2026-04-10",
+      "completed_at": "2026-04-11",
       "acceptanceCriteria": [
         "bridge_lifecycle.py의 start_bridge_simulation, _start_bridge에 bridges: BridgeManager | None = None 타입 힌트 추가",
         "ruff check 통과",
@@ -585,7 +585,7 @@
       "title": "Add logger.warning for swallowed UserInputRequired in discovery.py",
       "priority": 2,
       "passes": true,
-      "completed_at": "2026-04-10",
+      "completed_at": "2026-04-11",
       "acceptanceCriteria": [
         "discovery.py:488-491 except UserInputRequired에 logger.warning() 추가",
         "SDF 분석 스킵 사유가 사용자에게 전달됨",
@@ -598,7 +598,7 @@
       "title": "Merge PID read + cleanup into single SSH call in launch_nohup_job",
       "priority": 2,
       "passes": true,
-      "completed_at": "2026-04-10",
+      "completed_at": "2026-04-11",
       "acceptanceCriteria": [
         "batch_runner.py launch_nohup_job에서 PID file read와 cleanup을 && 체이닝으로 1회 ssh_run 호출로 병합",
         "테스트당 SSH 호출 1회 절감",
@@ -612,7 +612,7 @@
       "title": "Parallelize _analyze_sdf_annotate SSH calls with asyncio.gather",
       "priority": 2,
       "passes": true,
-      "completed_at": "2026-04-10",
+      "completed_at": "2026-04-11",
       "acceptanceCriteria": [
         "discovery.py _analyze_sdf_annotate에서 독립적인 grep SSH 호출을 asyncio.gather로 병렬화",
         "discovery 시간 600ms+ 절감",
@@ -627,7 +627,7 @@
       "priority": 3,
       "passes": false,
       "skip": true,
-      "skipReason": "Large rename across 18 functions and 5+ caller files. Risky for batch change.",
+      "skipReason": "Large rename across many files",
       "acceptanceCriteria": [
         "외부에서 import되는 함수의 _ prefix 제거 (_load_or_detect_runner → load_or_detect_runner, _detect_vnc_display → detect_vnc_display 등)",
         "__all__ 정의로 public API 명시",
@@ -641,7 +641,7 @@
       "title": "Remove tcl_preprocessing re-exports from batch_runner.py",
       "priority": 3,
       "passes": true,
-      "completed_at": "2026-04-10",
+      "completed_at": "2026-04-11",
       "acceptanceCriteria": [
         "batch_runner.py lines 27-41의 noqa: F401 re-export 블록 제거",
         "외부 consumer가 batch_runner에서 import하는 경로 없음 확인",
@@ -655,7 +655,7 @@
       "title": "Add unit tests for pure functions: discovery, env_detection, bridge_lifecycle",
       "priority": 3,
       "passes": true,
-      "completed_at": "2026-04-10",
+      "completed_at": "2026-04-11",
       "acceptanceCriteria": [
         "discovery.py 순수 함수 (resolve 계열) 테스트 추가",
         "env_detection.py 순수 함수 테스트 추가",
@@ -671,7 +671,7 @@
       "title": "Move stdlib imports to module level in batch_runner.py",
       "priority": 3,
       "passes": true,
-      "completed_at": "2026-04-10",
+      "completed_at": "2026-04-11",
       "acceptanceCriteria": [
         "batch_runner.py의 함수 내 import time, import base64를 모듈 상단으로 이동",
         "bridge_lifecycle.py의 lazy import from tcl_bridge를 함수 상단 1회로 변경",
@@ -686,7 +686,7 @@
       "priority": 3,
       "passes": false,
       "skip": true,
-      "skipReason": "sq is actively used in 50+ locations, deprecation warning would be too noisy.",
+      "skipReason": "sq alias actively used in 50+ locations, deprecation warning too noisy",
       "acceptanceCriteria": [
         "shell_utils.py sq()에 warnings.warn('sq is deprecated, use shell_quote', DeprecationWarning, stacklevel=2) 추가",
         "또는 모든 caller를 shell_quote로 변경하고 sq 제거",
@@ -700,7 +700,7 @@
       "title": "Add eviction to _config_cache and remove Path.exists on csv_cache hit",
       "priority": 3,
       "passes": true,
-      "completed_at": "2026-04-10",
+      "completed_at": "2026-04-11",
       "acceptanceCriteria": [
         "registry.py _config_cache를 maxsize 있는 LRU 또는 TTL 캐시로 변경 (maxsize=8 등)",
         "csv_cache.py cache hit 시 Path.exists() 제거 — extraction 실패 시에만 재검증",
