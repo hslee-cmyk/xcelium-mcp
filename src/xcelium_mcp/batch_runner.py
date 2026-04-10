@@ -26,6 +26,7 @@ from xcelium_mcp.shell_utils import (
     login_shell_cmd,
     shell_quote,
     ssh_run,
+    ssh_run_with_retry,
 )
 from xcelium_mcp.tcl_preprocessing import (
     _build_checkpoint_tcl,
@@ -275,14 +276,17 @@ async def launch_nohup_job(
             "test_name": test_name,
             "started_at": datetime.now().isoformat(),
         })
-        b64 = _b64.b64encode(job_info.encode()).decode()
-        # F-027: merged job-state write + PID watcher into single SSH call
-        # < /dev/null disconnects SSH stdin so the background watcher doesn't hold the session
         done_file = f"{log_file}.done"
-        await ssh_run(
-            f"echo {b64} | base64 -d > {job_file} && "
-            f"(while kill -0 {pid}; do sleep 2; done; touch {done_file}) < /dev/null >& /dev/null &",
+        # Write job file (sync, fast)
+        await ssh_run_with_retry(
+            f"printf '%s' {shell_quote(job_info)} > {job_file}",
             timeout=15,
+        )
+        # Launch PID watcher independently using nohup pattern (fully detached from SSH session)
+        await ssh_run(
+            f"(nohup bash -c 'while kill -0 {pid} 2>/dev/null; do sleep 2; done; touch {shell_quote(done_file)}' "
+            f"< /dev/null >& /dev/null &)",
+            timeout=10,
         )
 
     return pid
@@ -518,18 +522,19 @@ async def run_batch_regression(
                 "test_list": test_list,
                 "started_at": datetime.now().isoformat(),
             })
-            b64 = _b64.b64encode(job_info.encode()).decode()
-            # F-027: merged job-state write + PID watcher into single SSH call
-            # < /dev/null disconnects SSH stdin so the background watcher doesn't hold the session
+            # Write job file (sync, fast) — no base64, use printf directly
+            await ssh_run_with_retry(
+                f"printf '%s' {shell_quote(job_info)} > {job_file}",
+                timeout=15,
+            )
+            # Launch PID watcher independently using nohup pattern (fully detached from SSH session)
             if test_pid:
                 test_done = f"{test_log}.done"
                 await ssh_run(
-                    f"echo {b64} | base64 -d > {job_file} && "
-                    f"(while kill -0 {test_pid}; do sleep 2; done; touch {test_done}) < /dev/null >& /dev/null &",
-                    timeout=15,
+                    f"(nohup bash -c 'while kill -0 {test_pid} 2>/dev/null; do sleep 2; done; touch {shell_quote(test_done)}' "
+                    f"< /dev/null >& /dev/null &)",
+                    timeout=10,
                 )
-            else:
-                await ssh_run(f"echo {b64} | base64 -d > {job_file}", timeout=15)
 
             # Per-test poll (P6-1/P6-2/P6-5 via poll_batch_log)
             _, timed_out = await poll_batch_log(test_log, 600)

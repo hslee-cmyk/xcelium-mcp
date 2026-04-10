@@ -335,6 +335,7 @@ async def test_launch_nohup_pid_watcher_disconnects_stdin() -> None:
 
     with (
         patch("xcelium_mcp.batch_runner.ssh_run", side_effect=capturing_ssh_run),
+        patch("xcelium_mcp.batch_runner.ssh_run_with_retry", side_effect=capturing_ssh_run),
         patch(
             "xcelium_mcp.shell_utils.get_user_tmp_dir",
             new_callable=AsyncMock,
@@ -354,15 +355,23 @@ async def test_launch_nohup_pid_watcher_disconnects_stdin() -> None:
     assert watcher_cmds, "Expected a PID watcher SSH command"
     watcher_cmd = watcher_cmds[0]
 
-    # Must include '< /dev/null' BEFORE '>& /dev/null &' to detach stdin
-    assert "< /dev/null" in watcher_cmd, (
-        "PID watcher command missing '< /dev/null'. "
-        "Without it, SSH stdin stays open and the call hangs until simulation ends."
+    # Must use nohup bash -c to fully detach from SSH session
+    assert "nohup bash -c" in watcher_cmd, (
+        "PID watcher must use 'nohup bash -c' to fully detach from SSH session. "
+        "Without nohup, the watcher keeps the SSH session open until simulation ends."
     )
+    # Must include '< /dev/null' to detach stdin
+    assert "< /dev/null" in watcher_cmd, "PID watcher must include '< /dev/null'"
     # Must redirect stdout+stderr away from SSH session
     assert ">& /dev/null" in watcher_cmd, "PID watcher must redirect output with '>& /dev/null'"
-    # Must be backgrounded
-    assert watcher_cmd.strip().endswith("&"), "PID watcher must run in background with trailing '&'"
+    # Must be backgrounded (ends with '&' or '&)' when wrapped in subshell)
+    stripped = watcher_cmd.strip()
+    assert stripped.endswith("&") or stripped.endswith("&)"), (
+        "PID watcher must run in background ('&' or '&)' at end)"
+    )
+    # Job file must use printf (not echo | base64 -d)
+    job_write_cmds = [c for c in captured_commands if "printf" in c and "job" in c]
+    assert job_write_cmds, "Job file write must use printf '%s' (not echo | base64 -d)"
 
 
 # ---------------------------------------------------------------------------

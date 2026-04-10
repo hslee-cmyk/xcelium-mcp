@@ -1,6 +1,9 @@
 """Unit tests for pure helper functions — no MCP, no I/O required."""
 from __future__ import annotations
 
+import asyncio
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 from xcelium_mcp.batch_runner import validate_extra_args
@@ -11,8 +14,10 @@ from xcelium_mcp.discovery import (
 from xcelium_mcp.shell_utils import (
     _parse_shm_path,
     _parse_time_ns,
+    get_ssh_cmd_timeout,
     is_safe_tcl_string,
     sanitize_signal_name,
+    ssh_run_with_retry,
 )
 
 # ---------------------------------------------------------------------------
@@ -224,3 +229,82 @@ class TestIsSafeTclString:
     ])
     def test_safe_passes(self, safe):
         assert is_safe_tcl_string(safe) is True
+
+
+# ---------------------------------------------------------------------------
+# get_ssh_cmd_timeout
+# ---------------------------------------------------------------------------
+
+def test_get_ssh_cmd_timeout_from_config() -> None:
+    """Reads ssh_command_timeout from runner config."""
+    runner = {"ssh_command_timeout": 60}
+    assert get_ssh_cmd_timeout(runner) == 60.0
+
+
+def test_get_ssh_cmd_timeout_default() -> None:
+    """Returns default 30s when key missing."""
+    assert get_ssh_cmd_timeout({}) == 30.0
+
+
+def test_get_ssh_cmd_timeout_coerced_to_float() -> None:
+    """Integer config value is returned as float."""
+    runner = {"ssh_command_timeout": 45}
+    result = get_ssh_cmd_timeout(runner)
+    assert result == 45.0
+    assert isinstance(result, float)
+
+
+# ---------------------------------------------------------------------------
+# ssh_run_with_retry
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_ssh_run_with_retry_success_first_attempt() -> None:
+    """Succeeds on first attempt — no retry needed."""
+    with patch("xcelium_mcp.shell_utils.ssh_run", new_callable=AsyncMock) as mock:
+        mock.return_value = "output"
+        result = await ssh_run_with_retry("echo hello", timeout=5.0)
+        assert result == "output"
+        assert mock.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_ssh_run_with_retry_retries_on_timeout() -> None:
+    """Retries on TimeoutError, succeeds on second attempt."""
+    with patch("xcelium_mcp.shell_utils.ssh_run", new_callable=AsyncMock) as mock:
+        mock.side_effect = [asyncio.TimeoutError("timeout"), "ok"]
+        with patch("xcelium_mcp.shell_utils.asyncio") as mock_asyncio:
+            mock_asyncio.TimeoutError = asyncio.TimeoutError
+            mock_asyncio.sleep = AsyncMock()
+            mock_asyncio.create_subprocess_shell = asyncio.create_subprocess_shell
+            mock_asyncio.subprocess = asyncio.subprocess
+            mock_asyncio.wait_for = asyncio.wait_for
+            result = await ssh_run_with_retry("cmd", timeout=5.0, max_retries=2, backoff_base=1.0)
+            assert result == "ok"
+            assert mock.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_ssh_run_with_retry_raises_after_max_retries() -> None:
+    """Raises TimeoutError after exhausting all retries."""
+    with patch("xcelium_mcp.shell_utils.ssh_run", new_callable=AsyncMock) as mock:
+        mock.side_effect = asyncio.TimeoutError("timeout")
+        with patch("xcelium_mcp.shell_utils.asyncio") as mock_asyncio:
+            mock_asyncio.TimeoutError = asyncio.TimeoutError
+            mock_asyncio.sleep = AsyncMock()
+            mock_asyncio.create_subprocess_shell = asyncio.create_subprocess_shell
+            mock_asyncio.subprocess = asyncio.subprocess
+            mock_asyncio.wait_for = asyncio.wait_for
+            with pytest.raises(asyncio.TimeoutError):
+                await ssh_run_with_retry("cmd", timeout=5.0, max_retries=1, backoff_base=1.0)
+            assert mock.call_count == 2  # original + 1 retry
+
+
+@pytest.mark.asyncio
+async def test_ssh_run_with_retry_no_retry_on_non_timeout() -> None:
+    """Non-timeout errors propagate immediately without retry."""
+    with patch("xcelium_mcp.shell_utils.ssh_run", new_callable=AsyncMock) as mock:
+        mock.side_effect = ValueError("bad command")
+        with pytest.raises(ValueError):
+            await ssh_run_with_retry("bad cmd", timeout=5.0, max_retries=2)
+        assert mock.call_count == 1  # no retry

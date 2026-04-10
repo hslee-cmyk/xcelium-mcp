@@ -55,6 +55,40 @@ class UserInputRequired(Exception):
 # ===================================================================
 
 
+def get_ssh_cmd_timeout(runner: dict, default: float = 30.0) -> float:
+    """Return SSH infrastructure command timeout from runner config or default.
+
+    Reads 'ssh_command_timeout' from .mcp_sim_config.json runner section.
+    Use this for infrastructure commands (file write, pid check, mkdir) —
+    NOT for simulation polling (poll_batch_log uses sim timeout from resolve_sim_params).
+    """
+    return float(runner.get("ssh_command_timeout", default))
+
+
+async def ssh_run_with_retry(
+    cmd: str,
+    timeout: float = 30.0,
+    max_retries: int = 2,
+    backoff_base: float = 2.0,
+) -> str:
+    """ssh_run with exponential backoff retry for transient SSH timeouts.
+
+    Retry only on asyncio.TimeoutError (transient SSH delay).
+    Non-timeout errors (command failure) propagate immediately without retry.
+
+    Backoff: attempt 0 → fail → wait 1s → attempt 1 → fail → wait 2s → attempt 2 → raise
+    """
+    for attempt in range(max_retries + 1):
+        try:
+            return await ssh_run(cmd, timeout=timeout)
+        except asyncio.TimeoutError:
+            if attempt == max_retries:
+                raise
+            wait = backoff_base ** attempt  # 1s, 2s
+            await asyncio.sleep(wait)
+    raise asyncio.TimeoutError(f"ssh_run_with_retry exhausted after {max_retries} retries: {cmd}")
+
+
 async def ssh_run(cmd: str, timeout: float = 60.0, log_file: str = "") -> str:
     """Run a shell command as a local subprocess.
 
