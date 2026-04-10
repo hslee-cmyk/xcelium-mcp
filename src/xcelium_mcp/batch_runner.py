@@ -125,59 +125,85 @@ def _resolve_exec_cmd(runner: dict, regression: bool = False) -> ExecInfo:
     return ExecInfo(cmd=cmd, needs_test_name=needs_test_name)
 
 
-async def _run_batch_single(
-    sim_dir: str,
-    test_name: str,
-    runner: dict,
-    rename_dump: bool = False,
-    run_duration: str = "",
-    timeout: int = 600,
-    sim_mode: str = "rtl",
-    extra_args: str = "",
-    dump_depth: str | None = None,
-    dump_signals: list[str] | None = None,
-    dump_window: dict | None = None,
-    sdf_file: str = "",
-    sdf_corner: str = "max",
-) -> str:
-    """Execute a single simulation test and return combined log output.
+async def parse_existing_job(job_file: str, timeout: int) -> str | None:
+    """Check for an existing batch job file and resume if the process is alive.
 
-    Strategy: nohup + PID watcher + adaptive log polling (P6-1/P6-2/P6-5).
+    If a valid job file exists and its PID is still alive, resumes polling
+    and returns the result string. If PID is dead or file is invalid,
+    cleans up the stale file and returns None.
 
-    SHM naming: Preprocesses setup_tcl to replace hardcoded SHM paths
-    (e.g. ``dump/ci_top.shm``) with test-specific names
-    (``dump/ci_top_{TEST_NAME}.shm``) before simulation runs.
-    Injected via MCP_INPUT_TCL env var so run_sim sources the modified tcl.
+    Args:
+        job_file: Path to the batch job JSON file.
+        timeout: Timeout in seconds for log polling if resuming.
 
-    v4.3: dump_depth/dump_signals control probe scope in setup tcl.
-           dump_window injects probe on/off + windowed run sequence.
-           sdf_file/sdf_corner for SDF override.
+    Returns:
+        Result string if an alive job was resumed, None otherwise.
     """
-    import time as _time
+    existing_job = await ssh_run(f"cat {job_file} || true")
+    if not existing_job.strip():
+        return None
+    try:
+        job = json.loads(existing_job)
+        pid = job.get("pid", 0)
+        # Guard: pid must be > 0 (kill -0 0 signals own process group → always ALIVE)
+        if pid > 0:
+            pid_alive = await ssh_run(f"(kill -0 {pid}) && echo ALIVE || echo DEAD")
+        else:
+            pid_alive = "DEAD"
+        if "ALIVE" in pid_alive:
+            # Previous batch still running → resume polling
+            result, _ = await _poll_batch_log(
+                job["log_file"], timeout,
+                f"(Resumed monitoring existing batch PID {pid})\n"
+            )
+            await ssh_run(f"rm -f {job_file}", timeout=5)
+            return result
+        # PID dead → stale job file, remove and start fresh
+        await ssh_run(f"rm -f {job_file}", timeout=5)
+    except (json.JSONDecodeError, KeyError):
+        await ssh_run(f"rm -f {job_file}", timeout=5)
+    return None
 
-    # v4.1: _resolve_sim_params for mode-aware params
-    # v4.3: dump_depth forwarded to resolve_sim_params
+
+async def build_batch_cmd(
+    runner: dict,
+    test_name: str,
+    sim_mode: str,
+    extra_args: str,
+    timeout: int,
+    dump_depth: str | None,
+    dump_signals: list[str] | None,
+    dump_window: dict | None,
+    sdf_file: str,
+    sdf_corner: str,
+    sim_dir: str,
+) -> tuple[str, str, str | None]:
+    """Resolve params, build exec command, and preprocess setup tcl.
+
+    Returns:
+        (env_prefix, cmd, preprocessed_tcl) tuple where:
+        - env_prefix: environment variable assignments for the shell command
+        - cmd: the resolved simulation command string
+        - preprocessed_tcl: path to preprocessed tcl file, or None
+    """
     validate_extra_args(extra_args)
     params = resolve_sim_params(runner, sim_mode, extra_args, timeout, dump_depth=dump_depth)
-    effective_timeout = params["timeout"]
     effective_dump_depth = params["dump_depth"]
 
-    # v4.1: use args_format from _resolve_sim_params
+    # Resolve exec command and format test args
     info = _resolve_exec_cmd(runner, regression=False)
-    # Format {test_name} placeholder with mode-specific args
-    # e.g. {test_name} → "-test VENEZIA_TOP015 --" instead of bare "VENEZIA_TOP015"
     test_args = params["test_args_format"].format(test_name=sq(test_name))
     cmd = info.cmd.format(test_name=test_args) if info.needs_test_name else info.cmd
     if params["extra_args"]:
         cmd = f"{cmd} {params['extra_args']}"
 
-    # v4.3: SDF override — disable TB $sdf_annotate + generate tfile
+    # SDF override
     if sdf_file:
         sdf_extra = await _handle_sdf_override(sim_dir, runner, sdf_file, sdf_corner)
         if sdf_extra:
             cmd = f"{cmd} {sdf_extra}"
 
-    # SHM naming + probe scope + dump window: preprocess setup_tcl.
+    # SHM naming + probe scope + dump window: preprocess setup_tcl
     env_prefix = f"TEST_NAME={sq(test_name)} "
     preprocessed_tcl = await _preprocess_setup_tcl(
         sim_dir, runner, test_name, sim_mode,
@@ -187,49 +213,38 @@ async def _run_batch_single(
     if preprocessed_tcl:
         env_prefix += f"MCP_INPUT_TCL={sq(preprocessed_tcl)} "
 
-    # Always use nohup + stdbuf + polling (no direct ssh_run for batch)
-    # Direct ssh_run returns entire compile+sim log (1MB+) — unusable.
-    # nohup + polling returns grep summary only.
+    return env_prefix, cmd, preprocessed_tcl
 
-    # --- nohup + stdbuf + job resume ---
+
+async def launch_nohup_job(
+    sim_dir: str,
+    run_cmd: str,
+    log_file: str,
+    test_name: str,
+    job_file: str,
+) -> int:
+    """Launch a nohup batch job and save job state for resume.
+
+    Starts the simulation via nohup in a subshell, reads the PID,
+    saves a job file for reconnection, and starts a PID watcher.
+
+    Args:
+        sim_dir: Simulation working directory.
+        run_cmd: Full command string (with env prefix) to execute.
+        log_file: Path to the log file for output redirection.
+        test_name: Test name (for pgrep fallback).
+        job_file: Path to save job state JSON.
+
+    Returns:
+        PID of the launched process (0 if unknown).
+    """
+    import time as _time
+
+    ts = int(_time.time())
     from xcelium_mcp.shell_utils import get_user_tmp_dir
     user_tmp = await get_user_tmp_dir()
-    job_file = f"{user_tmp}/batch_job.json"
 
-    # Check for existing job (reconnection scenario)
-    existing_job = await ssh_run(f"cat {job_file} || true")
-    if existing_job.strip():
-        try:
-            job = json.loads(existing_job)
-            pid = job.get("pid", 0)
-            # Guard: pid must be > 0 (kill -0 0 signals own process group → always ALIVE)
-            if pid > 0:
-                pid_alive = await ssh_run(f"(kill -0 {pid}) && echo ALIVE || echo DEAD")
-            else:
-                pid_alive = "DEAD"
-            if "ALIVE" in pid_alive:
-                # Previous batch still running → resume polling
-                result, _ = await _poll_batch_log(
-                    job["log_file"], effective_timeout,
-                    f"(Resumed monitoring existing batch PID {pid})\n"
-                )
-                await ssh_run(f"rm -f {job_file}", timeout=5)
-                return result
-            # PID dead → stale job file, remove and start fresh
-            await ssh_run(f"rm -f {job_file}", timeout=5)
-        except (json.JSONDecodeError, KeyError):
-            await ssh_run(f"rm -f {job_file}", timeout=5)
-
-    # Start new batch job
-    ts = int(_time.time())
-    log_file = f"{user_tmp}/batch_{ts}.log"
-
-    # env VAR=val nohup ... — nohup treats first arg as command, so use env
-    # Note: stdbuf removed — LD_PRELOAD incompatible with Xcelium binaries
-    run_cmd = f"env {env_prefix}{cmd}"
-    # B-0 fix: subshell wrapping to prevent PIPE fd inheritance.
-    # Without subshell, nohup child inherits asyncio PIPE fds → communicate()
-    # blocks until simulation ends → 15s timeout always fires.
+    # B-0 fix: subshell wrapping to prevent PIPE fd inheritance
     pid_file = f"{user_tmp}/batch_pid_{ts}"
     await ssh_run(
         f"cd {sq(sim_dir)} && "
@@ -266,14 +281,84 @@ async def _run_batch_single(
             timeout=5,
         )
 
-    # Poll for completion
-    result, _ = await _poll_batch_log(log_file, effective_timeout)
+    return pid
 
-    # Cleanup job file
+
+async def watch_pid_and_poll(
+    pid: int,
+    log_file: str,
+    job_file: str,
+    timeout: int,
+) -> str:
+    """Poll batch log for completion and clean up job file.
+
+    Waits for the batch simulation to complete by polling the log file,
+    then removes the job state file.
+
+    Args:
+        pid: Process ID of the batch job (unused but kept for future use).
+        log_file: Path to the batch log file to poll.
+        job_file: Path to the job state file to clean up.
+        timeout: Timeout in seconds for polling.
+
+    Returns:
+        Result string from log polling.
+    """
+    result, _ = await _poll_batch_log(log_file, timeout)
     await ssh_run(f"rm -f {job_file}", timeout=5)
+    return result
+
+
+async def _run_batch_single(
+    sim_dir: str,
+    test_name: str,
+    runner: dict,
+    rename_dump: bool = False,
+    run_duration: str = "",
+    timeout: int = 600,
+    sim_mode: str = "rtl",
+    extra_args: str = "",
+    dump_depth: str | None = None,
+    dump_signals: list[str] | None = None,
+    dump_window: dict | None = None,
+    sdf_file: str = "",
+    sdf_corner: str = "max",
+) -> str:
+    """Execute a single simulation test and return combined log output.
+
+    Orchestrator that delegates to parse_existing_job, build_batch_cmd,
+    launch_nohup_job, and watch_pid_and_poll.
+
+    Strategy: nohup + PID watcher + adaptive log polling (P6-1/P6-2/P6-5).
+    """
+    import time as _time
+
+    from xcelium_mcp.shell_utils import get_user_tmp_dir
+    user_tmp = await get_user_tmp_dir()
+    job_file = f"{user_tmp}/batch_job.json"
+
+    # Resume existing job if alive
+    params = resolve_sim_params(runner, sim_mode, extra_args, timeout, dump_depth=dump_depth)
+    effective_timeout = params["timeout"]
+    resumed = await parse_existing_job(job_file, effective_timeout)
+    if resumed is not None:
+        return resumed
+
+    # Build command
+    env_prefix, cmd, preprocessed_tcl = await build_batch_cmd(
+        runner, test_name, sim_mode, extra_args, timeout,
+        dump_depth, dump_signals, dump_window, sdf_file, sdf_corner, sim_dir,
+    )
+
+    # Launch
+    log_file = f"{user_tmp}/batch_{int(_time.time())}.log"
+    run_cmd = f"env {env_prefix}{cmd}"
+    pid = await launch_nohup_job(sim_dir, run_cmd, log_file, test_name, job_file)
+
+    # Poll + cleanup
+    result = await watch_pid_and_poll(pid, log_file, job_file, effective_timeout)
 
     # Method 6-B fallback (deprecated — kept for backward compat)
-    # Prefer preprocessed_tcl approach above which names SHM correctly from the start.
     if rename_dump and not preprocessed_tcl:
         mv_cmd = (
             f"cd {sq(sim_dir)} && "
