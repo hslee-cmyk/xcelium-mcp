@@ -9,7 +9,7 @@ from datetime import datetime
 from mcp.server.fastmcp import FastMCP
 
 from xcelium_mcp.batch_runner import resolve_test_name
-from xcelium_mcp.bridge_manager import BridgeManager
+from xcelium_mcp.bridge_manager import BridgeManager, scan_ready_files
 from xcelium_mcp.registry import config_action, load_sim_config
 from xcelium_mcp.sim_runner import (
     UserInputRequired,
@@ -27,12 +27,9 @@ from xcelium_mcp.tcl_bridge import TclBridge, TclError
 
 async def _find_ready_file(target: str) -> tuple[int, str]:
     """Find ready file matching target type."""
-    user_tmp = await get_user_tmp_dir()
-    r = await ssh_run(f"cat {user_tmp}/bridge_ready_* || true")
-    for line in r.strip().splitlines():
-        parts = line.strip().split()
-        if len(parts) >= 2 and parts[1] == target:
-            return int(parts[0]), parts[1]
+    entries = await scan_ready_files(target=target)
+    if entries:
+        return entries[0]
     return 0, target
 
 
@@ -52,19 +49,12 @@ async def _read_bridge_type(port: int) -> str:
 
 async def _auto_connect_all(bridges: BridgeManager, host: str, timeout: float) -> str:
     """Scan all ready files, connect to each, assign to appropriate slot."""
-    results = []
-
-    user_tmp = await get_user_tmp_dir()
-    r = await ssh_run(f"cat {user_tmp}/bridge_ready_* || true")
-    if not r.strip():
+    entries = await scan_ready_files()
+    if not entries:
         return "No bridges found. Run sim_bridge_run or simvision_start first."
 
-    for line in r.strip().splitlines():
-        parts = line.strip().split()
-        if len(parts) < 2:
-            continue
-        p, btype = int(parts[0]), parts[1]
-
+    results = []
+    for p, btype in entries:
         bridge = TclBridge(host=host, port=p, timeout=timeout)
         try:
             ping = await bridge.connect()

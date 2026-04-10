@@ -5,7 +5,36 @@ Single instance created in server.py, passed to tools and sim_runner via DI.
 """
 from __future__ import annotations
 
+from xcelium_mcp.shell_utils import ssh_run
+from xcelium_mcp.sim_runner import get_user_tmp_dir
 from xcelium_mcp.tcl_bridge import TclBridge
+
+
+async def scan_ready_files(
+    target: str | None = None,
+) -> list[tuple[int, str]]:
+    """Scan bridge ready files and return list of (port, bridge_type) tuples.
+
+    Args:
+        target: Filter by bridge type ("xmsim" or "simvision"). None = return all.
+
+    Returns:
+        List of (port, type) tuples found in ready files.
+    """
+    user_tmp = await get_user_tmp_dir()
+    r = await ssh_run(f"cat {user_tmp}/bridge_ready_* || true")
+    results: list[tuple[int, str]] = []
+    for line in r.strip().splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 2:
+            try:
+                port = int(parts[0])
+            except ValueError:
+                continue
+            btype = parts[1]
+            if target is None or btype == target:
+                results.append((port, btype))
+    return results
 
 
 class BridgeManager:

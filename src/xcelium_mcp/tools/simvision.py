@@ -10,7 +10,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from xcelium_mcp.batch_runner import resolve_test_name
-from xcelium_mcp.bridge_manager import BridgeManager
+from xcelium_mcp.bridge_manager import BridgeManager, scan_ready_files
 from xcelium_mcp.env_detection import _detect_vnc_display
 from xcelium_mcp.registry import load_sim_config
 from xcelium_mcp.shell_utils import validate_path
@@ -131,19 +131,14 @@ def register(
             bridges.set_simvision(None)
 
         # 1. Check existing SimVision bridge → auto-connect
-        user_tmp = await get_user_tmp_dir()
-        r = await ssh_run(f"cat {user_tmp}/bridge_ready_* || true")
-        for line in r.strip().splitlines():
-            parts = line.strip().split()
-            if len(parts) >= 2 and parts[1] == "simvision":
-                port = int(parts[0])
-                bridge = TclBridge(host="localhost", port=port)
-                try:
-                    ping = await bridge.connect()
-                    bridges.set_simvision(bridge)
-                    return f"SimVision already running — connected to port {port} (ping={ping})"
-                except (ConnectionError, asyncio.TimeoutError, OSError, TclError):
-                    pass
+        for port, _btype in await scan_ready_files(target="simvision"):
+            bridge = TclBridge(host="localhost", port=port)
+            try:
+                ping = await bridge.connect()
+                bridges.set_simvision(bridge)
+                return f"SimVision already running — connected to port {port} (ping={ping})"
+            except (ConnectionError, asyncio.TimeoutError, OSError, TclError):
+                pass
 
         # 2. Resolve sim_dir + config
         try:
@@ -212,25 +207,21 @@ def register(
         # 7. Wait for bridge ready + auto-connect
         for i in range(30):
             await asyncio.sleep(2)
-            r = await ssh_run(f"cat {user_tmp}/bridge_ready_* || true")
-            for line in r.strip().splitlines():
-                parts = line.strip().split()
-                if len(parts) >= 2 and parts[1] == "simvision":
-                    port = int(parts[0])
-                    bridge = TclBridge(host="localhost", port=port)
-                    try:
-                        ping = await bridge.connect()
-                        bridges.set_simvision(bridge)
-                        return (
-                            f"SimVision started and connected.\n"
-                            f"  display: {display}\n"
-                            f"  port: {port}\n"
-                            f"  run_dir: {run_dir_path}\n"
-                            f"  shm: {shm_path or '(none)'}\n"
-                            f"  log: {log_file}"
-                        )
-                    except (ConnectionError, asyncio.TimeoutError, OSError, TclError):
-                        continue
+            for port, _btype in await scan_ready_files(target="simvision"):
+                bridge = TclBridge(host="localhost", port=port)
+                try:
+                    ping = await bridge.connect()
+                    bridges.set_simvision(bridge)
+                    return (
+                        f"SimVision started and connected.\n"
+                        f"  display: {display}\n"
+                        f"  port: {port}\n"
+                        f"  run_dir: {run_dir_path}\n"
+                        f"  shm: {shm_path or '(none)'}\n"
+                        f"  log: {log_file}"
+                    )
+                except (ConnectionError, asyncio.TimeoutError, OSError, TclError):
+                    continue
 
         log_tail = await ssh_run(f"tail -10 {log_file} || true")
         return f"ERROR: SimVision bridge not ready after 60s.\nLog:\n{log_tail}"
@@ -538,13 +529,8 @@ def register(
             bridge_ready = False
             for _i in range(15):
                 await asyncio.sleep(2)
-                r = await ssh_run(f"cat {user_tmp}/bridge_ready_* || true")
-                for line in r.strip().splitlines():
-                    parts = line.strip().split()
-                    if len(parts) >= 2 and parts[1] == "simvision":
-                        bridge_ready = True
-                        break
-                if bridge_ready:
+                if await scan_ready_files(target="simvision"):
+                    bridge_ready = True
                     break
             if not bridge_ready:
                 return (

@@ -780,32 +780,30 @@ async def _start_bridge(
         await bridges.xmsim_raw.disconnect()
         bridges.set_xmsim(None)
 
+    from xcelium_mcp.bridge_manager import scan_ready_files
+
     last_exc: Exception | None = None
     for i in range(effective_timeout // 2):
         await asyncio.sleep(2)
-        r = await ssh_run(f"cat {user_tmp}/bridge_ready_* || true")
-        for line in r.strip().splitlines():
-            parts = line.strip().split()
-            if len(parts) >= 2 and parts[1] == "xmsim":
-                actual_port = int(parts[0])
-                new_bridge = _TB(host="localhost", port=actual_port)
-                try:
-                    ping = await new_bridge.connect()
-                    if bridges is not None:
-                        bridges.set_xmsim(new_bridge)
-                    return (
-                        f"Simulation started and connected (bridge mode, {sim_mode}).\n"
-                        f"  test: {test_name}\n"
-                        f"  setup_tcl: {setup_tcl}\n"
-                        f"  port: {actual_port}\n"
-                        f"  ping: {ping}\n"
-                        f"  log: {log_file}\n\n"
-                        f"Ready. sim_run, get_signal_value etc. available immediately."
-                    )
-                except (ConnectionError, asyncio.TimeoutError, OSError, _TclError) as e:
-                    last_exc = e
-                    logger.debug("bridge connect attempt failed: %s", e)
-                    continue
+        for actual_port, _btype in await scan_ready_files(target="xmsim"):
+            new_bridge = _TB(host="localhost", port=actual_port)
+            try:
+                ping = await new_bridge.connect()
+                if bridges is not None:
+                    bridges.set_xmsim(new_bridge)
+                return (
+                    f"Simulation started and connected (bridge mode, {sim_mode}).\n"
+                    f"  test: {test_name}\n"
+                    f"  setup_tcl: {setup_tcl}\n"
+                    f"  port: {actual_port}\n"
+                    f"  ping: {ping}\n"
+                    f"  log: {log_file}\n\n"
+                    f"Ready. sim_run, get_signal_value etc. available immediately."
+                )
+            except (ConnectionError, asyncio.TimeoutError, OSError, _TclError) as e:
+                last_exc = e
+                logger.debug("bridge connect attempt failed: %s", e)
+                continue
 
     # P-1 fix: kill orphaned xmsim process on timeout
     ps = await ssh_run("pgrep -la xmsim || true", timeout=5)
