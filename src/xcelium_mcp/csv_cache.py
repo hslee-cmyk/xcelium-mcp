@@ -5,7 +5,7 @@ In-memory cache: (shm_path, frozenset(signals), start_ns, end_ns) → CSV file p
 
 Architecture note:
   xcelium-mcp runs ON cloud0 — all Path operations target cloud0 local filesystem.
-  ssh_run() is a local asyncio subprocess, not a remote SSH hop.
+  shell_run() is a local asyncio subprocess, not a remote SSH hop.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import hashlib
 from collections import OrderedDict, deque
 from pathlib import Path
 
-from xcelium_mcp.shell_utils import get_user_tmp_dir, sanitize_signal_name, shell_quote, ssh_run
+from xcelium_mcp.shell_utils import get_user_tmp_dir, sanitize_signal_name, shell_quote, shell_run
 
 # ---------------------------------------------------------------------------
 # simvisdbutil path resolution — MCP server runs in bash without EDA PATH
@@ -153,7 +153,7 @@ async def extract(
     else:
         cmd = svdb_cmd  # fallback: try direct
 
-    out = await ssh_run(cmd, timeout=120.0)
+    out = await shell_run(cmd, timeout=120.0)
 
     # Validate output
     if not await asyncio.to_thread(Path(output_path).exists):

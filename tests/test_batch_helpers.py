@@ -3,7 +3,7 @@
 Tests pure/thin helpers: parse_existing_job, build_batch_cmd,
 launch_nohup_job, watch_pid_and_poll.
 
-Since these helpers use ssh_run (subprocess calls), we mock ssh_run
+Since these helpers use shell_run (subprocess calls), we mock shell_run
 for unit testing. Pure functions like resolve_sim_params and
 _resolve_exec_cmd are tested directly.
 """
@@ -48,7 +48,7 @@ def _make_runner(**overrides) -> dict:
 @pytest.mark.asyncio
 async def test_parse_existing_job_no_file() -> None:
     """Empty cat output (no job file) returns None."""
-    with patch("xcelium_mcp.batch_runner.ssh_run", new_callable=AsyncMock) as mock_ssh:
+    with patch("xcelium_mcp.batch_runner.shell_run", new_callable=AsyncMock) as mock_ssh:
         mock_ssh.return_value = ""
         result = await parse_existing_job("/tmp/batch_job.json", timeout=600)
         assert result is None
@@ -59,7 +59,7 @@ async def test_parse_existing_job_no_file() -> None:
 async def test_parse_existing_job_dead_pid() -> None:
     """Dead PID in job file: cleans up and returns None."""
     job = json.dumps({"pid": 12345, "log_file": "/tmp/batch.log", "test_name": "T1"})
-    with patch("xcelium_mcp.batch_runner.ssh_run", new_callable=AsyncMock) as mock_ssh:
+    with patch("xcelium_mcp.batch_runner.shell_run", new_callable=AsyncMock) as mock_ssh:
         mock_ssh.side_effect = [
             job,       # cat job_file
             "DEAD",    # kill -0 check
@@ -75,7 +75,7 @@ async def test_parse_existing_job_alive_pid() -> None:
     """Alive PID: resumes polling and returns result."""
     job = json.dumps({"pid": 99, "log_file": "/tmp/batch.log", "test_name": "T1"})
     with (
-        patch("xcelium_mcp.batch_runner.ssh_run", new_callable=AsyncMock) as mock_ssh,
+        patch("xcelium_mcp.batch_runner.shell_run", new_callable=AsyncMock) as mock_ssh,
         patch("xcelium_mcp.batch_runner.poll_batch_log", new_callable=AsyncMock) as mock_poll,
     ):
         mock_ssh.side_effect = [
@@ -91,7 +91,7 @@ async def test_parse_existing_job_alive_pid() -> None:
 @pytest.mark.asyncio
 async def test_parse_existing_job_invalid_json() -> None:
     """Invalid JSON in job file: cleans up and returns None."""
-    with patch("xcelium_mcp.batch_runner.ssh_run", new_callable=AsyncMock) as mock_ssh:
+    with patch("xcelium_mcp.batch_runner.shell_run", new_callable=AsyncMock) as mock_ssh:
         mock_ssh.side_effect = [
             "not-valid-json",  # cat job_file
             "",                # rm -f job_file
@@ -104,7 +104,7 @@ async def test_parse_existing_job_invalid_json() -> None:
 async def test_parse_existing_job_zero_pid() -> None:
     """PID=0 in job file is treated as dead (kill -0 0 signals own group)."""
     job = json.dumps({"pid": 0, "log_file": "/tmp/batch.log", "test_name": "T1"})
-    with patch("xcelium_mcp.batch_runner.ssh_run", new_callable=AsyncMock) as mock_ssh:
+    with patch("xcelium_mcp.batch_runner.shell_run", new_callable=AsyncMock) as mock_ssh:
         mock_ssh.side_effect = [
             job,   # cat job_file
             "",    # rm -f job_file (pid_alive = "DEAD" without SSH call)
@@ -239,7 +239,7 @@ async def test_build_batch_cmd_with_sdf() -> None:
 async def test_launch_nohup_returns_pid() -> None:
     """Verify PID extraction from pid file."""
     with (
-        patch("xcelium_mcp.batch_runner.ssh_run", new_callable=AsyncMock) as mock_ssh,
+        patch("xcelium_mcp.batch_runner.shell_run", new_callable=AsyncMock) as mock_ssh,
         patch(
             "xcelium_mcp.shell_utils.get_user_tmp_dir",
             new_callable=AsyncMock,
@@ -267,7 +267,7 @@ async def test_launch_nohup_returns_pid() -> None:
 async def test_launch_nohup_pid_fallback_pgrep() -> None:
     """When pid file is empty, falls back to pgrep."""
     with (
-        patch("xcelium_mcp.batch_runner.ssh_run", new_callable=AsyncMock) as mock_ssh,
+        patch("xcelium_mcp.batch_runner.shell_run", new_callable=AsyncMock) as mock_ssh,
         patch(
             "xcelium_mcp.shell_utils.get_user_tmp_dir",
             new_callable=AsyncMock,
@@ -296,7 +296,7 @@ async def test_launch_nohup_pid_fallback_pgrep() -> None:
 async def test_launch_nohup_no_pid() -> None:
     """When neither pid file nor pgrep returns a number, pid=0."""
     with (
-        patch("xcelium_mcp.batch_runner.ssh_run", new_callable=AsyncMock) as mock_ssh,
+        patch("xcelium_mcp.batch_runner.shell_run", new_callable=AsyncMock) as mock_ssh,
         patch(
             "xcelium_mcp.shell_utils.get_user_tmp_dir",
             new_callable=AsyncMock,
@@ -324,18 +324,18 @@ async def test_launch_nohup_pid_watcher_disconnects_stdin() -> None:
     """PID watcher SSH command must include '< /dev/null' to disconnect stdin.
 
     Without '< /dev/null', the background PID watcher keeps SSH stdin open,
-    causing the ssh_run call to hang until the watcher exits (which can be
+    causing the shell_run call to hang until the watcher exits (which can be
     minutes). This test prevents regression of the F-027 SSH timeout bug.
     """
     captured_commands: list[str] = []
 
-    async def capturing_ssh_run(cmd: str, timeout: float = 30) -> str:
+    async def capturing_shell_run(cmd: str, timeout: float = 30) -> str:
         captured_commands.append(cmd)
         return "42" if "cat" in cmd and "pid" in cmd else ""
 
     with (
-        patch("xcelium_mcp.batch_runner.ssh_run", side_effect=capturing_ssh_run),
-        patch("xcelium_mcp.batch_runner.ssh_run_with_retry", side_effect=capturing_ssh_run),
+        patch("xcelium_mcp.batch_runner.shell_run", side_effect=capturing_shell_run),
+        patch("xcelium_mcp.batch_runner.shell_run_with_retry", side_effect=capturing_shell_run),
         patch(
             "xcelium_mcp.shell_utils.get_user_tmp_dir",
             new_callable=AsyncMock,
@@ -384,7 +384,7 @@ async def test_watch_pid_and_poll_returns_result() -> None:
     """Verify polling result is returned and job file is cleaned."""
     with (
         patch("xcelium_mcp.batch_polling.poll_batch_log", new_callable=AsyncMock) as mock_poll,
-        patch("xcelium_mcp.batch_polling.ssh_run", new_callable=AsyncMock) as mock_ssh,
+        patch("xcelium_mcp.batch_polling.shell_run", new_callable=AsyncMock) as mock_ssh,
     ):
         mock_poll.return_value = ("PASS: test completed", False)
         mock_ssh.return_value = ""  # rm -f job_file

@@ -12,7 +12,7 @@ from xcelium_mcp.bridge_lifecycle import start_bridge_simulation
 from xcelium_mcp.bridge_manager import BridgeManager, scan_ready_files
 from xcelium_mcp.discovery import resolve_sim_dir, run_full_discovery
 from xcelium_mcp.registry import config_action, load_sim_config
-from xcelium_mcp.shell_utils import UserInputRequired, get_user_tmp_dir, ssh_run
+from xcelium_mcp.shell_utils import UserInputRequired, get_user_tmp_dir, shell_run
 from xcelium_mcp.tcl_bridge import BRIDGE_ERRORS, TclBridge, TclError
 from xcelium_mcp.test_resolution import resolve_test_name
 
@@ -31,7 +31,7 @@ async def _find_ready_file(target: str) -> tuple[int, str]:
 async def _read_bridge_type(port: int) -> str:
     """Read bridge type from ready file for given port."""
     user_tmp = await get_user_tmp_dir()
-    r = await ssh_run(f"cat {user_tmp}/bridge_ready_{port} || true")
+    r = await shell_run(f"cat {user_tmp}/bridge_ready_{port} || true")
     parts = r.strip().split()
     if len(parts) >= 2:
         return parts[1]
@@ -97,7 +97,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             cmd = discovery.get("command", "")
             if not cmd:
                 return "ERROR: test_discovery.command not configured.\nSet via: mcp_config set test_discovery.command '<command>'"
-            r = await ssh_run(f"cd {resolved_dir} && {cmd}", timeout=30)
+            r = await shell_run(f"cd {resolved_dir} && {cmd}", timeout=30)
             cached = [t.strip() for t in r.strip().splitlines() if t.strip()]
             if cached:
                 # Cache via config_action (write centralization)
@@ -277,7 +277,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
                 finally:
                     bridges.set_simvision(None)
                     if port:
-                        await ssh_run(f"rm -f {user_tmp}/bridge_ready_{port}")
+                        await shell_run(f"rm -f {user_tmp}/bridge_ready_{port}")
             else:
                 bridge = bridges.xmsim
                 port = bridge.port if hasattr(bridge, 'port') else 0
@@ -289,7 +289,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
                 finally:
                     bridges.set_xmsim(None)
                     if port:
-                        await ssh_run(f"rm -f {user_tmp}/bridge_ready_{port}")
+                        await shell_run(f"rm -f {user_tmp}/bridge_ready_{port}")
 
         else:
             return f"ERROR: Unknown action '{action}'. Use 'bridge' or 'shutdown'."

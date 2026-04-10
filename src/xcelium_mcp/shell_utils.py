@@ -1,7 +1,7 @@
 """shell_utils.py — Core shell utilities for xcelium-mcp.
 
 Extracted from sim_runner.py (v4.4 code review refactoring).
-Contains: shell_quote, ssh_run, build_redirect, login_shell_cmd,
+Contains: shell_quote, shell_run, build_redirect, login_shell_cmd,
 validate_path, sanitize_signal_name, is_safe_tcl_string,
 UserInputRequired.
 
@@ -65,13 +65,13 @@ def get_ssh_cmd_timeout(runner: dict, default: float = 30.0) -> float:
     return float(runner.get("ssh_command_timeout", default))
 
 
-async def ssh_run_with_retry(
+async def shell_run_with_retry(
     cmd: str,
     timeout: float = 30.0,
     max_retries: int = 2,
     backoff_base: float = 2.0,
 ) -> str:
-    """ssh_run with exponential backoff retry for transient SSH timeouts.
+    """shell_run with exponential backoff retry for transient SSH timeouts.
 
     Retry only on asyncio.TimeoutError (transient SSH delay).
     Non-timeout errors (command failure) propagate immediately without retry.
@@ -80,16 +80,16 @@ async def ssh_run_with_retry(
     """
     for attempt in range(max_retries + 1):
         try:
-            return await ssh_run(cmd, timeout=timeout)
+            return await shell_run(cmd, timeout=timeout)
         except asyncio.TimeoutError:
             if attempt == max_retries:
                 raise
             wait = backoff_base ** attempt  # 1s, 2s
             await asyncio.sleep(wait)
-    raise asyncio.TimeoutError(f"ssh_run_with_retry exhausted after {max_retries} retries: {cmd}")
+    raise asyncio.TimeoutError(f"shell_run_with_retry exhausted after {max_retries} retries: {cmd}")
 
 
-async def ssh_run(cmd: str, timeout: float = 60.0, log_file: str = "") -> str:
+async def shell_run(cmd: str, timeout: float = 60.0, log_file: str = "") -> str:
     """Run a shell command as a local subprocess.
 
     Since xcelium-mcp runs on cloud0, this is a local asyncio subprocess —
@@ -113,7 +113,7 @@ async def ssh_run(cmd: str, timeout: float = 60.0, log_file: str = "") -> str:
     except asyncio.TimeoutError:
         proc.kill()
         await proc.communicate()
-        raise asyncio.TimeoutError(f"ssh_run timeout ({timeout}s): {cmd}")
+        raise asyncio.TimeoutError(f"shell_run timeout ({timeout}s): {cmd}")
     return (stdout + stderr).decode("utf-8", errors="replace").strip()
 
 
@@ -124,7 +124,7 @@ def login_shell_cmd(login_shell: str, cmd: str) -> str:
     tcsh has no stderr-only redirect syntax — '2>' causes 'Ambiguous redirect'.
     If stderr suppression is needed, either:
       - Filter results in Python (e.g. check '/' in path for 'which' output)
-      - Add ssh_run(stderr_mode="drop") parameter (implement when needed)
+      - Add shell_run(stderr_mode="drop") parameter (implement when needed)
     """
     safe_cmd = cmd.replace("'", "'\\''")
     if "tcsh" in login_shell or "csh" in login_shell:
@@ -151,7 +151,7 @@ def build_eda_command(runner: dict, inner_cmd: str) -> str:
         inner_cmd: The command to run after environment setup.
 
     Returns:
-        Shell command string ready for ssh_run().
+        Shell command string ready for shell_run().
     """
     env_files = runner.get("env_files", [])
     if runner.get("source_separately") and env_files:
@@ -258,10 +258,10 @@ async def get_user_tmp_dir() -> str:
         # Double-check after acquiring lock
         if _USER_TMP:
             return _USER_TMP
-        r = await ssh_run("id -u", timeout=5)
+        r = await shell_run("id -u", timeout=5)
         uid = r.strip()
         _USER_TMP = f"/tmp/xcelium_mcp_{uid}"
-        await ssh_run(f"mkdir -p {_USER_TMP}", timeout=5)
+        await shell_run(f"mkdir -p {_USER_TMP}", timeout=5)
         return _USER_TMP
 
 

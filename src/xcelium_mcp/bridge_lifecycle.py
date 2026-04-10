@@ -17,7 +17,7 @@ from xcelium_mcp.shell_utils import (
     get_user_tmp_dir,
     login_shell_cmd,
     shell_quote,
-    ssh_run,
+    shell_run,
 )
 from xcelium_mcp.tcl_bridge import DEFAULT_BRIDGE_PORT
 from xcelium_mcp.test_resolution import resolve_sim_params
@@ -127,7 +127,7 @@ async def _start_bridge(
     bridge_tcl = bridge.get("tcl_path", "")
     script = runner.get("script", "run_sim")
 
-    ps = await ssh_run("pgrep -la xmsim || true", timeout=5)
+    ps = await shell_run("pgrep -la xmsim || true", timeout=5)
     if ps.strip():
         return (
             f"ERROR: xmsim already running:\n{ps.strip()}\n"
@@ -136,7 +136,7 @@ async def _start_bridge(
 
     # P4: per-user temp directory
     user_tmp = await get_user_tmp_dir()
-    await ssh_run(f"rm -f {user_tmp}/bridge_ready_*", timeout=5)
+    await shell_run(f"rm -f {user_tmp}/bridge_ready_*", timeout=5)
 
     script_shell = runner.get("script_shell", runner.get("env_shell", "/bin/sh"))
     params = resolve_sim_params(runner, sim_mode, extra_args=extra_args, timeout=timeout,
@@ -148,7 +148,7 @@ async def _start_bridge(
     log_file = f"{user_tmp}/sim_start_{port}.log"
 
     filtered_tcl = f"{user_tmp}/setup_filtered_{port}.tcl"
-    await ssh_run(
+    await shell_run(
         f"sed '"
         f"/^[[:space:]]*run[[:space:]]*$/d; "
         f"/^[[:space:]]*run[[:space:]]/d; "
@@ -190,7 +190,7 @@ async def _start_bridge(
         f"(nohup {shell_cmd} "
         f"{build_redirect(log_file)} < /dev/null &)"
     )
-    await ssh_run(cmd, timeout=15)
+    await shell_run(cmd, timeout=15)
 
     from xcelium_mcp.tcl_bridge import BRIDGE_ERRORS as _BRIDGE_ERRORS
     from xcelium_mcp.tcl_bridge import TclBridge as _TB
@@ -249,11 +249,11 @@ async def _start_bridge(
                 continue
 
     # P-1 fix: kill orphaned xmsim process on timeout
-    ps = await ssh_run("pgrep -la xmsim || true", timeout=5)
+    ps = await shell_run("pgrep -la xmsim || true", timeout=5)
     if ps.strip():
         logger.warning("Bridge timeout — killing orphaned xmsim: %s", ps.strip())
-        await ssh_run("pkill -f xmsim || true", timeout=5)
+        await shell_run("pkill -f xmsim || true", timeout=5)
 
-    log_tail = await ssh_run(f"tail -20 {log_file} || true", timeout=5)
+    log_tail = await shell_run(f"tail -20 {log_file} || true", timeout=5)
     exc_info = f"\nLast error: {last_exc}" if last_exc else ""
     return f"ERROR: bridge not ready after {timeout}s.{exc_info}\nLog tail:\n{log_tail}"

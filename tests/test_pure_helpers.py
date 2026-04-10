@@ -17,7 +17,7 @@ from xcelium_mcp.shell_utils import (
     get_ssh_cmd_timeout,
     is_safe_tcl_string,
     sanitize_signal_name,
-    ssh_run_with_retry,
+    shell_run_with_retry,
 )
 
 # ---------------------------------------------------------------------------
@@ -255,23 +255,23 @@ def test_get_ssh_cmd_timeout_coerced_to_float() -> None:
 
 
 # ---------------------------------------------------------------------------
-# ssh_run_with_retry
+# shell_run_with_retry
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_ssh_run_with_retry_success_first_attempt() -> None:
+async def test_shell_run_with_retry_success_first_attempt() -> None:
     """Succeeds on first attempt — no retry needed."""
-    with patch("xcelium_mcp.shell_utils.ssh_run", new_callable=AsyncMock) as mock:
+    with patch("xcelium_mcp.shell_utils.shell_run", new_callable=AsyncMock) as mock:
         mock.return_value = "output"
-        result = await ssh_run_with_retry("echo hello", timeout=5.0)
+        result = await shell_run_with_retry("echo hello", timeout=5.0)
         assert result == "output"
         assert mock.call_count == 1
 
 
 @pytest.mark.asyncio
-async def test_ssh_run_with_retry_retries_on_timeout() -> None:
+async def test_shell_run_with_retry_retries_on_timeout() -> None:
     """Retries on TimeoutError, succeeds on second attempt."""
-    with patch("xcelium_mcp.shell_utils.ssh_run", new_callable=AsyncMock) as mock:
+    with patch("xcelium_mcp.shell_utils.shell_run", new_callable=AsyncMock) as mock:
         mock.side_effect = [asyncio.TimeoutError("timeout"), "ok"]
         with patch("xcelium_mcp.shell_utils.asyncio") as mock_asyncio:
             mock_asyncio.TimeoutError = asyncio.TimeoutError
@@ -279,15 +279,15 @@ async def test_ssh_run_with_retry_retries_on_timeout() -> None:
             mock_asyncio.create_subprocess_shell = asyncio.create_subprocess_shell
             mock_asyncio.subprocess = asyncio.subprocess
             mock_asyncio.wait_for = asyncio.wait_for
-            result = await ssh_run_with_retry("cmd", timeout=5.0, max_retries=2, backoff_base=1.0)
+            result = await shell_run_with_retry("cmd", timeout=5.0, max_retries=2, backoff_base=1.0)
             assert result == "ok"
             assert mock.call_count == 2
 
 
 @pytest.mark.asyncio
-async def test_ssh_run_with_retry_raises_after_max_retries() -> None:
+async def test_shell_run_with_retry_raises_after_max_retries() -> None:
     """Raises TimeoutError after exhausting all retries."""
-    with patch("xcelium_mcp.shell_utils.ssh_run", new_callable=AsyncMock) as mock:
+    with patch("xcelium_mcp.shell_utils.shell_run", new_callable=AsyncMock) as mock:
         mock.side_effect = asyncio.TimeoutError("timeout")
         with patch("xcelium_mcp.shell_utils.asyncio") as mock_asyncio:
             mock_asyncio.TimeoutError = asyncio.TimeoutError
@@ -296,15 +296,15 @@ async def test_ssh_run_with_retry_raises_after_max_retries() -> None:
             mock_asyncio.subprocess = asyncio.subprocess
             mock_asyncio.wait_for = asyncio.wait_for
             with pytest.raises(asyncio.TimeoutError):
-                await ssh_run_with_retry("cmd", timeout=5.0, max_retries=1, backoff_base=1.0)
+                await shell_run_with_retry("cmd", timeout=5.0, max_retries=1, backoff_base=1.0)
             assert mock.call_count == 2  # original + 1 retry
 
 
 @pytest.mark.asyncio
-async def test_ssh_run_with_retry_no_retry_on_non_timeout() -> None:
+async def test_shell_run_with_retry_no_retry_on_non_timeout() -> None:
     """Non-timeout errors propagate immediately without retry."""
-    with patch("xcelium_mcp.shell_utils.ssh_run", new_callable=AsyncMock) as mock:
+    with patch("xcelium_mcp.shell_utils.shell_run", new_callable=AsyncMock) as mock:
         mock.side_effect = ValueError("bad command")
         with pytest.raises(ValueError):
-            await ssh_run_with_retry("bad cmd", timeout=5.0, max_retries=2)
+            await shell_run_with_retry("bad cmd", timeout=5.0, max_retries=2)
         assert mock.call_count == 1  # no retry

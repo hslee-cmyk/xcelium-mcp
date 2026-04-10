@@ -10,7 +10,7 @@ from datetime import datetime
 from xcelium_mcp.registry import load_sim_config, save_sim_config
 from xcelium_mcp.shell_utils import (
     shell_quote,
-    ssh_run,
+    shell_run,
 )
 
 
@@ -101,7 +101,7 @@ async def resolve_test_name(short_name: str, sim_dir: str = "") -> str:
             discovery = cfg.get("test_discovery", {})
             cmd = discovery.get("command", "")
             if cmd:
-                r = await ssh_run(f"cd {shell_quote(resolved_dir)} && {cmd}", timeout=30)
+                r = await shell_run(f"cd {shell_quote(resolved_dir)} && {cmd}", timeout=30)
                 cached = [t.strip() for t in r.strip().splitlines() if t.strip()]
                 if cached:
                     # Cache via config_action (write centralization)

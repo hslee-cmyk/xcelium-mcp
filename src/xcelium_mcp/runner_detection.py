@@ -23,7 +23,7 @@ from xcelium_mcp.shell_utils import (
     UserInputRequired,
     login_shell_cmd,
     shell_quote,
-    ssh_run,
+    shell_run,
 )
 
 # ---------------------------------------------------------------------------
@@ -36,7 +36,7 @@ async def _detect_env_shell(env_file: str, login_shell: str) -> str:
     Priority: shebang -> file extension -> content patterns -> login_shell fallback.
     """
     # 1. shebang
-    shebang = await ssh_run(f"head -1 {shell_quote(env_file)} || true")
+    shebang = await shell_run(f"head -1 {shell_quote(env_file)} || true")
     if shebang.startswith("#!"):
         return shebang[2:].strip().split()[0]
 
@@ -54,7 +54,7 @@ async def _detect_env_shell(env_file: str, login_shell: str) -> str:
             return shell
 
     # 3. content patterns
-    content = await ssh_run(f"head -30 {shell_quote(env_file)} || true")
+    content = await shell_run(f"head -30 {shell_quote(env_file)} || true")
     if "foreach" in content or "breaksw" in content:
         return "/bin/tcsh"
     if "setenv" in content:
@@ -81,12 +81,12 @@ async def _detect_eda_env(sim_dir: str, project_root: str, login_shell: str) -> 
     """
     # Step 1: login shell direct test
     # Check for "/" to distinguish real path from "Command not found" stderr
-    r = await ssh_run(login_shell_cmd(login_shell, "which xrun"), timeout=10)
+    r = await shell_run(login_shell_cmd(login_shell, "which xrun"), timeout=10)
     if r.strip() and "/" in r.strip():
         return {"env_files": [], "env_shell": login_shell, "source_separately": False}
 
     # Step 2: candidate search
-    home = (await ssh_run("echo $HOME")).strip()
+    home = (await shell_run("echo $HOME")).strip()
     search_specs = [
         (home,         r"\( -name '.cshrc' -o -name '.cadence' -o -name 'setup.csh' "
                        r"-o -name 'setup.sh' -o -name 'sourceme.*' -o -name '*eda*' \)"),
@@ -101,7 +101,7 @@ async def _detect_eda_env(sim_dir: str, project_root: str, login_shell: str) -> 
     # Batch find+grep into single SSH call per directory to reduce round-trips
     async def _find_and_grep(search_dir: str, pat: str) -> list[str]:
         """Find files matching pattern and grep for EDA keywords in one SSH call."""
-        r = await ssh_run(
+        r = await shell_run(
             f"find {shell_quote(search_dir)} -maxdepth 1 \\( -type f -o -type l \\) {pat} "
             f"-exec grep -lE '{kw_grep}' {{}} + || true"
         )
@@ -118,7 +118,7 @@ async def _detect_eda_env(sim_dir: str, project_root: str, login_shell: str) -> 
     for candidate in candidates:
         env_shell = await _detect_env_shell(candidate, login_shell)
         # No '2>/dev/null' inside csh/tcsh -c -- causes Ambiguous redirect error
-        r = await ssh_run(f"{env_shell} -c 'source {shell_quote(candidate)} && which xrun'")
+        r = await shell_run(f"{env_shell} -c 'source {shell_quote(candidate)} && which xrun'")
         if r.strip() and "/" in r.strip():
             return {
                 "env_files": [candidate],
@@ -145,11 +145,11 @@ async def detect_shell_and_env(sim_dir: str, script: str, project_root: str) -> 
     source_separately.
     """
     # login_shell from $SHELL
-    login_shell = (await ssh_run("echo $SHELL")).strip() or "/bin/sh"
+    login_shell = (await shell_run("echo $SHELL")).strip() or "/bin/sh"
 
     # script_shell from shebang
     script_path = f"{sim_dir}/{script}"
-    shebang = await ssh_run(f"head -1 {shell_quote(script_path)} || true")
+    shebang = await shell_run(f"head -1 {shell_quote(script_path)} || true")
     script_shell: str | None = None
     if shebang.strip().startswith("#!"):
         script_shell = shebang.strip()[2:].split()[0]
@@ -177,9 +177,9 @@ async def auto_detect_runner(sim_dir: str) -> dict:
     candidates: list[dict] = []
 
     # 1. Makefile with sim/test/run target
-    r = await ssh_run(f"grep -lE 'sim:|test:|run:' {shell_quote(sim_dir + '/Makefile')} || true")
+    r = await shell_run(f"grep -lE 'sim:|test:|run:' {shell_quote(sim_dir + '/Makefile')} || true")
     if r.strip():
-        targets = await ssh_run(
+        targets = await shell_run(
             f"grep -oE '^(sim|test|run|simulate|regression)[^:]*:' {shell_quote(sim_dir + '/Makefile')} "
             f"| tr -d ':'"
         )
@@ -191,14 +191,14 @@ async def auto_detect_runner(sim_dir: str) -> dict:
         })
 
     # 2. Executable shell scripts with recognized names
-    r = await ssh_run(
+    r = await shell_run(
         f"find {shell_quote(sim_dir)} -maxdepth 1 -perm /111 "
         r"\( -name 'run_sim*' -o -name 'run_test*' -o -name '*.sh' \) || true"
     )
     for script in r.strip().splitlines():
         if not script:
             continue
-        shebang = await ssh_run(f"head -1 {shell_quote(script)} || true")
+        shebang = await shell_run(f"head -1 {shell_quote(script)} || true")
         if shebang.strip().startswith("#!"):
             candidates.append({
                 "runner": "shell",
@@ -207,9 +207,9 @@ async def auto_detect_runner(sim_dir: str) -> dict:
             })
 
     # 3. *.f filelist + xrun/irun available
-    r = await ssh_run(f"(ls {shell_quote(sim_dir)}/*.f || true) | head -1")
+    r = await shell_run(f"(ls {shell_quote(sim_dir)}/*.f || true) | head -1")
     if r.strip():
-        tool = await ssh_run("(which xrun || which irun || true) | head -1")
+        tool = await shell_run("(which xrun || which irun || true) | head -1")
         if tool.strip():
             tool_name = tool.strip().split("/")[-1]
             candidates.append({
@@ -219,9 +219,9 @@ async def auto_detect_runner(sim_dir: str) -> dict:
             })
 
     # 4. Python runner
-    r = await ssh_run(f"(ls {shell_quote(sim_dir + '/run_sim.py')} {shell_quote(sim_dir + '/sim.py')} || true) | head -1")
+    r = await shell_run(f"(ls {shell_quote(sim_dir + '/run_sim.py')} {shell_quote(sim_dir + '/sim.py')} || true) | head -1")
     if r.strip():
-        py = await ssh_run("(which python3 || which python || true) | head -1")
+        py = await shell_run("(which python3 || which python || true) | head -1")
         py_cmd = py.strip().split("/")[-1] if py.strip() else "python3"
         candidates.append({
             "runner": "python",
@@ -325,12 +325,12 @@ async def resolve_eda_tools(shell_env: dict) -> dict[str, str]:
     which_cmds = " && ".join(f"echo __TOOL_{t}__=$(which {t})" for t in tools)
     if shell_env.get("source_separately") and env_files:
         source_cmd = " && ".join(f"source {shell_quote(f)}" for f in env_files)
-        r = await ssh_run(
+        r = await shell_run(
             f"{env_shell} -c '{source_cmd} && {which_cmds}'",
             timeout=15,
         )
     else:
-        r = await ssh_run(
+        r = await shell_run(
             login_shell_cmd(login_shell, which_cmds),
             timeout=15,
         )
@@ -369,7 +369,7 @@ async def resolve_external_tools(shell_env: dict) -> dict[str, str]:
 
     # Batch all which queries into a single subprocess call
     which_cmds = " && ".join(f"echo __TOOL_{t}__=$(which {t})" for t in tools)
-    r = await ssh_run(
+    r = await shell_run(
         login_shell_cmd(login_shell, which_cmds),
         timeout=10,
     )

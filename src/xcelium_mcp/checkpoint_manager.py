@@ -347,7 +347,7 @@ def cleanup_checkpoints(
             manifest["compile_hash"] = current_hash
             _write_manifest(sim_dir, manifest)
         # Note: actual worklib snapshot removal (xmrm) is done by the tool layer
-        # (tools/checkpoint.py) which has access to ssh_run + EDA environment.
+        # (tools/checkpoint.py) which has access to shell_run + EDA environment.
 
     return {
         "removed": to_remove,

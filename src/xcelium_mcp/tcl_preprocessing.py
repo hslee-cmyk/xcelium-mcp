@@ -12,7 +12,7 @@ import base64 as _b64
 import re as _re
 from pathlib import Path
 
-from xcelium_mcp.shell_utils import shell_quote, ssh_run, validate_path
+from xcelium_mcp.shell_utils import shell_quote, shell_run, validate_path
 
 
 def _parse_l1_time_ns(l1_time: str) -> int:
@@ -53,7 +53,7 @@ def extract_setup_lines(tcl_content: str) -> str:
 def _read_setup_tcl_sync(runner: dict, sim_dir: str) -> str:
     """Read the setup Tcl content synchronously for the current sim_mode.
 
-    MCP server runs on cloud0 — uses direct Path I/O (no ssh_run needed).
+    MCP server runs on cloud0 — uses direct Path I/O (no shell_run needed).
     Returns raw file content, or empty string if not found.
     """
     setup_tcls = runner.get("setup_tcls", {})
@@ -289,7 +289,7 @@ async def _handle_sdf_override(
     tfile_content = "\n".join(tfile_lines) + "\n"
 
     b64 = _b64.b64encode(tfile_content.encode()).decode()
-    await ssh_run(
+    await shell_run(
         f"echo {shell_quote(b64)} | base64 -d > {shell_quote(tfile_path)}",
         timeout=10,
     )
@@ -308,9 +308,9 @@ async def _patch_tb_sdf_guard(sim_dir: str, sdf_info: dict) -> None:
 
     user_tmp = await get_user_tmp_dir()
     filename = top_v.split("/")[-1]
-    await ssh_run(f"cp {shell_quote(top_v)} {user_tmp}/{filename}.bak.mcp_sdf", timeout=5)
+    await shell_run(f"cp {shell_quote(top_v)} {user_tmp}/{filename}.bak.mcp_sdf", timeout=5)
 
-    content = await ssh_run(f"cat {shell_quote(top_v)}", timeout=10)
+    content = await shell_run(f"cat {shell_quote(top_v)}", timeout=10)
 
     patched = _re.sub(
         r"(\s*initial\s+begin\s*\n)(.*?\$sdf_annotate.*?\n)(.*?\s*end)",
@@ -321,7 +321,7 @@ async def _patch_tb_sdf_guard(sim_dir: str, sdf_info: dict) -> None:
 
     if patched != content:
         b64 = _b64.b64encode(patched.encode()).decode()
-        await ssh_run(
+        await shell_run(
             f"echo {shell_quote(b64)} | base64 -d > {shell_quote(top_v)}",
             timeout=10,
         )

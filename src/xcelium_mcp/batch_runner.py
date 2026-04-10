@@ -25,8 +25,8 @@ from xcelium_mcp.shell_utils import (
     get_user_tmp_dir,
     login_shell_cmd,
     shell_quote,
-    ssh_run,
-    ssh_run_with_retry,
+    shell_run,
+    shell_run_with_retry,
 )
 from xcelium_mcp.tcl_preprocessing import (
     _build_checkpoint_tcl,
@@ -141,7 +141,7 @@ async def parse_existing_job(job_file: str, timeout: int) -> str | None:
     Returns:
         Result string if an alive job was resumed, None otherwise.
     """
-    existing_job = await ssh_run(f"cat {job_file} || true")
+    existing_job = await shell_run(f"cat {job_file} || true")
     if not existing_job.strip():
         return None
     try:
@@ -149,7 +149,7 @@ async def parse_existing_job(job_file: str, timeout: int) -> str | None:
         pid = job.get("pid", 0)
         # Guard: pid must be > 0 (kill -0 0 signals own process group → always ALIVE)
         if pid > 0:
-            pid_alive = await ssh_run(f"(kill -0 {pid}) && echo ALIVE || echo DEAD")
+            pid_alive = await shell_run(f"(kill -0 {pid}) && echo ALIVE || echo DEAD")
         else:
             pid_alive = "DEAD"
         if "ALIVE" in pid_alive:
@@ -158,12 +158,12 @@ async def parse_existing_job(job_file: str, timeout: int) -> str | None:
                 job["log_file"], timeout,
                 f"(Resumed monitoring existing batch PID {pid})\n"
             )
-            await ssh_run(f"rm -f {job_file}", timeout=5)
+            await shell_run(f"rm -f {job_file}", timeout=5)
             return result
         # PID dead → stale job file, remove and start fresh
-        await ssh_run(f"rm -f {job_file}", timeout=5)
+        await shell_run(f"rm -f {job_file}", timeout=5)
     except (json.JSONDecodeError, KeyError):
-        await ssh_run(f"rm -f {job_file}", timeout=5)
+        await shell_run(f"rm -f {job_file}", timeout=5)
     return None
 
 
@@ -254,7 +254,7 @@ async def launch_nohup_job(
 
     # B-0 fix: subshell wrapping to prevent PIPE fd inheritance
     pid_file = f"{user_tmp}/batch_pid_{ts}"
-    await ssh_run(
+    await shell_run(
         f"cd {shell_quote(sim_dir)} && "
         f"(nohup {run_cmd} {build_redirect(log_file)} < /dev/null & echo $! > {pid_file}) "
         f">& /dev/null",
@@ -262,11 +262,11 @@ async def launch_nohup_job(
     )
 
     # Read PID from file + cleanup in single SSH call
-    pid_str = await ssh_run(f"(cat {pid_file} || true); rm -f {pid_file}", timeout=5)
+    pid_str = await shell_run(f"(cat {pid_file} || true); rm -f {pid_file}", timeout=5)
     pid_str = pid_str.strip()
     # Fallback — use pgrep if pid file didn't yield a number
     if not pid_str.isdigit():
-        pid_str = await ssh_run(f"(pgrep -f {shell_quote(test_name)} || true) | tail -1")
+        pid_str = await shell_run(f"(pgrep -f {shell_quote(test_name)} || true) | tail -1")
     pid = int(pid_str.strip()) if pid_str.strip().isdigit() else 0
 
     if pid:
@@ -278,12 +278,12 @@ async def launch_nohup_job(
         })
         done_file = f"{log_file}.done"
         # Write job file (sync, fast)
-        await ssh_run_with_retry(
+        await shell_run_with_retry(
             f"printf '%s' {shell_quote(job_info)} > {job_file}",
             timeout=15,
         )
         # Launch PID watcher independently using nohup pattern (fully detached from SSH session)
-        await ssh_run(
+        await shell_run(
             f"(nohup bash -c 'while kill -0 {pid} 2>/dev/null; do sleep 2; done; touch {shell_quote(done_file)}' "
             f"< /dev/null >& /dev/null &)",
             timeout=10,
@@ -345,7 +345,7 @@ async def run_batch_single(
             f"if [ -d dump/ci_top.shm ]; then "
             f"mv dump/ci_top.shm dump/ci_top_{shell_quote(test_name)}.shm; fi"
         )
-        await ssh_run(mv_cmd, timeout=30.0)
+        await shell_run(mv_cmd, timeout=30.0)
 
     return result
 
@@ -405,13 +405,13 @@ async def run_batch_regression(
     chk_dir = f"{sim_dir}/checkpoints"
     setup_lines = ""
     if save_checkpoints:
-        await ssh_run(f"mkdir -p {shell_quote(chk_dir)}", timeout=5)
+        await shell_run(f"mkdir -p {shell_quote(chk_dir)}", timeout=5)
         raw_tcl = read_setup_tcl(runner, sim_dir)
         setup_lines = extract_setup_lines(raw_tcl)
 
     # Check for existing regression job (reconnection scenario)
     completed_tests: list[str] = []
-    existing_job = await ssh_run(f"cat {job_file} || true")
+    existing_job = await shell_run(f"cat {job_file} || true")
     if existing_job.strip():
         try:
             job = json.loads(existing_job)
@@ -419,7 +419,7 @@ async def run_batch_regression(
                 pid = job.get("pid", 0)
                 # Guard: pid must be > 0 (kill -0 0 signals own process group → always ALIVE)
                 if pid > 0:
-                    pid_alive = await ssh_run(
+                    pid_alive = await shell_run(
                         f"(kill -0 {pid}) && echo ALIVE || echo DEAD"
                     )
                 else:
@@ -436,7 +436,7 @@ async def run_batch_regression(
                 # else: PID dead OR different test_list → discard and start fresh
         except (json.JSONDecodeError, KeyError):
             pass
-        await ssh_run(f"rm -f {job_file}", timeout=5)
+        await shell_run(f"rm -f {job_file}", timeout=5)
 
     if not info.needs_test_name:
         # regression_script handles all tests internally → 1 cmd
@@ -448,7 +448,7 @@ async def run_batch_regression(
             )
             # B-0 fix: subshell wrapping, stdbuf removed (Xcelium incompatible)
             run_cmd = cmd_with_extra
-            await ssh_run(
+            await shell_run(
                 f"cd {shell_quote(sim_dir)} && "
                 f"(nohup {run_cmd} {build_redirect(log_file)} < /dev/null &) "
                 f">& /dev/null",
@@ -487,7 +487,7 @@ async def run_batch_regression(
                 )
                 chk_tcl_path = f"{user_tmp}/chk_{shell_quote(test_name)}.tcl"
                 b64 = _b64.b64encode(chk_tcl.encode()).decode()
-                await ssh_run(
+                await shell_run(
                     f"echo {shell_quote(b64)} | base64 -d > {shell_quote(chk_tcl_path)}",
                     timeout=5,
                 )
@@ -502,7 +502,7 @@ async def run_batch_regression(
             # P6-5b: echo $! > pid_file inside subshell — aligns with run_batch_single
             run_cmd = f"env {env_prefix}{cmd}"
             pid_file = f"{test_log}.pid"
-            await ssh_run(
+            await shell_run(
                 f"cd {shell_quote(sim_dir)} && "
                 f"(nohup {run_cmd} {build_redirect(test_log)} < /dev/null & echo $! > {pid_file}) "
                 f">& /dev/null",
@@ -510,7 +510,7 @@ async def run_batch_regression(
             )
 
             # Read PID + save job state in single cycle (F-020: was 2 base64 writes)
-            pid_str = await ssh_run(f"(cat {pid_file} || true); rm -f {pid_file}", timeout=5)
+            pid_str = await shell_run(f"(cat {pid_file} || true); rm -f {pid_file}", timeout=5)
             test_pid = int(pid_str.strip()) if pid_str.strip().isdigit() else 0
             job_info = json.dumps({
                 "type": "regression",
@@ -523,14 +523,14 @@ async def run_batch_regression(
                 "started_at": datetime.now().isoformat(),
             })
             # Write job file (sync, fast) — no base64, use printf directly
-            await ssh_run_with_retry(
+            await shell_run_with_retry(
                 f"printf '%s' {shell_quote(job_info)} > {job_file}",
                 timeout=15,
             )
             # Launch PID watcher independently using nohup pattern (fully detached from SSH session)
             if test_pid:
                 test_done = f"{test_log}.done"
-                await ssh_run(
+                await shell_run(
                     f"(nohup bash -c 'while kill -0 {test_pid} 2>/dev/null; do sleep 2; done; touch {shell_quote(test_done)}' "
                     f"< /dev/null >& /dev/null &)",
                     timeout=10,
@@ -542,13 +542,13 @@ async def run_batch_regression(
             if timed_out:
                 # Guard: kill stale xmsim/xmrm to prevent worklib lock on next test
                 if pid_str.strip().isdigit():
-                    await ssh_run(
+                    await shell_run(
                         f"(kill -0 {test_pid}) && kill {test_pid}",
                         timeout=5,
                     )
-                await ssh_run("pkill -f xmrm || true", timeout=5)
+                await shell_run("pkill -f xmrm || true", timeout=5)
                 # Append TIMEOUT marker to per-test log
-                await ssh_run(
+                await shell_run(
                     f"echo '[TIMEOUT] Test did not complete within 600s' >> {test_log}",
                     timeout=5,
                 )
@@ -572,22 +572,22 @@ async def run_batch_regression(
                     f"if [ -d dump/ci_top.shm ]; then "
                     f"mv dump/ci_top.shm dump/ci_top_{shell_quote(test_name)}.shm; fi"
                 )
-                await ssh_run(mv_cmd, timeout=30.0)
+                await shell_run(mv_cmd, timeout=30.0)
 
             # Append per-test result to main log
-            await ssh_run(
+            await shell_run(
                 f"echo {shell_quote('=== ' + test_name + ' ===')} >> {log_file} && "
                 f"(grep -E 'PASS|FAIL|Errors:' {test_log} || true) >> {log_file}",
                 timeout=10.0,
             )
 
     # Cleanup job file
-    await ssh_run(f"rm -f {job_file}", timeout=5)
+    await shell_run(f"rm -f {job_file}", timeout=5)
 
     # Parse final results from per-test logs (F-020: single grep instead of N)
     # Build one command that greps all test logs and prefixes each with filename
     log_pattern = f"{user_tmp}/regression_{ts}_*.log"
-    batch_grep = await ssh_run(
+    batch_grep = await shell_run(
         f"(grep -H -E 'PASS|FAIL|Errors:|COMPLETE' {log_pattern} || true) | tail -200",
         timeout=30.0,
     )

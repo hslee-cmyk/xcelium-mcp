@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import time as _time
 
-from xcelium_mcp.shell_utils import ssh_run
+from xcelium_mcp.shell_utils import shell_run
 
 
 async def poll_batch_log(log_file: str, timeout: float, prefix: str = "") -> tuple[str, bool]:
@@ -28,7 +28,7 @@ async def poll_batch_log(log_file: str, timeout: float, prefix: str = "") -> tup
 
     while _time.time() < deadline:
         # P6-2: single SSH call — tail for keyword scan + done-file sentinel
-        out = await ssh_run(
+        out = await shell_run(
             f"(tail -10 {log_file} || true); "
             f"test -f {done_file} && echo __DONE__"
         )
@@ -41,10 +41,10 @@ async def poll_batch_log(log_file: str, timeout: float, prefix: str = "") -> tup
         await asyncio.sleep(interval)
         interval = min(interval * 1.5, 10.0)
 
-    result = await ssh_run(
+    result = await shell_run(
         f"(grep -E 'PASS|FAIL|Errors:|\\$finish|COMPLETE' {log_file} || true) | tail -30"
     )
-    await ssh_run(f"rm -f {done_file}", timeout=5)   # P6-5: cleanup marker
+    await shell_run(f"rm -f {done_file}", timeout=5)   # P6-5: cleanup marker
     return prefix + result, timed_out
 
 
@@ -69,5 +69,5 @@ async def watch_pid_and_poll(
         Result string from log polling.
     """
     result, _ = await poll_batch_log(log_file, timeout)
-    await ssh_run(f"rm -f {job_file}", timeout=5)
+    await shell_run(f"rm -f {job_file}", timeout=5)
     return result

@@ -30,7 +30,7 @@ from xcelium_mcp.runner_detection import (
 from xcelium_mcp.shell_utils import (
     UserInputRequired,
     shell_quote,
-    ssh_run,
+    shell_run,
 )
 from xcelium_mcp.sim_env_detection import (
     analyze_tb_type,
@@ -110,7 +110,7 @@ async def _extract_top_module_from_script(sim_dir: str, runner: dict) -> str:
     if not script_name:
         return ""
 
-    content = await ssh_run(
+    content = await shell_run(
         f"cat {shell_quote(sim_dir + '/' + script_name)}", timeout=10
     )
     return _extract_top_module_from_content(content)
@@ -209,7 +209,7 @@ async def _analyze_sdf_annotate(
         )
 
     # Step 2: find file defining top module
-    top_v = await ssh_run(
+    top_v = await shell_run(
         f"grep -rl 'module\\s\\+{effective_top}\\b' {shell_quote(sim_dir)} "
         f"--include='*.v' --include='*.sv' | head -1",
         timeout=10,
@@ -219,17 +219,17 @@ async def _analyze_sdf_annotate(
 
     # Step 3: search for $sdf_annotate in top module + includes/instances
     top_v_path = top_v.strip()
-    content = await ssh_run(f"cat {shell_quote(top_v_path)}", timeout=10)
+    content = await shell_run(f"cat {shell_quote(top_v_path)}", timeout=10)
     sdf_source = top_v_path
 
     if "$sdf_annotate" not in content:
         # 3a. includes + 3b. instantiations (parallelized)
         includes, instances = await asyncio.gather(
-            ssh_run(
+            shell_run(
                 f"grep -oP '`include\\s+\"\\K[^\"]+' {shell_quote(top_v_path)}",
                 timeout=10,
             ),
-            ssh_run(
+            shell_run(
                 f"grep -oP '^\\s*(\\w+)\\s+\\w+\\s*\\(' {shell_quote(top_v_path)}",
                 timeout=10,
             ),
@@ -242,7 +242,7 @@ async def _analyze_sdf_annotate(
         for line in instances.strip().splitlines():
             inst_mod = line.strip().split()[0] if line.strip() else ""
             if inst_mod:
-                f = await ssh_run(
+                f = await shell_run(
                     f"grep -rl 'module\\s\\+{inst_mod}\\b' {shell_quote(sim_dir)} "
                     f"--include='*.v' --include='*.sv' | head -1",
                     timeout=10,
@@ -253,7 +253,7 @@ async def _analyze_sdf_annotate(
         # 3d. search collected files
         if search_files:
             files_arg = " ".join(shell_quote(f) for f in search_files)
-            ctx = await ssh_run(
+            ctx = await shell_run(
                 f"grep -n -B10 -A2 '\\$sdf_annotate' {files_arg}",
                 timeout=10,
             )
@@ -294,15 +294,15 @@ async def _patch_legacy_run_script(sim_dir: str, runner_info: dict) -> str:
     script_path = f"{sim_dir}/{script_name}"
     _sp = shell_quote(script_path)
 
-    exists = await ssh_run(f"test -f {_sp} && echo YES || echo NO", timeout=5)
+    exists = await shell_run(f"test -f {_sp} && echo YES || echo NO", timeout=5)
     if "YES" not in exists:
         return "run script not found"
 
-    r = await ssh_run(f"grep -c 'MCP_INPUT_TCL' {_sp} || true")
+    r = await shell_run(f"grep -c 'MCP_INPUT_TCL' {_sp} || true")
     if r.strip() and r.strip() != "0":
         return "already patched"
 
-    r = await ssh_run(f"grep -n 'xmsim.*-input' {_sp} || true")
+    r = await shell_run(f"grep -n 'xmsim.*-input' {_sp} || true")
     if not r.strip():
         return "no xmsim -input found — manual patch needed"
 
@@ -316,9 +316,9 @@ async def _patch_legacy_run_script(sim_dir: str, runner_info: dict) -> str:
 
     sed_pattern = f"s|-input {escaped_original}|-input {replacement}|"
     sed_cmd = f"sed -i -e {shell_quote(sed_pattern)} {_sp}"
-    await ssh_run(sed_cmd, timeout=10)
+    await shell_run(sed_cmd, timeout=10)
 
-    r = await ssh_run(f"grep -c 'MCP_INPUT_TCL' {_sp} || true")
+    r = await shell_run(f"grep -c 'MCP_INPUT_TCL' {_sp} || true")
     if r.strip() and r.strip() != "0":
         return f"patched: -input {original_tcl} -> -input {replacement}"
     return "patch failed — manual edit needed"
@@ -326,11 +326,11 @@ async def _patch_legacy_run_script(sim_dir: str, runner_info: dict) -> str:
 
 async def _update_simvisionrc(bridge_tcl: str) -> str:
     """Update ~/.simvisionrc to source mcp_bridge.tcl from install path."""
-    home = (await ssh_run("echo $HOME")).strip()
+    home = (await shell_run("echo $HOME")).strip()
     rc_path = f"{home}/.simvisionrc"
     source_line = f"source {bridge_tcl}"
 
-    content = await ssh_run(f"cat {rc_path} || true")
+    content = await shell_run(f"cat {rc_path} || true")
 
     if _SIMVISIONRC_MARKER in content:
         lines = content.splitlines()
@@ -349,16 +349,16 @@ async def _update_simvisionrc(bridge_tcl: str) -> str:
             new_lines.append(line)
         new_content = "\n".join(new_lines)
         b64 = base64.b64encode(new_content.encode()).decode()
-        await ssh_run(f"echo {shell_quote(b64)} | base64 -d > {shell_quote(rc_path)}")
+        await shell_run(f"echo {shell_quote(b64)} | base64 -d > {shell_quote(rc_path)}")
         return "updated (marker found)"
 
     if "mcp_bridge" in content:
         sed_pattern = f"/mcp_bridge/c\\{_SIMVISIONRC_MARKER}\\n{source_line}"
-        await ssh_run(f"sed -i -e {shell_quote(sed_pattern)} {shell_quote(rc_path)}")
+        await shell_run(f"sed -i -e {shell_quote(sed_pattern)} {shell_quote(rc_path)}")
         return "replaced unmanaged entry"
 
     managed_block = f"{_SIMVISIONRC_MARKER}\n{source_line}"
-    await ssh_run(f"echo '\\n{managed_block}' >> {rc_path}")
+    await shell_run(f"echo '\\n{managed_block}' >> {rc_path}")
     if not content.strip():
         return "created"
     return "added"
@@ -390,7 +390,7 @@ async def run_full_discovery(
     tb_type, runner_info, r_root, bridge_tcl = await asyncio.gather(
         analyze_tb_type(sim_dir),
         auto_detect_runner(sim_dir),
-        ssh_run("git rev-parse --show-toplevel || echo ~"),
+        shell_run("git rev-parse --show-toplevel || echo ~"),
         detect_bridge_tcl(),
     )
 
@@ -450,7 +450,7 @@ async def run_full_discovery(
 
     cached_tests = []
     try:
-        r = await ssh_run(f"cd {_sd} && {test_cmd}", timeout=30)
+        r = await shell_run(f"cd {_sd} && {test_cmd}", timeout=30)
         cached_tests = [t.strip() for t in r.strip().splitlines() if t.strip()]
     except (RuntimeError, OSError, asyncio.TimeoutError) as e:
         logger.debug("test discovery failed (non-fatal): %s", e)

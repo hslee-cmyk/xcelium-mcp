@@ -97,7 +97,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
                 get_user_tmp_dir,
                 login_shell_cmd,
                 shell_quote,
-                ssh_run,
+                shell_run,
             )
 
             # 1. Resolve SHM path
@@ -107,7 +107,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
                 except ValueError as e:
                     return f"ERROR: {e}"
                 dump_dir = f"{resolved_dir}/dump"
-                r = await ssh_run(f"(ls -td {dump_dir}/*.shm || true) | head -1")
+                r = await shell_run(f"(ls -td {dump_dir}/*.shm || true) | head -1")
                 shm_path = r.strip()
                 if not shm_path:
                     return "ERROR: No SHM found in dump directory"
@@ -132,7 +132,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             runner = cfg.get("runner", {}) if cfg else {}
             login_shell = runner.get("login_shell", "/bin/sh")
             shell_cmd = login_shell_cmd(login_shell, cmd)
-            result = await ssh_run(shell_cmd, timeout=60)
+            result = await shell_run(shell_cmd, timeout=60)
 
             # 3. Parse "Ignoring missing" lines
             missing = set()
@@ -147,7 +147,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             missing_list = [s for s in signals if s in missing]
 
             # 4. Cleanup dummy file
-            await ssh_run(f"rm -f {dummy_out}", timeout=5)
+            await shell_run(f"rm -f {dummy_out}", timeout=5)
 
             # 5. Format output
             lines = [

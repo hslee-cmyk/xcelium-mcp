@@ -22,7 +22,7 @@ from xcelium_mcp.shell_utils import (
     get_user_tmp_dir,
     login_shell_cmd,
     shell_quote,
-    ssh_run,
+    shell_run,
     validate_path,
 )
 from xcelium_mcp.sim_env_detection import detect_vnc_display
@@ -107,11 +107,11 @@ async def start_simvision(
             test_name = await resolve_test_name(test_name, resolved_dir)
         dump_dir = f"{resolved_dir}/dump"
         if test_name:
-            r2 = await ssh_run(f"(ls -td {dump_dir}/*{test_name}*.shm || true) | head -1")
+            r2 = await shell_run(f"(ls -td {dump_dir}/*{test_name}*.shm || true) | head -1")
             if not r2.strip():
-                r2 = await ssh_run(f"(ls -td {dump_dir}/*.shm || true) | head -1")
+                r2 = await shell_run(f"(ls -td {dump_dir}/*.shm || true) | head -1")
         else:
-            r2 = await ssh_run(f"(ls -td {dump_dir}/*.shm || true) | head -1")
+            r2 = await shell_run(f"(ls -td {dump_dir}/*.shm || true) | head -1")
         shm_path = r2.strip() if r2.strip() else ""
 
     # 4. Display — validate format before use in shell commands
@@ -127,14 +127,14 @@ async def start_simvision(
             "ERROR: No VNC display found.\n"
             "Start VNC: 'vncserver'\nOr specify: simvision_connect(action='start', display=':1')"
         )
-    display_check = await ssh_run(f"xdpyinfo -display {shell_quote(display)} | head -1")
+    display_check = await shell_run(f"xdpyinfo -display {shell_quote(display)} | head -1")
     if not display_check.strip():
         return f"ERROR: Display {display} not accessible.\nCheck VNC: 'vncserver -list'"
 
     # 5. Get run_dir
     run_dir = runner.get("run_dir", "run")
     run_dir_path = f"{resolved_dir}/{run_dir}"
-    exists = await ssh_run(f"test -d {run_dir_path} && echo YES || echo NO")
+    exists = await shell_run(f"test -d {run_dir_path} && echo YES || echo NO")
     if "YES" not in exists:
         return f"ERROR: run_dir not found: {run_dir_path}. Set via: mcp_config set runner.run_dir <path>"
 
@@ -160,7 +160,7 @@ async def start_simvision(
     user_tmp = await get_user_tmp_dir()
     log_file = f"{user_tmp}/simvision_start.log"
     cmd = f"(nohup {shell_cmd} {build_redirect(log_file)} < /dev/null &)"
-    await ssh_run(cmd, timeout=15)
+    await shell_run(cmd, timeout=15)
 
     # 7. Wait for bridge ready + auto-connect
     for i in range(30):
@@ -181,7 +181,7 @@ async def start_simvision(
             except BRIDGE_ERRORS:
                 continue
 
-    log_tail = await ssh_run(f"tail -10 {log_file} || true")
+    log_tail = await shell_run(f"tail -10 {log_file} || true")
     return f"ERROR: SimVision bridge not ready after 60s.\nLog:\n{log_tail}"
 
 
@@ -479,7 +479,7 @@ async def compare_simvision(
         )
 
     # 1. VNC check
-    vnc_check = await ssh_run(
+    vnc_check = await shell_run(
         f"(vncserver -list || true) | grep '{display}' || echo NONE",
         timeout=10.0,
     )
@@ -493,7 +493,7 @@ async def compare_simvision(
     # 2. Launch SimVision with shm_before as primary database (detached)
     user_tmp = await get_user_tmp_dir()
     log_file = f"{user_tmp}/simvision_compare.log"
-    await ssh_run(
+    await shell_run(
         f"(nohup env DISPLAY={shell_quote(display)} simvision {shell_quote(shm_before)} "
         f"{build_redirect(log_file)} < /dev/null &)",
         timeout=5.0,

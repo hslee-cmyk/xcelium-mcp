@@ -10,7 +10,7 @@ from mcp.server.fastmcp import FastMCP
 import xcelium_mcp.checkpoint_manager as checkpoint_manager
 from xcelium_mcp.bridge_manager import BridgeManager
 from xcelium_mcp.discovery import resolve_sim_dir
-from xcelium_mcp.shell_utils import get_user_tmp_dir, shell_quote, ssh_run
+from xcelium_mcp.shell_utils import get_user_tmp_dir, shell_quote, shell_run
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +145,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             user_tmp = await get_user_tmp_dir()
             cds_lib = f"{user_tmp}/rebuild_cds.lib"
             abs_worklib = os.path.expanduser(chk_dir)
-            await ssh_run(
+            await shell_run(
                 f"echo 'DEFINE worklib {abs_worklib}' > {shell_quote(cds_lib)}",
                 timeout=5,
             )
@@ -155,7 +155,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
                 login_shell = cfg["runner"].get("login_shell", login_shell)
             run_dir = os.path.join(resolved_dir, cfg.get("runner", {}).get("run_dir", "run")) if cfg else resolved_dir
             xmls_cmd = f"cd {shell_quote(run_dir)} && {shell_quote(xmls_path)} -snapshot -all -cdslib {shell_quote(cds_lib)} -nolog -nocopyright"
-            xmls_out = await ssh_run(
+            xmls_out = await shell_run(
                 login_shell_cmd(login_shell, xmls_cmd),
                 timeout=30,
             )
@@ -224,7 +224,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             user_tmp = await get_user_tmp_dir()
             cds_lib = f"{user_tmp}/cleanup_cds.lib"
             chk_worklib = os.path.expanduser(os.path.join(resolved_dir, "checkpoints", "worklib"))
-            await ssh_run(
+            await shell_run(
                 f"echo 'DEFINE worklib {chk_worklib}' > {shell_quote(cds_lib)}",
                 timeout=5,
             )
@@ -232,7 +232,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             xmrm_errors: list[str] = []
             for name in result["removed"]:
                 xmrm_cmd = f"cd {shell_quote(run_dir)} && {shell_quote(xmrm_path)} -snapshot {shell_quote(f'worklib.{name}')} -cdslib {shell_quote(cds_lib)} -nolog -nocopyright -force"
-                out = await ssh_run(
+                out = await shell_run(
                     login_shell_cmd(login_shell, xmrm_cmd),
                     timeout=15,
                 )

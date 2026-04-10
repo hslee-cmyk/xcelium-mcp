@@ -5,7 +5,7 @@ Single instance created in server.py, passed to tools and sim_runner via DI.
 """
 from __future__ import annotations
 
-from xcelium_mcp.shell_utils import get_user_tmp_dir, ssh_run
+from xcelium_mcp.shell_utils import get_user_tmp_dir, shell_run
 from xcelium_mcp.tcl_bridge import TclBridge
 
 
@@ -21,7 +21,7 @@ async def scan_ready_files(
         List of (port, type) tuples found in ready files.
     """
     user_tmp = await get_user_tmp_dir()
-    r = await ssh_run(f"cat {user_tmp}/bridge_ready_* || true")
+    r = await shell_run(f"cat {user_tmp}/bridge_ready_* || true")
     results: list[tuple[int, str]] = []
     for line in r.strip().splitlines():
         parts = line.strip().split()
