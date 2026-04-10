@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import re
 from collections.abc import Callable, Coroutine
 from typing import Any
 
@@ -12,6 +13,7 @@ from xcelium_mcp.batch_runner import resolve_test_name
 from xcelium_mcp.bridge_manager import BridgeManager
 from xcelium_mcp.env_detection import _detect_vnc_display
 from xcelium_mcp.registry import load_sim_config
+from xcelium_mcp.shell_utils import validate_path
 from xcelium_mcp.sim_runner import (
     _parse_shm_path,
     _parse_time_ns,
@@ -28,6 +30,8 @@ from xcelium_mcp.tcl_bridge import TclBridge, TclError
 WaveformAddImplFn = Callable[..., Coroutine[Any, Any, str]]
 ConnectSimulatorFn = Callable[..., Coroutine[Any, Any, str]]
 GenerateDebugTclFn = Callable[..., Coroutine[Any, Any, str]]
+
+_DISPLAY_RE = re.compile(r'^:?[0-9]+(\.[0-9]+)?$')
 
 
 def register(
@@ -495,10 +499,23 @@ def register(
         if time_range_ns is None:
             time_range_ns = []
 
+        # Validate SHM paths
+        for label, path in [("shm_before", shm_before), ("shm_after", shm_after)]:
+            err = validate_path(path, label)
+            if err:
+                return err
+
         # ------------------------------------------------------------------ #
         # simvision mode: open both SHMs in SimVision for side-by-side view   #
         # ------------------------------------------------------------------ #
         if output_mode == "simvision":
+            # 0. Validate display parameter
+            if not _DISPLAY_RE.match(display):
+                return (
+                    f"ERROR: Invalid display value {display!r}. "
+                    "Expected format like ':1' or ':1.0'."
+                )
+
             # 1. VNC check
             vnc_check = await ssh_run(
                 f"vncserver -list 2>/dev/null | grep '{display}' || echo NONE",
@@ -512,13 +529,15 @@ def register(
                 )
 
             # 2. Launch SimVision with shm_before as primary database (detached)
+            user_tmp = await get_user_tmp_dir()
+            log_file = f"{user_tmp}/simvision_compare.log"
             await ssh_run(
-                f"DISPLAY={sq(display)} simvision {sq(shm_before)} &",
+                f"(nohup env DISPLAY={sq(display)} simvision {sq(shm_before)} "
+                f"{build_redirect(log_file)} < /dev/null &)",
                 timeout=5.0,
             )
 
             # 3. Wait for SimVision bridge ready file (30s)
-            user_tmp = await get_user_tmp_dir()
             bridge_ready = False
             for _i in range(15):
                 await asyncio.sleep(2)
