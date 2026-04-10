@@ -63,6 +63,7 @@ def register(
         dump_window_end_ms: int = 0,
         sdf_file: str = "",
         sdf_corner: str = "max",
+        force: bool = False,
     ) -> str:
         """Run simulation for a single test.
 
@@ -85,6 +86,7 @@ def register(
             rename_dump: Enable Method 6-B SHM rename fallback.
             dump_signals: Additional signals for v4.3 dump_depth probe (merged with BOUNDARY_SIGNALS).
             timeout: SSH wait timeout in seconds.
+            force: Force re-run even if a completed job exists. Ignores previous results.
         """
         if probe_signals is None:
             probe_signals = []
@@ -159,6 +161,7 @@ def register(
                 dump_window=dump_window,
                 sdf_file=sdf_file,
                 sdf_corner=sdf_corner,
+                force=force,
             )
         except (RuntimeError, ValueError, OSError, TimeoutError) as e:
             return f"ERROR running simulation: {e}"

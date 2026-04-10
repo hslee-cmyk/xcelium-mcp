@@ -336,6 +336,7 @@ async def run_batch_single(
     dump_window: dict | None = None,
     sdf_file: str = "",
     sdf_corner: str = "max",
+    force: bool = False,
 ) -> str:
     """Execute a single simulation test and return combined log output.
 
@@ -347,12 +348,23 @@ async def run_batch_single(
     user_tmp = await get_user_tmp_dir()
     job_file = f"{user_tmp}/batch_job.json"
 
-    # Resume existing job if alive
+    # Resume existing job if alive (skip if force=True)
     params = resolve_sim_params(runner, sim_mode, extra_args, timeout, dump_depth=dump_depth)
     effective_timeout = params["timeout"]
-    resumed = await parse_existing_job(job_file, effective_timeout, test_name)
-    if resumed is not None:
-        return resumed
+    if force:
+        # Force re-run: kill any existing process and cleanup
+        existing_job = await shell_run(f"cat {job_file} || true")
+        if existing_job.strip():
+            try:
+                job = json.loads(existing_job)
+                await _kill_stale_sim(job.get("pid", 0), job.get("test_name", ""))
+            except (json.JSONDecodeError, KeyError):
+                pass
+            await shell_run(f"rm -f {job_file}", timeout=5)
+    else:
+        resumed = await parse_existing_job(job_file, effective_timeout, test_name)
+        if resumed is not None:
+            return resumed
 
     # Build command
     env_prefix, cmd, preprocessed_tcl = await build_batch_cmd(
