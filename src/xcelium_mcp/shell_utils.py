@@ -2,7 +2,7 @@
 
 Extracted from sim_runner.py (v4.4 code review refactoring).
 Contains: shell_quote, ssh_run, build_redirect, login_shell_cmd,
-validate_path, sanitize_signal_name, sanitize_tcl_string,
+validate_path, sanitize_signal_name, is_safe_tcl_string,
 UserInputRequired.
 
 All modules import these from shell_utils to avoid circular deps.
@@ -178,7 +178,7 @@ def sanitize_signal_name(name: str) -> str:
     return stripped
 
 
-def sanitize_tcl_string(s: str) -> bool:
+def is_safe_tcl_string(s: str) -> bool:
     """Check if a string is safe to embed in a Tcl command.
 
     Returns True if safe, False if it contains embedded exec or dangerous patterns.

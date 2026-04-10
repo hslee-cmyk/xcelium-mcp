@@ -370,8 +370,8 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
                     if len(seg_tokens) >= len(denied_parts) and seg_tokens[:len(denied_parts)] == denied_parts:
                         return f"ERROR: Tcl command '{denied}' is blocked for security. Use dedicated MCP tools instead."
         # S-6 fix: also block embedded [exec ...] and [open ...] in Tcl substitution brackets
-        from xcelium_mcp.shell_utils import sanitize_tcl_string
-        if not sanitize_tcl_string(tcl_cmd):
+        from xcelium_mcp.shell_utils import is_safe_tcl_string
+        if not is_safe_tcl_string(tcl_cmd):
             return "ERROR: Tcl command contains embedded [exec] or [open] — blocked for security."
 
         bridge = bridges.get_bridge(target)
