@@ -308,6 +308,138 @@
         "pytest passes"
       ],
       "notes": "Perf review. sim_runner.py _start_bridge: cat bridge_ready_* polling 매 2초 × 최대 60회 = 60 subprocess. TCP connect는 subprocess 0회. scan_ready_files로 포트 번호 확인 후 asyncio.open_connection으로 직접 시도."
+    },
+    {
+      "id": "F-022",
+      "title": "Add regex validation to waveform zoom/cursor parameters",
+      "priority": 1,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "start_time, end_time에 _DURATION_RE 또는 동등한 regex 검증 적용 (waveform.py:138-150)",
+        "cursor_name에 ^[A-Za-z0-9_]+$ regex 검증 적용",
+        "time 파라미터에 동일 검증 적용",
+        "Tcl metachar 포함 시 명확한 에러 메시지 반환",
+        "pytest passes"
+      ],
+      "notes": "S-16. tools/waveform.py — zoom/cursor 파라미터가 Tcl 명령에 직접 삽입. deposit_signal(F-012), sim_run(F-013)과 동일 패턴의 injection 취약점."
+    },
+    {
+      "id": "F-023",
+      "title": "Add internal signal name sanitization in csv_cache.extract",
+      "priority": 2,
+      "passes": false,
+      "acceptanceCriteria": [
+        "csv_cache.extract() 내부에서 각 signal에 sanitize_signal_name() 또는 shell_quote() 적용",
+        "외부 caller 사전 검증에 의존하지 않는 defense-in-depth 구현",
+        "기존 caller 동작 변경 없음",
+        "pytest passes"
+      ],
+      "notes": "S-17. csv_cache.py:127-130 — signal names가 ssh_run 명령에 join되지만 내부 검증 없음. caller(tools/debug.py)가 sanitize하지만 함수 자체는 무방비."
+    },
+    {
+      "id": "F-024",
+      "title": "Move _validate_group_name inside _encode_group_arg",
+      "priority": 3,
+      "passes": false,
+      "acceptanceCriteria": [
+        "_encode_group_arg 내부에서 _validate_group_name 호출하여 self-contained 검증",
+        "외부에서 별도 validate 호출 불필요",
+        "기존 caller 동작 변경 없음",
+        "pytest passes"
+      ],
+      "notes": "S-18. tools/waveform.py:14-18 — validation과 encoding이 분리되어 호출 순서 바뀌면 brace injection 가능. 하나로 통합."
+    },
+    {
+      "id": "F-025",
+      "title": "Remove sim_runner.py re-export stub",
+      "priority": 2,
+      "passes": false,
+      "acceptanceCriteria": [
+        "sim_runner.py 삭제 또는 빈 모듈로 축소",
+        "모든 tools/*.py 및 내부 모듈이 실제 출처 모듈에서 직접 import 확인",
+        "python -c 'import xcelium_mcp.server' 성공",
+        "pytest passes"
+      ],
+      "notes": "Arch review. 106줄 re-export stub — 외부 consumer 없음. tools/*.py는 이미 직접 import로 전환됨. 삭제해도 무방."
+    },
+    {
+      "id": "F-026",
+      "title": "Resolve discovery ↔ bridge_lifecycle circular dependency",
+      "priority": 3,
+      "passes": false,
+      "acceptanceCriteria": [
+        "_patch_legacy_run_script, _update_simvisionrc를 discovery.py로 이동 또는 별도 script_patching.py로 분리",
+        "discovery.py의 lazy import 제거",
+        "순환 의존 해소 확인 (python -c import 성공)",
+        "pytest passes"
+      ],
+      "notes": "Arch review. discovery.run_full_discovery()가 bridge_lifecycle의 patching 함수를 lazy import. sole caller이므로 이동이 자연스러움."
+    },
+    {
+      "id": "F-027",
+      "title": "Merge batch_runner job-state write + PID watcher into single SSH call",
+      "priority": 3,
+      "passes": false,
+      "acceptanceCriteria": [
+        "batch_runner.py의 job state write(line 541)와 PID watcher launch(line 548)를 && 체이닝으로 1회 ssh_run 호출로 병합",
+        "테스트당 SSH 호출 1회 추가 절감",
+        "기존 동작 변경 없음",
+        "pytest passes"
+      ],
+      "notes": "Perf review. 두 명령은 독립적이므로 && 체이닝 가능. F-020에서 미처 병합하지 않은 부분."
+    },
+    {
+      "id": "F-028",
+      "title": "Rename sanitize_tcl_string to is_safe_tcl_string",
+      "priority": 3,
+      "passes": false,
+      "acceptanceCriteria": [
+        "shell_utils.py의 sanitize_tcl_string → is_safe_tcl_string으로 rename",
+        "모든 caller (tools/*.py, shell_utils.py 내부) import/호출 변경",
+        "함수 이름이 bool 반환 의미를 정확히 표현",
+        "pytest passes"
+      ],
+      "notes": "Pattern review R-001. sanitize_는 변환 의미, 실제로는 bool 반환. is_safe_ 또는 validate_ 접두사가 적절."
+    },
+    {
+      "id": "F-029",
+      "title": "Fix env_detection.py private function export — add __all__ or remove _ prefix",
+      "priority": 3,
+      "passes": false,
+      "acceptanceCriteria": [
+        "외부에서 import되는 17개 함수의 _ prefix 제거, 또는 __all__ 정의로 public API 명시",
+        "sim_runner.py stub의 re-export 목록과 일치 확인",
+        "discovery.py, bridge_lifecycle.py 등 caller의 import 문 업데이트",
+        "pytest passes"
+      ],
+      "notes": "Pattern review R-003. 17개 _-prefixed 함수를 5개 외부 모듈에서 직접 import — private 규약 위반."
+    },
+    {
+      "id": "F-030",
+      "title": "Add return type hints to batch_runner and tools/*.py functions",
+      "priority": 3,
+      "passes": false,
+      "acceptanceCriteria": [
+        "batch_runner.py 6개 함수에 -> str, -> dict, -> int 등 return annotation 추가",
+        "tools/*.py 9개 함수에 -> str return annotation 추가",
+        "ruff check 통과",
+        "pytest passes"
+      ],
+      "notes": "Pattern review N-001/N-002. 총 15개 함수에 return type hint 누락. 기존 타입 힌트가 있는 모듈과 일관성 맞추기."
+    },
+    {
+      "id": "F-031",
+      "title": "Narrow except Exception to specific exceptions in tools/*.py",
+      "priority": 3,
+      "passes": false,
+      "acceptanceCriteria": [
+        "tools/*.py 11곳의 except Exception을 (RuntimeError, ValueError, ConnectionError, TclError) 등 구체적 예외로 교체",
+        "F-009에서 적용한 BRIDGE_ERRORS 패턴과 일관성 유지",
+        "예상치 못한 예외는 전파되도록 변경",
+        "pytest passes"
+      ],
+      "notes": "Pattern review N-003. F-009에서 connect/retry는 수정했으나 tools 내 일반 핸들러 11곳 잔존. batch:2, checkpoint:2, debug:1, simvision:3, discovery:1."
     }
   ]
 }

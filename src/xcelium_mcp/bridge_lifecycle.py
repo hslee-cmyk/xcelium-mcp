@@ -6,13 +6,10 @@ _patch_legacy_run_script, _update_simvisionrc, run_with_dump_window.
 from __future__ import annotations
 
 import asyncio
-import base64
 import logging
-import re
 
 from xcelium_mcp.batch_runner import resolve_sim_params, validate_extra_args
 from xcelium_mcp.discovery import resolve_sim_dir, run_full_discovery
-from xcelium_mcp.env_detection import _extract_script_name
 from xcelium_mcp.registry import load_sim_config
 from xcelium_mcp.shell_utils import (
     build_redirect,
@@ -31,87 +28,6 @@ logger = logging.getLogger(__name__)
 # ===================================================================
 # Legacy script patching
 # ===================================================================
-
-_SIMVISIONRC_MARKER = "# [xcelium-mcp] managed by sim_discover"
-
-
-async def _patch_legacy_run_script(sim_dir: str, runner_info: dict) -> str:
-    """Patch legacy run script to support MCP_INPUT_TCL env var override."""
-    script_name = _extract_script_name(runner_info.get("exec_cmd", ""))
-    script_path = f"{sim_dir}/{script_name}"
-    _sp = sq(script_path)
-
-    exists = await ssh_run(f"test -f {_sp} && echo YES || echo NO", timeout=5)
-    if "YES" not in exists:
-        return "run script not found"
-
-    r = await ssh_run(f"grep -c 'MCP_INPUT_TCL' {_sp} || true")
-    if r.strip() and r.strip() != "0":
-        return "already patched"
-
-    r = await ssh_run(f"grep -n 'xmsim.*-input' {_sp} || true")
-    if not r.strip():
-        return "no xmsim -input found — manual patch needed"
-
-    match = re.search(r'-input\s+(\S+)', r.strip())
-    if not match:
-        return "could not parse -input argument — manual patch needed"
-
-    original_tcl = match.group(1)
-    escaped_original = re.escape(original_tcl)
-    replacement = f'${{MCP_INPUT_TCL:-{original_tcl}}}'
-
-    # sq() the sed pattern to prevent shell injection from original_tcl/replacement
-    sed_pattern = f"s|-input {escaped_original}|-input {replacement}|"
-    sed_cmd = f"sed -i -e {sq(sed_pattern)} {_sp}"
-    await ssh_run(sed_cmd, timeout=10)
-
-    r = await ssh_run(f"grep -c 'MCP_INPUT_TCL' {_sp} || true")
-    if r.strip() and r.strip() != "0":
-        return f"patched: -input {original_tcl} -> -input {replacement}"
-    return "patch failed — manual edit needed"
-
-
-async def _update_simvisionrc(bridge_tcl: str) -> str:
-    """Update ~/.simvisionrc to source mcp_bridge.tcl from install path."""
-    home = (await ssh_run("echo $HOME")).strip()
-    rc_path = f"{home}/.simvisionrc"
-    source_line = f"source {bridge_tcl}"
-
-    content = await ssh_run(f"cat {rc_path} || true")
-
-    if _SIMVISIONRC_MARKER in content:
-        lines = content.splitlines()
-        new_lines = []
-        skip_next = False
-        for line in lines:
-            if _SIMVISIONRC_MARKER in line:
-                new_lines.append(_SIMVISIONRC_MARKER)
-                new_lines.append(source_line)
-                skip_next = True
-                continue
-            if skip_next and line.strip().startswith("source") and "mcp_bridge" in line:
-                skip_next = False
-                continue
-            skip_next = False
-            new_lines.append(line)
-        new_content = "\n".join(new_lines)
-        # base64-encode to avoid heredoc delimiter injection
-        b64 = base64.b64encode(new_content.encode()).decode()
-        await ssh_run(f"echo {sq(b64)} | base64 -d > {sq(rc_path)}")
-        return "updated (marker found)"
-
-    if "mcp_bridge" in content:
-        sed_pattern = f"/mcp_bridge/c\\{_SIMVISIONRC_MARKER}\\n{source_line}"
-        await ssh_run(f"sed -i -e {sq(sed_pattern)} {sq(rc_path)}")
-        return "replaced unmanaged entry"
-
-    managed_block = f"{_SIMVISIONRC_MARKER}\n{source_line}"
-    await ssh_run(f"echo '\\n{managed_block}' >> {rc_path}")
-    if not content.strip():
-        return "created"
-    return "added"
-
 
 # ===================================================================
 # Bridge mode dump_window

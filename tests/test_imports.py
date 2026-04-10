@@ -28,7 +28,8 @@ PACKAGE_MODULES = [
     "xcelium_mcp.screenshot",
     "xcelium_mcp.server",
     "xcelium_mcp.shell_utils",
-    "xcelium_mcp.sim_runner",
+    "xcelium_mcp.discovery",
+    "xcelium_mcp.bridge_lifecycle",
     "xcelium_mcp.tcl_bridge",
     "xcelium_mcp.tcl_preprocessing",
 ]

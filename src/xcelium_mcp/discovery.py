@@ -1,11 +1,13 @@
 """discovery.py — Simulation environment discovery and SDF analysis.
 
 Extracted from sim_runner.py. Contains: run_full_discovery, resolve_sim_dir,
-get_default_sim_dir, SDF annotation analysis, and top module extraction.
+get_default_sim_dir, SDF annotation analysis, top module extraction,
+and legacy script patching.
 """
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import os
 import re
@@ -279,6 +281,89 @@ async def _analyze_sdf_annotate(
 
 
 # ===================================================================
+# Legacy script patching (moved from bridge_lifecycle to break circular dep)
+# ===================================================================
+
+_SIMVISIONRC_MARKER = "# [xcelium-mcp] managed by sim_discover"
+
+
+async def _patch_legacy_run_script(sim_dir: str, runner_info: dict) -> str:
+    """Patch legacy run script to support MCP_INPUT_TCL env var override."""
+    script_name = _extract_script_name(runner_info.get("exec_cmd", ""))
+    script_path = f"{sim_dir}/{script_name}"
+    _sp = sq(script_path)
+
+    exists = await ssh_run(f"test -f {_sp} && echo YES || echo NO", timeout=5)
+    if "YES" not in exists:
+        return "run script not found"
+
+    r = await ssh_run(f"grep -c 'MCP_INPUT_TCL' {_sp} || true")
+    if r.strip() and r.strip() != "0":
+        return "already patched"
+
+    r = await ssh_run(f"grep -n 'xmsim.*-input' {_sp} || true")
+    if not r.strip():
+        return "no xmsim -input found — manual patch needed"
+
+    match = re.search(r'-input\s+(\S+)', r.strip())
+    if not match:
+        return "could not parse -input argument — manual patch needed"
+
+    original_tcl = match.group(1)
+    escaped_original = re.escape(original_tcl)
+    replacement = f'${{MCP_INPUT_TCL:-{original_tcl}}}'
+
+    sed_pattern = f"s|-input {escaped_original}|-input {replacement}|"
+    sed_cmd = f"sed -i -e {sq(sed_pattern)} {_sp}"
+    await ssh_run(sed_cmd, timeout=10)
+
+    r = await ssh_run(f"grep -c 'MCP_INPUT_TCL' {_sp} || true")
+    if r.strip() and r.strip() != "0":
+        return f"patched: -input {original_tcl} -> -input {replacement}"
+    return "patch failed — manual edit needed"
+
+
+async def _update_simvisionrc(bridge_tcl: str) -> str:
+    """Update ~/.simvisionrc to source mcp_bridge.tcl from install path."""
+    home = (await ssh_run("echo $HOME")).strip()
+    rc_path = f"{home}/.simvisionrc"
+    source_line = f"source {bridge_tcl}"
+
+    content = await ssh_run(f"cat {rc_path} || true")
+
+    if _SIMVISIONRC_MARKER in content:
+        lines = content.splitlines()
+        new_lines = []
+        skip_next = False
+        for line in lines:
+            if _SIMVISIONRC_MARKER in line:
+                new_lines.append(_SIMVISIONRC_MARKER)
+                new_lines.append(source_line)
+                skip_next = True
+                continue
+            if skip_next and line.strip().startswith("source") and "mcp_bridge" in line:
+                skip_next = False
+                continue
+            skip_next = False
+            new_lines.append(line)
+        new_content = "\n".join(new_lines)
+        b64 = base64.b64encode(new_content.encode()).decode()
+        await ssh_run(f"echo {sq(b64)} | base64 -d > {sq(rc_path)}")
+        return "updated (marker found)"
+
+    if "mcp_bridge" in content:
+        sed_pattern = f"/mcp_bridge/c\\{_SIMVISIONRC_MARKER}\\n{source_line}"
+        await ssh_run(f"sed -i -e {sq(sed_pattern)} {sq(rc_path)}")
+        return "replaced unmanaged entry"
+
+    managed_block = f"{_SIMVISIONRC_MARKER}\n{source_line}"
+    await ssh_run(f"echo '\\n{managed_block}' >> {rc_path}")
+    if not content.strip():
+        return "created"
+    return "added"
+
+
+# ===================================================================
 # Discovery orchestrator
 # ===================================================================
 
@@ -287,8 +372,6 @@ async def run_full_discovery(
     sim_dir: str = "", force: bool = False, top_module: str = "",
 ) -> str:
     """Main discovery orchestrator. Called by sim_discover MCP tool."""
-    # Import here to avoid circular: bridge_lifecycle -> discovery -> bridge_lifecycle
-    from xcelium_mcp.bridge_lifecycle import _patch_legacy_run_script, _update_simvisionrc
 
     if not sim_dir:
         envs = await _discover_sim_dir()
