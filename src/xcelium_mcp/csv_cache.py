@@ -16,6 +16,7 @@ from collections import OrderedDict, deque
 from pathlib import Path
 
 from xcelium_mcp.shell_utils import ssh_run
+from xcelium_mcp.sim_runner import get_user_tmp_dir
 
 # ---------------------------------------------------------------------------
 # simvisdbutil path resolution — MCP server runs in bash without EDA PATH
@@ -64,20 +65,21 @@ def _cache_key(
     return (shm_path, frozenset(signals), start_ns, end_ns)
 
 
-def _default_output_path(
+async def _default_output_path(
     shm_path: str, signals: list[str], start_ns: int, end_ns: int
 ) -> str:
-    """Generate a deterministic CSV output path based on inputs.
+    """Generate a deterministic CSV output path in per-user tmp dir.
 
-    Output is placed next to the SHM file:
-      <shm_dir>/mcp_csv_<stem>_<sig_hash>[_<start>_<end>].csv
+    Output path:
+      <user_tmp>/mcp_csv_<stem>_<sig_hash>[_<start>_<end>].csv
     """
     sig_hash = hashlib.md5(",".join(sorted(signals)).encode()).hexdigest()[:8]
     # Extract .shm directory stem (not inner .trn filename)
     shm_p = Path(shm_path)
     stem = shm_p.parent.stem if shm_p.parent.suffix == ".shm" else shm_p.stem
     suffix = f"_{start_ns}_{end_ns}" if (start_ns or end_ns) else ""
-    return str(shm_p.parent / f"mcp_csv_{stem}_{sig_hash}{suffix}.csv")
+    user_tmp = await get_user_tmp_dir()
+    return f"{user_tmp}/mcp_csv_{stem}_{sig_hash}{suffix}.csv"
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +112,7 @@ async def extract(
         return _cache[key]
 
     if not output_path:
-        output_path = _default_output_path(shm_path, signals, start_ns, end_ns)
+        output_path = await _default_output_path(shm_path, signals, start_ns, end_ns)
 
     # --- Build simvisdbutil command with EDA env ---
     svdb = await _resolve_simvisdbutil()
