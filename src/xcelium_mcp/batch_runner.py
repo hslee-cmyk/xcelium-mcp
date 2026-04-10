@@ -26,7 +26,6 @@ from xcelium_mcp.shell_utils import (
     login_shell_cmd,
     shell_quote,
     shell_run,
-    shell_run_with_retry,
 )
 from xcelium_mcp.tcl_preprocessing import (
     _build_checkpoint_tcl,
@@ -277,16 +276,12 @@ async def launch_nohup_job(
             "started_at": datetime.now().isoformat(),
         })
         done_file = f"{log_file}.done"
-        # Write job file (sync, fast)
-        await shell_run_with_retry(
-            f"printf '%s' {shell_quote(job_info)} > {job_file}",
-            timeout=15,
-        )
-        # Launch PID watcher independently using nohup pattern (fully detached from SSH session)
+        # Write job file + launch PID watcher in single command
+        # subprocess.run returns when bash exits — background watcher doesn't block
         await shell_run(
-            f"(nohup bash -c 'while kill -0 {pid} 2>/dev/null; do sleep 2; done; touch {shell_quote(done_file)}' "
-            f"< /dev/null >& /dev/null &)",
-            timeout=10,
+            f"printf '%s' {shell_quote(job_info)} > {job_file} && "
+            f"(while kill -0 {pid} 2>/dev/null; do sleep 2; done; touch {shell_quote(done_file)}) >& /dev/null &",
+            timeout=15,
         )
 
     return pid
@@ -522,19 +517,17 @@ async def run_batch_regression(
                 "test_list": test_list,
                 "started_at": datetime.now().isoformat(),
             })
-            # Write job file (sync, fast) — no base64, use printf directly
-            await shell_run_with_retry(
-                f"printf '%s' {shell_quote(job_info)} > {job_file}",
-                timeout=15,
-            )
-            # Launch PID watcher independently using nohup pattern (fully detached from SSH session)
+            # Write job file + launch PID watcher in single command
+            # subprocess.run returns when bash exits — background watcher doesn't block
             if test_pid:
                 test_done = f"{test_log}.done"
                 await shell_run(
-                    f"(nohup bash -c 'while kill -0 {test_pid} 2>/dev/null; do sleep 2; done; touch {shell_quote(test_done)}' "
-                    f"< /dev/null >& /dev/null &)",
-                    timeout=10,
+                    f"printf '%s' {shell_quote(job_info)} > {job_file} && "
+                    f"(while kill -0 {test_pid} 2>/dev/null; do sleep 2; done; touch {shell_quote(test_done)}) >& /dev/null &",
+                    timeout=15,
                 )
+            else:
+                await shell_run(f"printf '%s' {shell_quote(job_info)} > {job_file}", timeout=15)
 
             # Per-test poll (P6-1/P6-2/P6-5 via poll_batch_log)
             _, timed_out = await poll_batch_log(test_log, 600)

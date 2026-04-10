@@ -320,12 +320,12 @@ async def test_launch_nohup_no_pid() -> None:
 
 
 @pytest.mark.asyncio
-async def test_launch_nohup_pid_watcher_disconnects_stdin() -> None:
-    """PID watcher SSH command must include '< /dev/null' to disconnect stdin.
+async def test_launch_nohup_pid_watcher_merged_command() -> None:
+    """PID watcher and job file write are merged in single shell_run call.
 
-    Without '< /dev/null', the background PID watcher keeps SSH stdin open,
-    causing the shell_run call to hang until the watcher exits (which can be
-    minutes). This test prevents regression of the F-027 SSH timeout bug.
+    shell_run uses subprocess.run which returns when bash exits —
+    background PID watcher doesn't block. This test verifies the
+    merged command structure: printf + && + (watcher) &
     """
     captured_commands: list[str] = []
 
@@ -335,7 +335,6 @@ async def test_launch_nohup_pid_watcher_disconnects_stdin() -> None:
 
     with (
         patch("xcelium_mcp.batch_runner.shell_run", side_effect=capturing_shell_run),
-        patch("xcelium_mcp.batch_runner.shell_run_with_retry", side_effect=capturing_shell_run),
         patch(
             "xcelium_mcp.shell_utils.get_user_tmp_dir",
             new_callable=AsyncMock,
@@ -350,28 +349,17 @@ async def test_launch_nohup_pid_watcher_disconnects_stdin() -> None:
             job_file="/tmp/batch_job.json",
         )
 
-    # Find the PID watcher command (the one with "while kill -0")
+    # Find the merged command (job write + PID watcher)
     watcher_cmds = [c for c in captured_commands if "while kill -0" in c]
-    assert watcher_cmds, "Expected a PID watcher SSH command"
+    assert watcher_cmds, "Expected a PID watcher command"
     watcher_cmd = watcher_cmds[0]
 
-    # Must use nohup bash -c to fully detach from SSH session
-    assert "nohup bash -c" in watcher_cmd, (
-        "PID watcher must use 'nohup bash -c' to fully detach from SSH session. "
-        "Without nohup, the watcher keeps the SSH session open until simulation ends."
-    )
-    # Must include '< /dev/null' to detach stdin
-    assert "< /dev/null" in watcher_cmd, "PID watcher must include '< /dev/null'"
-    # Must redirect stdout+stderr away from SSH session
+    # Must include printf for job file write (merged in same command)
+    assert "printf" in watcher_cmd, "Job file write (printf) must be in same command as PID watcher"
+    # Must redirect watcher output
     assert ">& /dev/null" in watcher_cmd, "PID watcher must redirect output with '>& /dev/null'"
-    # Must be backgrounded (ends with '&' or '&)' when wrapped in subshell)
-    stripped = watcher_cmd.strip()
-    assert stripped.endswith("&") or stripped.endswith("&)"), (
-        "PID watcher must run in background ('&' or '&)' at end)"
-    )
-    # Job file must use printf (not echo | base64 -d)
-    job_write_cmds = [c for c in captured_commands if "printf" in c and "job" in c]
-    assert job_write_cmds, "Job file write must use printf '%s' (not echo | base64 -d)"
+    # Must be backgrounded
+    assert watcher_cmd.strip().endswith("&"), "PID watcher must run in background with trailing '&'"
 
 
 # ---------------------------------------------------------------------------

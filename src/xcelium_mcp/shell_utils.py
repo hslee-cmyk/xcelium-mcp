@@ -92,8 +92,11 @@ async def shell_run_with_retry(
 async def shell_run(cmd: str, timeout: float = 60.0, log_file: str = "") -> str:
     """Run a shell command as a local subprocess.
 
-    Since xcelium-mcp runs on cloud0, this is a local asyncio subprocess —
-    not an SSH call. Combined stdout+stderr is returned as a single string.
+    Since xcelium-mcp runs on cloud0, this is a local subprocess —
+    not an SSH call. Uses subprocess.run via asyncio.to_thread to avoid
+    blocking the event loop while remaining immune to background child
+    processes inheriting stdout (the root cause of the old communicate()
+    timeout issue).
     """
     if "2>&1" in cmd:
         raise ValueError(
@@ -103,18 +106,23 @@ async def shell_run(cmd: str, timeout: float = 60.0, log_file: str = "") -> str:
     if log_file:
         cmd = f"{cmd} {build_redirect(log_file)}"
 
-    proc = await asyncio.create_subprocess_shell(
-        cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.communicate()
-        raise asyncio.TimeoutError(f"shell_run timeout ({timeout}s): {cmd}")
-    return (stdout + stderr).decode("utf-8", errors="replace").strip()
+    def _run() -> str:
+        import subprocess
+        try:
+            r = subprocess.run(
+                ["bash", "-c", cmd],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            out = r.stdout
+            if r.stderr:
+                out += "\n" + r.stderr
+            return out.strip()
+        except subprocess.TimeoutExpired:
+            raise asyncio.TimeoutError(f"shell_run timeout ({timeout}s): {cmd}")
+
+    return await asyncio.to_thread(_run)
 
 
 def login_shell_cmd(login_shell: str, cmd: str) -> str:
