@@ -782,10 +782,34 @@ async def _start_bridge(
         await bridges.xmsim_raw.disconnect()
         bridges.set_xmsim(None)
 
+    # F-021: TCP connect retry — try direct port connection (0 subprocess spawns)
+    # Falls back to scan_ready_files if TCP probe fails after half the timeout
+    last_exc: Exception | None = None
+    tcp_deadline = effective_timeout // 2  # first half: pure TCP probe
+    for i in range(tcp_deadline // 2):
+        await asyncio.sleep(2)
+        new_bridge = _TB(host="localhost", port=port)
+        try:
+            ping = await new_bridge.connect()
+            if bridges is not None:
+                bridges.set_xmsim(new_bridge)
+            return (
+                f"Simulation started and connected (bridge mode, {sim_mode}).\n"
+                f"  test: {test_name}\n"
+                f"  setup_tcl: {setup_tcl}\n"
+                f"  port: {port}\n"
+                f"  ping: {ping}\n"
+                f"  log: {log_file}\n\n"
+                f"Ready. sim_run, get_signal_value etc. available immediately."
+            )
+        except _BRIDGE_ERRORS as e:
+            last_exc = e
+            logger.debug("TCP connect attempt %d failed: %s", i, e)
+
+    # Fallback: scan ready files (handles port mismatch / dynamic port)
     from xcelium_mcp.bridge_manager import scan_ready_files
 
-    last_exc: Exception | None = None
-    for i in range(effective_timeout // 2):
+    for i in range(tcp_deadline // 2):
         await asyncio.sleep(2)
         for actual_port, _btype in await scan_ready_files(target="xmsim"):
             new_bridge = _TB(host="localhost", port=actual_port)
