@@ -45,13 +45,15 @@ async def ps_to_png(ps_path: str, png_path: str | None = None,
         cleanup = False
 
     try:
-        await _convert_gs(ps_path, png_path, resolution, config)
-    except (FileNotFoundError, RuntimeError):
-        await _convert_imagemagick(ps_path, png_path, resolution, config)
+        try:
+            await _convert_gs(ps_path, png_path, resolution, config)
+        except (FileNotFoundError, RuntimeError):
+            await _convert_imagemagick(ps_path, png_path, resolution, config)
 
-    png_bytes = Path(png_path).read_bytes()
-    if cleanup:
-        os.unlink(png_path)
+        png_bytes = Path(png_path).read_bytes()
+    finally:
+        if cleanup and os.path.exists(png_path):
+            os.unlink(png_path)
     return png_bytes
 
 
