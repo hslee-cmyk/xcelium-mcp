@@ -128,11 +128,20 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
                       "breakpoint" — conditional breakpoint via stop -create.
             watch_id: Watchpoint ID to clear, or "all" (action="clear" only).
         """
+        _VALID_OPS = {"==", "!=", ">", "<", ">=", "<="}
         bridge = bridges.xmsim
 
         if action == "set":
             if not signal:
                 return "ERROR: 'signal' is required for action='set'."
+            try:
+                signal = sanitize_signal_name(signal)
+            except ValueError as e:
+                return f"ERROR: {e}"
+            if op not in _VALID_OPS:
+                return f"ERROR: Invalid operator '{op}'. Use one of: {', '.join(sorted(_VALID_OPS))}"
+            if any(c in value for c in '$;['):
+                return f"ERROR: value contains forbidden Tcl metachar: {value!r}"
             if type == "breakpoint":
                 condition = f"{signal} {op} {value}"
                 m = re.match(r'^(\S+)\s*(==|!=|>|<|>=|<=)\s*(.+)$', condition.strip())
@@ -149,6 +158,8 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
                 return f"Watchpoint set: {result}"
 
         elif action == "clear":
+            if watch_id != "all" and not watch_id.isdigit():
+                return f"ERROR: watch_id must be 'all' or a numeric ID, got: {watch_id!r}"
             result = await bridge.execute(f"__WATCH_CLEAR__ {watch_id}")
             return result
 
@@ -179,6 +190,17 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         if action == "add":
             if not signals:
                 return "ERROR: 'signals' is required for action='add'."
+            try:
+                signals = [sanitize_signal_name(s) for s in signals]
+            except ValueError as e:
+                return f"ERROR: {e}"
+            if depth != "all" and not depth.isdigit():
+                return f"ERROR: depth must be 'all' or a numeric value, got: {depth!r}"
+            if shm_path:
+                try:
+                    validate_path(shm_path)
+                except ValueError as e:
+                    return f"ERROR: {e}"
             sig_str = " ".join(signals)
             if shm_path:
                 cmd = f"probe -create {{{sig_str}}} -shm {shm_path} -depth {depth}"
@@ -188,6 +210,11 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             return f"Probe added for {len(signals)} signal(s). {result}"
 
         elif action in ("enable", "disable"):
+            if scope:
+                try:
+                    scope = sanitize_signal_name(scope)
+                except ValueError as e:
+                    return f"ERROR: {e}"
             cmd = f"__PROBE_CONTROL__ {action} {scope}" if scope else f"__PROBE_CONTROL__ {action}"
             result = await bridge.execute(cmd)
             return result

@@ -5,6 +5,7 @@ from mcp.server.fastmcp import FastMCP, Image
 
 from xcelium_mcp.bridge_manager import BridgeManager
 from xcelium_mcp.screenshot import ps_to_png
+from xcelium_mcp.shell_utils import sanitize_signal_name
 from xcelium_mcp.tcl_bridge import TclBridge, TclError
 
 
@@ -44,7 +45,14 @@ async def _waveform_add_impl(
     if err:
         return err
 
+    try:
+        signals = [sanitize_signal_name(s) for s in signals]
+    except ValueError as e:
+        return f"ERROR: {e}"
+
     if window_name:
+        if any(c in window_name for c in '$;['):
+            return f"ERROR: window_name contains forbidden Tcl metachar: {window_name!r}"
         try:
             await bridge.execute(f"waveform using {window_name}")
         except TclError:
@@ -101,6 +109,11 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
                 return err
             if not signals and not group_name:
                 return "ERROR: Provide signals to remove, or group_name to remove a group."
+            if signals:
+                try:
+                    signals = [sanitize_signal_name(s) for s in signals]
+                except ValueError as e:
+                    return f"ERROR: {e}"
             grp = _encode_group_arg(group_name)
             sig_str = " ".join(signals) if signals else ""
             result = await bridge.execute(

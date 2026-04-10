@@ -5,5 +5,140 @@
     "Verification command passes (pytest + ruff)",
     "All non-skipped tasks marked passes: true"
   ],
-  "features": []
+  "features": [
+    {
+      "id": "F-001",
+      "title": "Fix Tcl injection gap in watch/probe/waveform tools",
+      "priority": 1,
+      "passes": false,
+      "acceptanceCriteria": [
+        "sanitize_signal_name() called on signal params in tools/debug.py watch (L131-156) and probe (L177-196)",
+        "sanitize_signal_name() called on signal params in tools/waveform.py add (L55) and remove (L107)",
+        "Also sanitize op, value, watch_id — all user-controlled bridge command args",
+        "pytest passes (existing + any new sanitization tests)"
+      ],
+      "notes": "bisect_signal/inspect_signal/deposit_signal already sanitize. watch/probe/waveform.add,remove do not — same threat model, inconsistent defense."
+    },
+    {
+      "id": "F-002",
+      "title": "Fix compare_waveforms: injection + fd leak + validate_path",
+      "priority": 1,
+      "passes": false,
+      "acceptanceCriteria": [
+        "display param validated against regex ^:?[0-9]+(\\.[0-9]+)?$",
+        "simvision launch uses (nohup ... &) subshell pattern + build_redirect like batch_runner B-0 fix",
+        "shm_before/shm_after pass through validate_path()",
+        "pytest passes"
+      ],
+      "notes": "tools/simvision.py:503-518. Three bugs in ~15 lines. Batch runner already has the fd-leak fix pattern."
+    },
+    {
+      "id": "F-003",
+      "title": "Fix screenshot.py temp file leak on double-exception",
+      "priority": 2,
+      "passes": false,
+      "acceptanceCriteria": [
+        "try/finally wraps both _convert_gs and _convert_imagemagick paths",
+        "Temp file is always cleaned up if cleanup=True, even on exception",
+        "pytest passes"
+      ],
+      "notes": "screenshot.py:40-55. mkstemp creates temp, no finally block, double exception leaks file."
+    },
+    {
+      "id": "F-004",
+      "title": "Fix csv_cache.clear_cache OrderedDict downgrade",
+      "priority": 2,
+      "passes": false,
+      "acceptanceCriteria": [
+        "clear_cache(shm_path=...) preserves OrderedDict type after filtering",
+        "Subsequent move_to_end/popitem calls do not raise AttributeError",
+        "pytest passes"
+      ],
+      "notes": "csv_cache.py:317-322. Dict comprehension replaces OrderedDict with plain dict. Fix: use OrderedDict comprehension or clear()+update()."
+    },
+    {
+      "id": "F-005",
+      "title": "Split sim_runner.py god module",
+      "priority": 2,
+      "passes": false,
+      "skip": true,
+      "skipReason": "Large structural refactor requiring extensive testing across all tool modules. Do after security fixes.",
+      "acceptanceCriteria": [
+        "sim_runner.py split into bridge_lifecycle.py + discovery.py",
+        "Utility functions moved to shell_utils.py",
+        "All lazy imports in downstream modules eliminated",
+        "All 61+ tests pass",
+        "No circular import at import time"
+      ],
+      "notes": "811-line god module with 20+ circular-import workarounds. Re-export shim forces lazy imports everywhere."
+    },
+    {
+      "id": "F-006",
+      "title": "Extract pure helpers from batch_runner._run_batch_*",
+      "priority": 2,
+      "passes": false,
+      "skip": true,
+      "skipReason": "Depends on F-005 (sim_runner split). Large refactor — skip until structural work is done.",
+      "acceptanceCriteria": [
+        "build_launch_cmd, parse_existing_job, launch_nohup_job, watch_pid_and_poll extracted as pure/thin helpers",
+        "_run_batch_single becomes a 30-line orchestrator",
+        "New helpers have unit tests",
+        "pytest passes"
+      ],
+      "notes": "batch_runner.py:128-285 and 288-540. 150-line procedural blobs with 6+ responsibilities each."
+    },
+    {
+      "id": "F-007",
+      "title": "Remove test theater — inline copies replaced with real imports",
+      "priority": 1,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "test_dump_strategy.py imports real functions from tcl_preprocessing/sim_runner",
+        "test_shm_naming.py imports real _replace_shm_stems from tcl_preprocessing",
+        "test_imports.py smoke tests all modules",
+        "61 tests pass"
+      ],
+      "notes": "DONE in commit bf878e7. 37 → 61 tests, -145 lines net."
+    },
+    {
+      "id": "F-008",
+      "title": "Add Tcl escaping to debug_tools.generate_debug_tcl_content",
+      "priority": 2,
+      "passes": false,
+      "acceptanceCriteria": [
+        "shm_path validated as filesystem path (no shell metachars)",
+        "signals pass through sanitize_signal_name",
+        "context_note and markers[].label Tcl-escaped (quote \", [, $, backslash)",
+        "pytest passes"
+      ],
+      "notes": "debug_tools.py:43-97. Output Tcl embeds user inputs via raw f-string. Attack surface: MCP client plants malicious .tcl."
+    },
+    {
+      "id": "F-009",
+      "title": "Narrow bare except Exception in connect/retry loops",
+      "priority": 3,
+      "passes": false,
+      "acceptanceCriteria": [
+        "TclBridge.disconnect catches (ConnectionError, asyncio.TimeoutError, OSError) not Exception",
+        "Retry loops in simvision.py, sim_lifecycle.py catch specific exceptions",
+        "Last exception included in final error message",
+        "pytest passes"
+      ],
+      "notes": "tcl_bridge.py:59,64; simvision.py:144,231; sim_lifecycle.py:75,239; sim_runner.py:800."
+    },
+    {
+      "id": "F-010",
+      "title": "Clean up dead code in register() return dicts",
+      "priority": 3,
+      "passes": false,
+      "acceptanceCriteria": [
+        "generate_debug_tcl_fn param removed from simvision.register and server.py",
+        "waveform.register lambda replaced with functools.partial",
+        "Unused dict entries cleaned from debug.register and waveform.register returns",
+        "pytest passes"
+      ],
+      "notes": "tools/debug.py:473, tools/waveform.py:160-163. Vestigial cross-tool wiring that nothing invokes."
+    }
+  ]
 }
