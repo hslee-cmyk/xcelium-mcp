@@ -28,6 +28,23 @@ python -m pytest && python -m ruff check src/
 
 ---
 
+### Task: Ralph loop — F-011 through F-018 (security + dedup batch)
+
+**Completed (8 tasks):**
+
+1. **F-011** — Tcl denylist bypass via semicolons/tabs: normalize whitespace, split on `;`/`\n`
+2. **F-012** — deposit_signal value regex validation: `_DEPOSIT_VALUE_RE`
+3. **F-013** — sim_run duration regex validation: `_DURATION_RE`
+4. **F-014** — Replace all 67 `2>/dev/null` with `|| true` for tcsh compat
+5. **F-015** — csv_cache CSV output moved to per-user tmp dir
+6. **F-016** — `scan_ready_files()` helper extracted, 5 duplicates removed
+7. **F-017** — `build_eda_command()` helper for EDA env sourcing
+8. **F-018** — `DEFAULT_BRIDGE_PORT`, `BRIDGE_ERRORS`, `_PROTECTED_KEYS` consolidated
+
+**Skipped:** F-019 (simvision extraction), F-020 (SSH consolidation), F-021 (inotifywait) — large refactors needing remote testing
+
+---
+
 ### Task: Ralph loop — F-002 through F-010 (security + cleanup batch)
 
 **Completed (6 tasks in single iteration):**

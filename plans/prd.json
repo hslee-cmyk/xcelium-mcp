@@ -146,6 +146,165 @@
         "pytest passes"
       ],
       "notes": "tools/debug.py:473, tools/waveform.py:160-163. Vestigial cross-tool wiring that nothing invokes."
+    },
+    {
+      "id": "F-011",
+      "title": "Fix Tcl denylist bypass via semicolons/tabs without space",
+      "priority": 1,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "execute_tcl normalizes whitespace (collapse tabs/multiple spaces) before denylist check",
+        "Input split on ; and newline, each segment's first token checked against denylist",
+        "Payloads like \";exec rm\" and \"\\texec rm\" are rejected",
+        "pytest passes"
+      ],
+      "notes": "S-11. tools/sim_lifecycle.py:362-366. Denylist checks startswith(denied) and \"; {denied}\" but not \";exec\" (no space) or \"\\texec\"."
+    },
+    {
+      "id": "F-012",
+      "title": "Add regex validation to deposit_signal value parameter",
+      "priority": 1,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "value validated with re.fullmatch(r\"[\\d'bhBHxXzZ_]+\", value) or equivalent",
+        "Tcl metacharacters in value are rejected before reaching Tcl bridge",
+        "Payload like \"1 ; exec rm\" is rejected with clear error",
+        "pytest passes"
+      ],
+      "notes": "S-12. tools/signal_inspection.py:191. signal is sanitized but value is passed raw to Tcl bridge."
+    },
+    {
+      "id": "F-013",
+      "title": "Add regex validation to sim_run duration parameter",
+      "priority": 1,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "duration validated with re.fullmatch(r\"\\d+\\s*(ns|us|ms|s|ps|fs)?\", duration) or equivalent",
+        "Tcl metacharacters in duration are rejected before reaching Tcl bridge",
+        "Payload like \"100ns; exec rm\" is rejected with clear error",
+        "pytest passes"
+      ],
+      "notes": "S-13. tools/sim_lifecycle.py:321. duration string sent raw to Tcl bridge as __RUN_AND_REPORT__ {duration}."
+    },
+    {
+      "id": "F-014",
+      "title": "Replace 2>/dev/null with || true pattern for tcsh compat",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "sim_runner.py:171,175 no longer use 2>/dev/null",
+        "Replaced with '|| true' pattern or Python-side filtering",
+        "No 2>/dev/null remains in any ssh_run call across codebase",
+        "pytest passes"
+      ],
+      "notes": "S-14. 2>/dev/null causes tcsh 'Ambiguous redirect'. Violates project CLAUDE.md rule."
+    },
+    {
+      "id": "F-015",
+      "title": "Move csv_cache CSV output to per-user tmp dir",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "csv_cache.extract writes to get_user_tmp_dir() instead of SHM-adjacent path",
+        "Deterministic filename still used for cache key matching",
+        "No symlink race possible in multi-user scenario",
+        "pytest passes"
+      ],
+      "notes": "S-15. csv_cache.py:80. Predictable path mcp_csv_{stem}_{sig_hash}.csv next to shared SHM dir."
+    },
+    {
+      "id": "F-016",
+      "title": "Extract bridge ready-file scan helper (5x duplication)",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "New bridge_manager.scan_ready_file() or similar helper extracts common logic",
+        "sim_lifecycle.py (2 copies), simvision.py (2 copies), sim_runner.py (1 copy) all use the helper",
+        "No duplicate cat bridge_ready_* + parse logic remains",
+        "pytest passes"
+      ],
+      "notes": "Pattern review. Logic to cat bridge_ready_*, parse lines, extract port+type duplicated 5 times."
+    },
+    {
+      "id": "F-017",
+      "title": "Extract EDA env sourcing command builder (5x duplication)",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "New build_eda_command(runner, inner_cmd) helper in shell_utils or similar",
+        "csv_cache.py, env_detection.py, sim_runner.py, simvision.py, checkpoint.py all use the helper",
+        "No duplicate source_separately/env_shell/login_shell_cmd construction remains",
+        "pytest passes"
+      ],
+      "notes": "Pattern review. source_separately check + source cmd + env_shell wrapping duplicated 5 times with minor variations."
+    },
+    {
+      "id": "F-018",
+      "title": "Consolidate scattered constants (BRIDGE_ERRORS, DEFAULT_BRIDGE_PORT, etc.)",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "DEFAULT_BRIDGE_PORT = 9876 defined once, used in 6 locations",
+        "BRIDGE_ERRORS = (ConnectionError, asyncio.TimeoutError, OSError, TclError) defined once, used in 5 locations",
+        "_PROTECTED_KEYS moved to module-level constant in registry.py",
+        "No inline 9876 or repeated exception tuples remain",
+        "pytest passes"
+      ],
+      "notes": "Pattern review. Port 9876 in 6 files, exception tuple in 5 files, PROTECTED_KEYS inside function body."
+    },
+    {
+      "id": "F-019",
+      "title": "Extract simvision.py orchestration logic into testable functions",
+      "priority": 2,
+      "passes": false,
+      "skip": true,
+      "skipReason": "Large structural refactor requiring extensive testing. Do after security and dedup fixes.",
+      "acceptanceCriteria": [
+        "VNC detection, SimVision launch, bridge polling, waveform state capture/restore extracted from register() closures",
+        "Extracted functions are independently unit-testable without MCP framework",
+        "simvision.py register() closures become thin orchestrators",
+        "pytest passes"
+      ],
+      "notes": "Arch review. 667-line simvision.py packs complex multi-step orchestration inside closures. Untestable."
+    },
+    {
+      "id": "F-020",
+      "title": "Consolidate batch regression SSH bookkeeping calls",
+      "priority": 3,
+      "passes": false,
+      "skip": true,
+      "skipReason": "Performance optimization requiring remote testing. Do after structural refactors.",
+      "acceptanceCriteria": [
+        "base64 encode+write reduced from 2 cycles to 1 per test",
+        "grep results collection batched into single find+grep command instead of per-test ssh_run",
+        "Total SSH calls per test reduced from 8-10 to 4-5",
+        "45-test regression overhead reduced measurably",
+        "pytest passes"
+      ],
+      "notes": "Perf review. batch_runner.py:392 loop — 8-10 ssh_run per test, 45-test = ~400 calls. Lines 432-443, 460-466 double base64."
+    },
+    {
+      "id": "F-021",
+      "title": "Replace bridge polling spin loop with inotifywait/TCP retry",
+      "priority": 3,
+      "passes": false,
+      "skip": true,
+      "skipReason": "Performance optimization requiring remote testing with inotifywait availability.",
+      "acceptanceCriteria": [
+        "Bridge ready detection uses inotifywait or TCP connect retry instead of cat polling",
+        "Eliminates up to 60 subprocess spawns during bridge startup",
+        "Fallback to polling if inotifywait unavailable",
+        "pytest passes"
+      ],
+      "notes": "Perf review. sim_runner.py:784-808. Polls cat bridge_ready_* every 2s, up to 60 iterations."
     }
   ]
 }
