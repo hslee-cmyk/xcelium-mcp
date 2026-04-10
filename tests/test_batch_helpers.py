@@ -19,9 +19,9 @@ from xcelium_mcp.batch_runner import (
     build_batch_cmd,
     launch_nohup_job,
     parse_existing_job,
-    resolve_sim_params,
-    watch_pid_and_poll,
 )
+from xcelium_mcp.batch_polling import watch_pid_and_poll
+from xcelium_mcp.test_resolution import resolve_sim_params
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +76,7 @@ async def test_parse_existing_job_alive_pid() -> None:
     job = json.dumps({"pid": 99, "log_file": "/tmp/batch.log", "test_name": "T1"})
     with (
         patch("xcelium_mcp.batch_runner.ssh_run", new_callable=AsyncMock) as mock_ssh,
-        patch("xcelium_mcp.batch_runner._poll_batch_log", new_callable=AsyncMock) as mock_poll,
+        patch("xcelium_mcp.batch_runner.poll_batch_log", new_callable=AsyncMock) as mock_poll,
     ):
         mock_ssh.side_effect = [
             job,       # cat job_file
@@ -328,8 +328,8 @@ async def test_launch_nohup_no_pid() -> None:
 async def test_watch_pid_and_poll_returns_result() -> None:
     """Verify polling result is returned and job file is cleaned."""
     with (
-        patch("xcelium_mcp.batch_runner._poll_batch_log", new_callable=AsyncMock) as mock_poll,
-        patch("xcelium_mcp.batch_runner.ssh_run", new_callable=AsyncMock) as mock_ssh,
+        patch("xcelium_mcp.batch_polling.poll_batch_log", new_callable=AsyncMock) as mock_poll,
+        patch("xcelium_mcp.batch_polling.ssh_run", new_callable=AsyncMock) as mock_ssh,
     ):
         mock_poll.return_value = ("PASS: test completed", False)
         mock_ssh.return_value = ""  # rm -f job_file

@@ -96,10 +96,8 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             from xcelium_mcp.shell_utils import (
                 get_user_tmp_dir,
                 login_shell_cmd,
+                shell_quote,
                 ssh_run,
-            )
-            from xcelium_mcp.shell_utils import (
-                shell_quote as sq,
             )
 
             # 1. Resolve SHM path
@@ -120,10 +118,10 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             except RuntimeError as e:
                 return f"ERROR: {e}"
 
-            sig_args = " ".join(f"-signal {sq(s)}" for s in signals)
+            sig_args = " ".join(f"-signal {shell_quote(s)}" for s in signals)
             user_tmp = await get_user_tmp_dir()
             dummy_out = f"{user_tmp}/check_dump_dummy.csv"
-            cmd = f"{svdb} -csv -missing -nolog -nocopyright {sig_args} -output {dummy_out} -overwrite {sq(shm_path)}"
+            cmd = f"{svdb} -csv -missing -nolog -nocopyright {sig_args} -output {dummy_out} -overwrite {shell_quote(shm_path)}"
 
             # Wrap in login shell for EDA env
             try:

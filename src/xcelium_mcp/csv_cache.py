@@ -10,44 +10,51 @@ Architecture note:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from collections import OrderedDict, deque
 from pathlib import Path
 
-from xcelium_mcp.shell_utils import get_user_tmp_dir, sanitize_signal_name, ssh_run
-from xcelium_mcp.shell_utils import shell_quote as sq
+from xcelium_mcp.shell_utils import get_user_tmp_dir, sanitize_signal_name, shell_quote, ssh_run
 
 # ---------------------------------------------------------------------------
 # simvisdbutil path resolution — MCP server runs in bash without EDA PATH
 # ---------------------------------------------------------------------------
 
 _simvisdbutil_path: str | None = None
+_simvisdbutil_lock = asyncio.Lock()
 
 
 async def _resolve_simvisdbutil() -> str:
     """Get simvisdbutil path from registry. Falls back to sim_discover.
 
     v4: Registry eda_tools is the single source. No direct which/glob detection.
+    Uses double-checked locking pattern (same as get_user_tmp_dir).
     """
     global _simvisdbutil_path
     if _simvisdbutil_path:
         return _simvisdbutil_path
 
-    # Try registry first
-    from xcelium_mcp.discovery import resolve_sim_dir
-    from xcelium_mcp.registry import load_sim_config
-    try:
-        sim_dir = await resolve_sim_dir()
-    except ValueError as e:
-        raise RuntimeError(str(e))
-    cfg = await load_sim_config(sim_dir)
-    if cfg and "eda_tools" in cfg:
-        path = cfg["eda_tools"].get("simvisdbutil", "")
-        if path:
-            _simvisdbutil_path = path
-            return path
+    async with _simvisdbutil_lock:
+        # Double-check after acquiring lock
+        if _simvisdbutil_path:
+            return _simvisdbutil_path
 
-    raise RuntimeError("simvisdbutil not found. Check eda_tools in sim config.")
+        # Try registry first
+        from xcelium_mcp.discovery import resolve_sim_dir
+        from xcelium_mcp.registry import load_sim_config
+        try:
+            sim_dir = await resolve_sim_dir()
+        except ValueError as e:
+            raise RuntimeError(str(e))
+        cfg = await load_sim_config(sim_dir)
+        if cfg and "eda_tools" in cfg:
+            path = cfg["eda_tools"].get("simvisdbutil", "")
+            if path:
+                _simvisdbutil_path = path
+                return path
+
+        raise RuntimeError("simvisdbutil not found. Check eda_tools in sim config.")
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +124,7 @@ async def extract(
     # --- Build simvisdbutil command with EDA env ---
     svdb = await _resolve_simvisdbutil()
     # -timeunits ns: force nanosecond output regardless of SHM time resolution
-    parts = [svdb, sq(shm_path), "-csv", "-output", sq(output_path), "-overwrite", "-timeunits", "ns"]
+    parts = [svdb, shell_quote(shm_path), "-csv", "-output", shell_quote(output_path), "-overwrite", "-timeunits", "ns"]
 
     if start_ns or end_ns:
         parts += ["-range", f"{start_ns}:{end_ns}ns"]
@@ -149,8 +156,7 @@ async def extract(
     out = await ssh_run(cmd, timeout=120.0)
 
     # Validate output
-    import asyncio as _asyncio
-    if not await _asyncio.to_thread(Path(output_path).exists):
+    if not await asyncio.to_thread(Path(output_path).exists):
         raise RuntimeError(
             f"simvisdbutil did not produce output file.\n"
             f"Command: {cmd}\n"
@@ -294,6 +300,81 @@ def _eval_condition(
     if op == "ne":
         return cur_val != target
     return False
+
+
+async def bisect_signal_dump(
+    shm_path: str,
+    signal: str,
+    op: str,
+    value: str,
+    start_ns: int = 0,
+    end_ns: int = 0,
+    context_signals: list[str] | None = None,
+) -> str:
+    """Bisect a signal condition in SHM dump (Mode A).
+
+    Extracts CSV from SHM, then searches for the first row matching the condition.
+    Moved from tools/debug.py for cohesion with csv_cache/bisect_csv.
+    """
+    if context_signals is None:
+        context_signals = []
+    all_signals = list({signal} | set(context_signals))
+
+    try:
+        csv_path = await extract(
+            shm_path=shm_path,
+            signals=all_signals,
+            start_ns=start_ns,
+            end_ns=end_ns,
+            missing_ok=True,
+        )
+    except RuntimeError as e:
+        return f"ERROR extracting CSV: {e}"
+
+    result = await asyncio.to_thread(
+        bisect_csv,
+        csv_path=csv_path,
+        signal=signal,
+        op=op,
+        value=value,
+        start_ns=start_ns,
+        end_ns=end_ns,
+        context_rows=2,
+    )
+
+    if "error" in result:
+        return (
+            f"Signal '{signal}' not found in SHM.\n"
+            f"{result['error']}\n\n"
+            "Tip: Re-run with sim_batch_run(dump_signals=[...]) to include this signal."
+        )
+
+    if not result["found"]:
+        return (
+            f"No match found for {signal} {op} {value} "
+            f"in range [{start_ns}ns, {end_ns or 'end'}]."
+        )
+
+    # Format context table
+    ctx = result["context"]
+    match_idx = result["match_row"]
+    cols = [signal] + context_signals
+
+    lines = [
+        f"Match at {result['match_time_ns']}ns: {signal} = {result['match_value']}",
+        "",
+        "Context:",
+    ]
+    header = "  time(ns)   | " + " | ".join(f"{c[-20:]}" for c in cols)
+    lines.append(header)
+    lines.append("  " + "-" * (len(header) - 2))
+
+    for i, row in enumerate(ctx):
+        prefix = "\u2605 " if i == match_idx else "  "
+        vals = " | ".join(row.get(c, "?") for c in cols)
+        lines.append(f"{prefix}{row.get('_ns', row.get('SimTime', row.get('time', '?'))):>10} | {vals}")
+
+    return "\n".join(lines)
 
 
 def clear_cache(shm_path: str | None = None) -> None:

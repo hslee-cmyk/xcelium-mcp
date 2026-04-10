@@ -1,6 +1,7 @@
 """Checkpoint management tools."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 
@@ -9,8 +10,7 @@ from mcp.server.fastmcp import FastMCP
 import xcelium_mcp.checkpoint_manager as checkpoint_manager
 from xcelium_mcp.bridge_manager import BridgeManager
 from xcelium_mcp.discovery import resolve_sim_dir
-from xcelium_mcp.shell_utils import get_user_tmp_dir, ssh_run
-from xcelium_mcp.shell_utils import shell_quote as sq
+from xcelium_mcp.shell_utils import get_user_tmp_dir, shell_quote, ssh_run
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +108,8 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
                 except IndexError:
                     pass
             if actual_name:
-                checkpoint_manager.register_checkpoint(
+                await asyncio.to_thread(
+                    checkpoint_manager.register_checkpoint,
                     resolved_dir, actual_name, saved_time_ns,
                     origin="bridge",
                 )
@@ -145,7 +146,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             cds_lib = f"{user_tmp}/rebuild_cds.lib"
             abs_worklib = os.path.expanduser(chk_dir)
             await ssh_run(
-                f"echo 'DEFINE worklib {abs_worklib}' > {sq(cds_lib)}",
+                f"echo 'DEFINE worklib {abs_worklib}' > {shell_quote(cds_lib)}",
                 timeout=5,
             )
             from xcelium_mcp.shell_utils import login_shell_cmd
@@ -153,7 +154,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             if cfg and "runner" in cfg:
                 login_shell = cfg["runner"].get("login_shell", login_shell)
             run_dir = os.path.join(resolved_dir, cfg.get("runner", {}).get("run_dir", "run")) if cfg else resolved_dir
-            xmls_cmd = f"cd {sq(run_dir)} && {sq(xmls_path)} -snapshot -all -cdslib {sq(cds_lib)} -nolog -nocopyright"
+            xmls_cmd = f"cd {shell_quote(run_dir)} && {shell_quote(xmls_path)} -snapshot -all -cdslib {shell_quote(cds_lib)} -nolog -nocopyright"
             xmls_out = await ssh_run(
                 login_shell_cmd(login_shell, xmls_cmd),
                 timeout=30,
@@ -221,13 +222,13 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             cds_lib = f"{user_tmp}/cleanup_cds.lib"
             chk_worklib = os.path.expanduser(os.path.join(resolved_dir, "checkpoints", "worklib"))
             await ssh_run(
-                f"echo 'DEFINE worklib {chk_worklib}' > {sq(cds_lib)}",
+                f"echo 'DEFINE worklib {chk_worklib}' > {shell_quote(cds_lib)}",
                 timeout=5,
             )
             run_dir = os.path.join(resolved_dir, cfg.get("runner", {}).get("run_dir", "run")) if cfg else resolved_dir
             xmrm_errors: list[str] = []
             for name in result["removed"]:
-                xmrm_cmd = f"cd {sq(run_dir)} && {sq(xmrm_path)} -snapshot {sq(f'worklib.{name}')} -cdslib {sq(cds_lib)} -nolog -nocopyright -force"
+                xmrm_cmd = f"cd {shell_quote(run_dir)} && {shell_quote(xmrm_path)} -snapshot {shell_quote(f'worklib.{name}')} -cdslib {shell_quote(cds_lib)} -nolog -nocopyright -force"
                 out = await ssh_run(
                     login_shell_cmd(login_shell, xmrm_cmd),
                     timeout=15,

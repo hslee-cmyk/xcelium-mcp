@@ -13,32 +13,32 @@ import os
 import re
 from datetime import datetime
 
-from xcelium_mcp.env_detection import (
-    _analyze_tb_type,
-    _auto_detect_runner,
-    _detect_bridge_port,
-    _detect_bridge_tcl,
-    _detect_run_dir,
-    _detect_setup_tcls,
-    _detect_shell_and_env,
-    _discover_sim_dir,
-    _extract_script_name,
-    _pick_default_mode,
-    _resolve_eda_tools,
-    _resolve_external_tools,
-)
 from xcelium_mcp.registry import (
     _update_registry_from_config,
     load_registry,
     load_sim_config,
     save_sim_config,
 )
-from xcelium_mcp.shell_utils import (
-    UserInputRequired,
-    ssh_run,
+from xcelium_mcp.runner_detection import (
+    auto_detect_runner,
+    detect_shell_and_env,
+    extract_script_name,
+    pick_default_mode,
+    resolve_eda_tools,
+    resolve_external_tools,
 )
 from xcelium_mcp.shell_utils import (
-    shell_quote as sq,
+    UserInputRequired,
+    shell_quote,
+    ssh_run,
+)
+from xcelium_mcp.sim_env_detection import (
+    analyze_tb_type,
+    detect_bridge_port,
+    detect_bridge_tcl,
+    detect_run_dir,
+    detect_setup_tcls,
+    discover_sim_dir,
 )
 from xcelium_mcp.tcl_bridge import DEFAULT_BRIDGE_PORT
 
@@ -111,7 +111,7 @@ async def _extract_top_module_from_script(sim_dir: str, runner: dict) -> str:
         return ""
 
     content = await ssh_run(
-        f"cat {sq(sim_dir + '/' + script_name)}", timeout=10
+        f"cat {shell_quote(sim_dir + '/' + script_name)}", timeout=10
     )
     return _extract_top_module_from_content(content)
 
@@ -210,7 +210,7 @@ async def _analyze_sdf_annotate(
 
     # Step 2: find file defining top module
     top_v = await ssh_run(
-        f"grep -rl 'module\\s\\+{effective_top}\\b' {sq(sim_dir)} "
+        f"grep -rl 'module\\s\\+{effective_top}\\b' {shell_quote(sim_dir)} "
         f"--include='*.v' --include='*.sv' | head -1",
         timeout=10,
     )
@@ -219,18 +219,18 @@ async def _analyze_sdf_annotate(
 
     # Step 3: search for $sdf_annotate in top module + includes/instances
     top_v_path = top_v.strip()
-    content = await ssh_run(f"cat {sq(top_v_path)}", timeout=10)
+    content = await ssh_run(f"cat {shell_quote(top_v_path)}", timeout=10)
     sdf_source = top_v_path
 
     if "$sdf_annotate" not in content:
         # 3a. includes + 3b. instantiations (parallelized)
         includes, instances = await asyncio.gather(
             ssh_run(
-                f"grep -oP '`include\\s+\"\\K[^\"]+' {sq(top_v_path)}",
+                f"grep -oP '`include\\s+\"\\K[^\"]+' {shell_quote(top_v_path)}",
                 timeout=10,
             ),
             ssh_run(
-                f"grep -oP '^\\s*(\\w+)\\s+\\w+\\s*\\(' {sq(top_v_path)}",
+                f"grep -oP '^\\s*(\\w+)\\s+\\w+\\s*\\(' {shell_quote(top_v_path)}",
                 timeout=10,
             ),
         )
@@ -243,7 +243,7 @@ async def _analyze_sdf_annotate(
             inst_mod = line.strip().split()[0] if line.strip() else ""
             if inst_mod:
                 f = await ssh_run(
-                    f"grep -rl 'module\\s\\+{inst_mod}\\b' {sq(sim_dir)} "
+                    f"grep -rl 'module\\s\\+{inst_mod}\\b' {shell_quote(sim_dir)} "
                     f"--include='*.v' --include='*.sv' | head -1",
                     timeout=10,
                 )
@@ -252,7 +252,7 @@ async def _analyze_sdf_annotate(
 
         # 3d. search collected files
         if search_files:
-            files_arg = " ".join(sq(f) for f in search_files)
+            files_arg = " ".join(shell_quote(f) for f in search_files)
             ctx = await ssh_run(
                 f"grep -n -B10 -A2 '\\$sdf_annotate' {files_arg}",
                 timeout=10,
@@ -290,9 +290,9 @@ _SIMVISIONRC_MARKER = "# [xcelium-mcp] managed by sim_discover"
 
 async def _patch_legacy_run_script(sim_dir: str, runner_info: dict) -> str:
     """Patch legacy run script to support MCP_INPUT_TCL env var override."""
-    script_name = _extract_script_name(runner_info.get("exec_cmd", ""))
+    script_name = extract_script_name(runner_info.get("exec_cmd", ""))
     script_path = f"{sim_dir}/{script_name}"
-    _sp = sq(script_path)
+    _sp = shell_quote(script_path)
 
     exists = await ssh_run(f"test -f {_sp} && echo YES || echo NO", timeout=5)
     if "YES" not in exists:
@@ -315,7 +315,7 @@ async def _patch_legacy_run_script(sim_dir: str, runner_info: dict) -> str:
     replacement = f'${{MCP_INPUT_TCL:-{original_tcl}}}'
 
     sed_pattern = f"s|-input {escaped_original}|-input {replacement}|"
-    sed_cmd = f"sed -i -e {sq(sed_pattern)} {_sp}"
+    sed_cmd = f"sed -i -e {shell_quote(sed_pattern)} {_sp}"
     await ssh_run(sed_cmd, timeout=10)
 
     r = await ssh_run(f"grep -c 'MCP_INPUT_TCL' {_sp} || true")
@@ -349,12 +349,12 @@ async def _update_simvisionrc(bridge_tcl: str) -> str:
             new_lines.append(line)
         new_content = "\n".join(new_lines)
         b64 = base64.b64encode(new_content.encode()).decode()
-        await ssh_run(f"echo {sq(b64)} | base64 -d > {sq(rc_path)}")
+        await ssh_run(f"echo {shell_quote(b64)} | base64 -d > {shell_quote(rc_path)}")
         return "updated (marker found)"
 
     if "mcp_bridge" in content:
         sed_pattern = f"/mcp_bridge/c\\{_SIMVISIONRC_MARKER}\\n{source_line}"
-        await ssh_run(f"sed -i -e {sq(sed_pattern)} {sq(rc_path)}")
+        await ssh_run(f"sed -i -e {shell_quote(sed_pattern)} {shell_quote(rc_path)}")
         return "replaced unmanaged entry"
 
     managed_block = f"{_SIMVISIONRC_MARKER}\n{source_line}"
@@ -375,10 +375,10 @@ async def run_full_discovery(
     """Main discovery orchestrator. Called by sim_discover MCP tool."""
 
     if not sim_dir:
-        envs = await _discover_sim_dir()
+        envs = await discover_sim_dir()
         sim_dir = envs[0]["sim_dir"]
 
-    # B-tilde fix: resolve ~ to absolute path before any sq() calls.
+    # B-tilde fix: resolve ~ to absolute path before any shell_quote() calls.
     sim_dir = os.path.expanduser(sim_dir)
 
     if not force:
@@ -388,33 +388,33 @@ async def run_full_discovery(
 
     # Phase A: independent detection (parallelized)
     tb_type, runner_info, r_root, bridge_tcl = await asyncio.gather(
-        _analyze_tb_type(sim_dir),
-        _auto_detect_runner(sim_dir),
+        analyze_tb_type(sim_dir),
+        auto_detect_runner(sim_dir),
         ssh_run("git rev-parse --show-toplevel || echo ~"),
-        _detect_bridge_tcl(),
+        detect_bridge_tcl(),
     )
 
-    script_name = _extract_script_name(runner_info.get("exec_cmd", ""))
+    script_name = extract_script_name(runner_info.get("exec_cmd", ""))
     project_root = r_root.strip()
-    shell_env = await _detect_shell_and_env(sim_dir, script_name, project_root)
+    shell_env = await detect_shell_and_env(sim_dir, script_name, project_root)
 
     # Phase B: dependent on shell_env / bridge_tcl (parallelized)
     # _patch_legacy_run_script uses sed -i (file write) — must run serially
     # to avoid race with _detect_run_dir which reads the same script.
     setup_tcls, eda_tools, external_tools, bridge_port, run_info = (
         await asyncio.gather(
-            _detect_setup_tcls(sim_dir),
-            _resolve_eda_tools(shell_env),
-            _resolve_external_tools(shell_env),
-            _detect_bridge_port(sim_dir, bridge_tcl),
-            _detect_run_dir(sim_dir, runner_info),
+            detect_setup_tcls(sim_dir),
+            resolve_eda_tools(shell_env),
+            resolve_external_tools(shell_env),
+            detect_bridge_port(sim_dir, bridge_tcl),
+            detect_run_dir(sim_dir, runner_info),
         )
     )
     patch_result = await _patch_legacy_run_script(sim_dir, runner_info)
     run_dir = run_info["run_dir"]
     script_has_cd = run_info["script_has_cd"]
 
-    default_mode = _pick_default_mode(setup_tcls)
+    default_mode = pick_default_mode(setup_tcls)
     args_format = {default_mode: "-test {test_name} --"}
     if "gate" in setup_tcls:
         args_format["gate"] = "-test {test_name} -gate post --"
@@ -434,7 +434,7 @@ async def run_full_discovery(
     if "ams_gate" in setup_tcls:
         mode_defaults["ams_gate"] = {"timeout": 3600, "probe_strategy": "selective", "extra_args": "", "dump_depth": "boundary"}
 
-    _sd = sq(sim_dir)
+    _sd = shell_quote(sim_dir)
     if tb_type == "uvm":
         test_cmd = (
             f"(grep -rh 'extends uvm_test' {_sd} --include='*.sv' --include='*.svh' || true) "

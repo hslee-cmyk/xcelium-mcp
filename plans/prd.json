@@ -899,6 +899,98 @@
         "pytest passes"
       ],
       "notes": "2차 Python #14. shell_utils는 circular dep 아님. 불필요한 lazy import 잔존."
+    },
+    {
+      "id": "F-064",
+      "title": "Wrap checkpoint_manager.register_checkpoint compute_compile_hash in to_thread",
+      "priority": 3,
+      "passes": true,
+      "acceptanceCriteria": [
+        "checkpoint_manager.py register_checkpoint에서 compute_compile_hash 호출을 compute_compile_hash_async로 교체하거나 asyncio.to_thread로 래핑",
+        "async caller에서 os.walk 블로킹 없음",
+        "pytest passes"
+      ],
+      "notes": "3차 Review #1. checkpoint_manager.py:109 — sync os.walk가 async 경로(batch_runner.py:543)에서 호출. compute_compile_hash_async가 이미 존재하지만 미사용.",
+      "completed_at": "2026-04-11"
+    },
+    {
+      "id": "F-065",
+      "title": "Wrap csv_cache.bisect_csv caller in asyncio.to_thread",
+      "priority": 3,
+      "passes": true,
+      "acceptanceCriteria": [
+        "tools/debug.py에서 bisect_csv 호출을 asyncio.to_thread(csv_cache.bisect_csv, ...)로 래핑",
+        "대용량 CSV에서 event loop 차단 없음",
+        "pytest passes"
+      ],
+      "notes": "3차 Review #2. csv_cache.py:215 — sync open(). caller _bisect_signal_dump_impl이 async 함수.",
+      "completed_at": "2026-04-11"
+    },
+    {
+      "id": "F-066",
+      "title": "Remove stale import asyncio as _asyncio in csv_cache.extract",
+      "priority": 3,
+      "passes": true,
+      "acceptanceCriteria": [
+        "csv_cache.py line 159의 import asyncio as _asyncio 제거",
+        "모듈 레벨 asyncio import (line 7) 사용으로 통일",
+        "pytest passes"
+      ],
+      "notes": "3차 Review #3. 리팩터링 잔재 — 함수 내부 중복 import.",
+      "completed_at": "2026-04-11"
+    },
+    {
+      "id": "F-067",
+      "title": "Delete env_detection.py re-export stub (zero consumers)",
+      "priority": 3,
+      "passes": true,
+      "acceptanceCriteria": [
+        "env_detection.py 삭제",
+        "내부 consumer 0건 확인 (runner_detection, sim_env_detection으로 모두 이전됨)",
+        "python -c 'import xcelium_mcp.server' 성공",
+        "pytest passes"
+      ],
+      "notes": "3차 Arch #4. env_detection.py 47줄 pure re-export stub — runner_detection.py + sim_env_detection.py로 분할 완료 후 잔존.",
+      "completed_at": "2026-04-11"
+    },
+    {
+      "id": "F-068",
+      "title": "Move _bisect_signal_dump_impl from tools/debug.py to csv_cache or bisect module",
+      "priority": 3,
+      "passes": true,
+      "acceptanceCriteria": [
+        "_bisect_signal_dump_impl (70줄)을 csv_cache.py 또는 신규 bisect.py로 이동",
+        "tools/debug.py는 thin wrapper만 유지",
+        "python -c 'import xcelium_mcp.server' 성공",
+        "pytest passes"
+      ],
+      "notes": "3차 Arch #5. tools/debug.py에 CSV extraction/bisection 비즈니스 로직 잔존 — tool layer thinness 위반.",
+      "completed_at": "2026-04-11"
+    },
+    {
+      "id": "F-069",
+      "title": "Add null byte check to validate_path for defense-in-depth",
+      "priority": 3,
+      "passes": true,
+      "acceptanceCriteria": [
+        "shell_utils.py validate_path에 null byte (\\x00) 포함 시 거부 추가",
+        "기존 .. traversal 검증과 동일 레벨에서 처리",
+        "pytest passes"
+      ],
+      "notes": "3차 Security #7. shell_utils.py:136 — Python Path가 자체 차단하지만 validate_path 레벨에서도 명시적 차단이 defense-in-depth.",
+      "completed_at": "2026-04-11"
+    },
+    {
+      "id": "F-070",
+      "title": "Note: batch_runner/simvision_ops/discovery 400줄 초과 모니터링",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "batch_runner.py(595), simvision_ops.py(561), discovery.py(531) — 현재 상태 기록",
+        "추후 기능 추가 시 400줄 초과 여부 재검토"
+      ],
+      "notes": "3차 Arch #6. 3개 모듈이 400줄 초과하지만 내부 응집도 높아 추가 분할은 과도. 모니터링 항목으로 등록."
     }
   ]
 }

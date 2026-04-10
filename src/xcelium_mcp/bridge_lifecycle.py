@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from xcelium_mcp.batch_runner import resolve_sim_params, validate_extra_args
+from xcelium_mcp.batch_runner import validate_extra_args
 from xcelium_mcp.bridge_manager import BridgeManager
 from xcelium_mcp.discovery import resolve_sim_dir, run_full_discovery
 from xcelium_mcp.registry import load_sim_config
@@ -16,12 +16,11 @@ from xcelium_mcp.shell_utils import (
     build_redirect,
     get_user_tmp_dir,
     login_shell_cmd,
+    shell_quote,
     ssh_run,
 )
-from xcelium_mcp.shell_utils import (
-    shell_quote as sq,
-)
 from xcelium_mcp.tcl_bridge import DEFAULT_BRIDGE_PORT
+from xcelium_mcp.test_resolution import resolve_sim_params
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +141,7 @@ async def _start_bridge(
     script_shell = runner.get("script_shell", runner.get("env_shell", "/bin/sh"))
     params = resolve_sim_params(runner, sim_mode, extra_args=extra_args, timeout=timeout,
                                dump_depth=dump_depth if dump_depth else None)
-    test_args = params["test_args_format"].format(test_name=sq(test_name))
+    test_args = params["test_args_format"].format(test_name=shell_quote(test_name))
     if params["extra_args"]:
         test_args = f"{test_args} {params['extra_args']}"
     effective_timeout = params["timeout"]
@@ -171,7 +170,7 @@ async def _start_bridge(
     ]
     if runner.get("source_separately") and env_files:
         for ef in env_files:
-            inner_parts.append(f"source {sq(ef)}")
+            inner_parts.append(f"source {shell_quote(ef)}")
         inner_parts.append(f"./{script} {test_args}")
         inner_cmd = "; ".join(inner_parts)
         shell_cmd = f"{env_shell} -c '{inner_cmd}'"
@@ -187,7 +186,7 @@ async def _start_bridge(
         cwd = f"{sim_dir}/{run_dir}"
 
     cmd = (
-        f"cd {sq(cwd)} && "
+        f"cd {shell_quote(cwd)} && "
         f"(nohup {shell_cmd} "
         f"{build_redirect(log_file)} < /dev/null &)"
     )

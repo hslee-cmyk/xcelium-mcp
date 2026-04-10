@@ -18,20 +18,24 @@ import pytest
 
 PACKAGE_MODULES = [
     "xcelium_mcp",
+    "xcelium_mcp.batch_polling",
     "xcelium_mcp.batch_runner",
     "xcelium_mcp.bridge_manager",
     "xcelium_mcp.checkpoint_manager",
     "xcelium_mcp.csv_cache",
     "xcelium_mcp.debug_tools",
-    "xcelium_mcp.env_detection",
+    "xcelium_mcp.runner_detection",
+    "xcelium_mcp.sim_env_detection",
     "xcelium_mcp.registry",
     "xcelium_mcp.screenshot",
     "xcelium_mcp.server",
     "xcelium_mcp.shell_utils",
+    "xcelium_mcp.simvision_ops",
     "xcelium_mcp.discovery",
     "xcelium_mcp.bridge_lifecycle",
     "xcelium_mcp.tcl_bridge",
     "xcelium_mcp.tcl_preprocessing",
+    "xcelium_mcp.test_resolution",
 ]
 
 TOOL_MODULES = [

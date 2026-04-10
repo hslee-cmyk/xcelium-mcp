@@ -27,8 +27,6 @@ def shell_quote(s: str) -> str:
     return shlex.quote(s)
 
 
-# Backward compat alias — will be removed in v5
-sq = shell_quote
 
 
 def build_redirect(log_path: str) -> str:
@@ -136,7 +134,9 @@ def build_eda_command(runner: dict, inner_cmd: str) -> str:
 
 
 def validate_path(path: str, label: str = "path") -> str | None:
-    """Reject paths with traversal components. Returns error string or None if OK."""
+    """Reject paths with traversal components or null bytes. Returns error string or None if OK."""
+    if "\x00" in path:
+        return f"ERROR: {label} must not contain null bytes: {path!r}"
     if ".." in path.split("/"):
         return f"ERROR: {label} must not contain '..' (path traversal rejected): {path}"
     return None
@@ -185,12 +185,20 @@ def is_safe_tcl_string(s: str) -> bool:
     Used by execute_tcl denylist enhancement.
     """
     lower = s.lower()
-    # Check for embedded [exec ...] anywhere in the string
-    if re.search(r'\[\s*exec\b', lower):
-        return False
-    # Check for embedded [open ...] anywhere
-    if re.search(r'\[\s*open\b', lower):
-        return False
+    # Check for dangerous bracket commands — consistent with execute_tcl denylist
+    _BRACKET_DENYLIST = (
+        r'\[\s*exec\b',
+        r'\[\s*open\b',
+        r'\[\s*socket\b',
+        r'\[\s*file\s+delete\b',
+        r'\[\s*file\s+rename\b',
+        r'\[\s*interp\s+eval\b',
+        r'\[\s*interp\s+create\b',
+        r'\[\s*load\b',
+    )
+    for pattern in _BRACKET_DENYLIST:
+        if re.search(pattern, lower):
+            return False
     return True
 
 

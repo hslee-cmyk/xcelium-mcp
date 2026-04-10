@@ -7,13 +7,14 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 import xcelium_mcp.csv_cache as _csv_cache
-from xcelium_mcp.batch_runner import _run_batch_regression, _run_batch_single, resolve_test_name
+from xcelium_mcp.batch_runner import run_batch_regression, run_batch_single
 from xcelium_mcp.bridge_manager import BridgeManager
 from xcelium_mcp.discovery import resolve_sim_dir
-from xcelium_mcp.env_detection import _load_or_detect_runner
 from xcelium_mcp.registry import load_sim_config
+from xcelium_mcp.runner_detection import load_or_detect_runner
 from xcelium_mcp.shell_utils import UserInputRequired, validate_path
 from xcelium_mcp.tcl_bridge import TclError
+from xcelium_mcp.test_resolution import resolve_test_name
 
 # Type alias for the restore_checkpoint callable passed from server.py
 RestoreCheckpointFn = Callable[..., Coroutine[Any, Any, str]]
@@ -114,7 +115,7 @@ def register(
 
         # Load runner config (v4: delegates to sim_discover if config missing)
         try:
-            runner = await _load_or_detect_runner(resolved_sim_dir)
+            runner = await load_or_detect_runner(resolved_sim_dir)
         except UserInputRequired as e:
             return f"USER INPUT REQUIRED:\n{e.prompt}"
 
@@ -134,7 +135,7 @@ def register(
                     return f"Restore succeeded but probe_add_signals failed: {e}"
 
         # Execute simulation
-        # dump_signals flows to _run_batch_single → _preprocess_setup_tcl → _resolve_probe_signals
+        # dump_signals flows to run_batch_single → _preprocess_setup_tcl → _resolve_probe_signals
         try:
             # v4.1: sim_mode + extra_args
             effective_mode = sim_mode or runner.get("default_mode", "rtl")
@@ -144,7 +145,7 @@ def register(
                 dump_window = _build_dump_window(dump_window_start_ms, dump_window_end_ms)
             except ValueError as e:
                 return str(e)
-            log = await _run_batch_single(
+            log = await run_batch_single(
                 sim_dir=resolved_sim_dir,
                 test_name=test_name,
                 runner=runner,
@@ -223,11 +224,11 @@ def register(
 
         # Load runner config (v4: delegates to sim_discover if config missing)
         try:
-            runner = await _load_or_detect_runner(resolved_sim_dir)
+            runner = await load_or_detect_runner(resolved_sim_dir)
         except UserInputRequired as e:
             return f"USER INPUT REQUIRED:\n{e.prompt}"
 
-        # dump_signals flows to _run_batch_regression → _preprocess_setup_tcl → _resolve_probe_signals
+        # dump_signals flows to run_batch_regression → _preprocess_setup_tcl → _resolve_probe_signals
 
         # Auto-detect test_list from sim config if empty
         if not test_list:
@@ -254,7 +255,7 @@ def register(
                 dump_window = _build_dump_window(dump_window_start_ms, dump_window_end_ms)
             except ValueError as e:
                 return str(e)
-            summary = await _run_batch_regression(
+            summary = await run_batch_regression(
                 sim_dir=resolved_sim_dir,
                 test_list=test_list,
                 runner=runner,

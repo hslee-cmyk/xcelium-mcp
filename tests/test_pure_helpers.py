@@ -7,7 +7,13 @@ from xcelium_mcp.discovery import (
     _extract_top_module_from_content,
     _parse_ifdef_around_sdf,
 )
-from xcelium_mcp.shell_utils import _parse_shm_path, _parse_time_ns
+from xcelium_mcp.batch_runner import validate_extra_args
+from xcelium_mcp.shell_utils import (
+    _parse_shm_path,
+    _parse_time_ns,
+    is_safe_tcl_string,
+    sanitize_signal_name,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -112,3 +118,110 @@ class TestParseTimeNs:
 
     def test_no_match(self):
         assert _parse_time_ns("no time here") == 0
+
+
+# ---------------------------------------------------------------------------
+# validate_extra_args (F-062)
+# ---------------------------------------------------------------------------
+
+class TestValidateExtraArgs:
+    """Test validate_extra_args rejects forbidden chars and passes clean strings."""
+
+    @pytest.mark.parametrize("bad_input", [
+        "arg1; rm -rf /",
+        "arg1 | grep",
+        "arg1 & bg",
+        "arg1 $HOME",
+        "arg1 `whoami`",
+        "arg1 < /etc/passwd",
+        "arg1 > /tmp/out",
+        "arg1 (subshell)",
+        "arg1\narg2",
+        "arg1\rarg2",
+        "arg1'breakout",
+    ])
+    def test_forbidden_chars_rejected(self, bad_input):
+        with pytest.raises(ValueError, match="forbidden shell metacharacter"):
+            validate_extra_args(bad_input)
+
+    @pytest.mark.parametrize("good_input", [
+        "",
+        "--flag value",
+        "-max -define GATE_SIM",
+        "+define+TEST_NAME --timeout 300",
+        "-f sim.f -top top_module",
+    ])
+    def test_clean_args_pass(self, good_input):
+        assert validate_extra_args(good_input) == good_input
+
+
+# ---------------------------------------------------------------------------
+# sanitize_signal_name (F-062)
+# ---------------------------------------------------------------------------
+
+class TestSanitizeSignalName:
+    """Test sanitize_signal_name allows valid signals, rejects injection."""
+
+    @pytest.mark.parametrize("valid", [
+        "top.hw.clk",
+        "top.hw.data[7:0]",
+        "top.hw.data[31]",
+        r"top.hw.i_rst_n",
+        "top.hw.bus[0]",
+    ])
+    def test_valid_signals_pass(self, valid):
+        assert sanitize_signal_name(valid) == valid.strip()
+
+    def test_empty_raises(self):
+        with pytest.raises(ValueError, match="cannot be empty"):
+            sanitize_signal_name("")
+
+    def test_whitespace_only_raises(self):
+        with pytest.raises(ValueError, match="cannot be empty"):
+            sanitize_signal_name("   ")
+
+    @pytest.mark.parametrize("injection", [
+        "top.hw.[exec id]",
+        "top.hw.$env(HOME)",
+        "top.hw.clk; exec id",
+        "top.[open /etc/passwd]",
+    ])
+    def test_injection_rejected(self, injection):
+        with pytest.raises(ValueError):
+            sanitize_signal_name(injection)
+
+    def test_bracket_with_non_digit_rejected(self):
+        with pytest.raises(ValueError, match="Tcl injection"):
+            sanitize_signal_name("sig[exec rm]")
+
+
+# ---------------------------------------------------------------------------
+# is_safe_tcl_string (F-062)
+# ---------------------------------------------------------------------------
+
+class TestIsSafeTclString:
+    """Test is_safe_tcl_string denylist and allow normal Tcl."""
+
+    @pytest.mark.parametrize("dangerous", [
+        "[exec id]",
+        "[open /etc/passwd r]",
+        "[socket localhost 4444]",
+        "[file delete /tmp/foo]",
+        "[file rename a b]",
+        "[interp eval child {exec id}]",
+        "[interp create]",
+        "[load /tmp/evil.so]",
+        "run 100ns; [exec whoami]",
+    ])
+    def test_dangerous_rejected(self, dangerous):
+        assert is_safe_tcl_string(dangerous) is False
+
+    @pytest.mark.parametrize("safe", [
+        "run 100ns",
+        "value /top/clk",
+        "probe -create top -depth all",
+        "database -open foo.shm",
+        "waveform add -signals clk",
+    ])
+    def test_safe_passes(self, safe):
+        assert is_safe_tcl_string(safe) is True

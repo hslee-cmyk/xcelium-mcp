@@ -7,12 +7,12 @@ SDF override, checkpoint Tcl generation, setup Tcl preprocessing.
 from __future__ import annotations
 
 # Re-export for batch_runner backward compat
+import asyncio
 import base64 as _b64
 import re as _re
 from pathlib import Path
 
-from xcelium_mcp.shell_utils import shell_quote as sq
-from xcelium_mcp.shell_utils import ssh_run
+from xcelium_mcp.shell_utils import shell_quote, ssh_run
 
 
 def _parse_l1_time_ns(l1_time: str) -> int:
@@ -50,8 +50,8 @@ def extract_setup_lines(tcl_content: str) -> str:
     return "\n".join(lines)
 
 
-def read_setup_tcl(runner: dict, sim_dir: str) -> str:
-    """Read the setup Tcl content for the current sim_mode.
+def _read_setup_tcl_sync(runner: dict, sim_dir: str) -> str:
+    """Read the setup Tcl content synchronously for the current sim_mode.
 
     MCP server runs on cloud0 — uses direct Path I/O (no ssh_run needed).
     Returns raw file content, or empty string if not found.
@@ -63,6 +63,20 @@ def read_setup_tcl(runner: dict, sim_dir: str) -> str:
     if p.exists():
         return p.read_text()
     return ""
+
+
+def read_setup_tcl(runner: dict, sim_dir: str) -> str:
+    """Read the setup Tcl content for the current sim_mode.
+
+    Synchronous wrapper — use read_setup_tcl_async from async code.
+    Returns raw file content, or empty string if not found.
+    """
+    return _read_setup_tcl_sync(runner, sim_dir)
+
+
+async def read_setup_tcl_async(runner: dict, sim_dir: str) -> str:
+    """Async version of read_setup_tcl — wraps file I/O in asyncio.to_thread."""
+    return await asyncio.to_thread(_read_setup_tcl_sync, runner, sim_dir)
 
 
 def _replace_shm_stems(content: str, test_name: str) -> str:
@@ -273,7 +287,7 @@ async def _handle_sdf_override(
 
     b64 = _b64.b64encode(tfile_content.encode()).decode()
     await ssh_run(
-        f"echo {sq(b64)} | base64 -d > {sq(tfile_path)}",
+        f"echo {shell_quote(b64)} | base64 -d > {shell_quote(tfile_path)}",
         timeout=10,
     )
 
@@ -291,9 +305,9 @@ async def _patch_tb_sdf_guard(sim_dir: str, sdf_info: dict) -> None:
 
     user_tmp = await get_user_tmp_dir()
     filename = top_v.split("/")[-1]
-    await ssh_run(f"cp {sq(top_v)} {user_tmp}/{filename}.bak.mcp_sdf", timeout=5)
+    await ssh_run(f"cp {shell_quote(top_v)} {user_tmp}/{filename}.bak.mcp_sdf", timeout=5)
 
-    content = await ssh_run(f"cat {sq(top_v)}", timeout=10)
+    content = await ssh_run(f"cat {shell_quote(top_v)}", timeout=10)
 
     patched = _re.sub(
         r"(\s*initial\s+begin\s*\n)(.*?\$sdf_annotate.*?\n)(.*?\s*end)",
@@ -305,7 +319,7 @@ async def _patch_tb_sdf_guard(sim_dir: str, sdf_info: dict) -> None:
     if patched != content:
         b64 = _b64.b64encode(patched.encode()).decode()
         await ssh_run(
-            f"echo {sq(b64)} | base64 -d > {sq(top_v)}",
+            f"echo {shell_quote(b64)} | base64 -d > {shell_quote(top_v)}",
             timeout=10,
         )
 
@@ -320,7 +334,7 @@ async def _preprocess_setup_tcl(
     if not _re.fullmatch(r"[A-Za-z0-9_\-]+", test_name):
         return ""
 
-    content = read_setup_tcl(runner, sim_dir)
+    content = await read_setup_tcl_async(runner, sim_dir)
     if not content:
         return ""
 
@@ -350,7 +364,7 @@ async def _preprocess_setup_tcl(
     from xcelium_mcp.shell_utils import get_user_tmp_dir
     user_tmp = await get_user_tmp_dir()
     out_path = f"{user_tmp}/setup_batch_{test_name}.tcl"
-    Path(out_path).write_text(content)
+    await asyncio.to_thread(Path(out_path).write_text, content)
 
     return out_path
 

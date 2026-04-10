@@ -20,8 +20,8 @@ _PROTECTED_KEYS = {
 }
 
 
-def load_registry() -> dict:
-    """Load mcp_registry.json. Returns empty structure if not found or corrupt."""
+def _load_registry_sync() -> dict:
+    """Load mcp_registry.json synchronously. Returns empty structure if not found or corrupt."""
     if _REGISTRY_PATH.exists():
         try:
             return json.loads(_REGISTRY_PATH.read_text())
@@ -30,10 +30,20 @@ def load_registry() -> dict:
     return {"version": 1, "projects": {}}
 
 
-def save_registry(registry: dict) -> None:
-    """Save mcp_registry.json, creating parent directory as needed."""
+def load_registry() -> dict:
+    """Load mcp_registry.json. Returns empty structure if not found or corrupt."""
+    return _load_registry_sync()
+
+
+def _save_registry_sync(registry: dict) -> None:
+    """Save mcp_registry.json synchronously, creating parent directory as needed."""
     _REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
     _REGISTRY_PATH.write_text(json.dumps(registry, indent=2))
+
+
+def save_registry(registry: dict) -> None:
+    """Save mcp_registry.json, creating parent directory as needed."""
+    _save_registry_sync(registry)
 
 
 _MAX_CONFIG_CACHE = 8
@@ -72,15 +82,21 @@ async def load_sim_config(sim_dir: str, *, force: bool = False) -> dict | None:
 async def save_sim_config(sim_dir: str, config: dict) -> None:
     """Save .mcp_sim_config.json to sim_dir. Invalidates cache."""
     path = Path(sim_dir) / ".mcp_sim_config.json"
-    path.write_text(json.dumps(config, indent=2))
+    text = json.dumps(config, indent=2)
+    await asyncio.to_thread(path.write_text, text)
     _config_cache.pop(sim_dir, None)
 
 
 
 
+def _write_json_sync(path, data: dict) -> None:
+    """Write JSON file synchronously. Works with both Path and str."""
+    Path(str(path)).write_text(json.dumps(data, indent=2))
+
+
 def _write_json(path, data: dict) -> None:
     """Write JSON file. Works with both Path and str."""
-    Path(str(path)).write_text(json.dumps(data, indent=2))
+    _write_json_sync(path, data)
 
 
 async def _update_registry_from_config(sim_dir: str, tb_type: str, config: dict) -> None:
@@ -98,7 +114,7 @@ async def _update_registry_from_config(sim_dir: str, tb_type: str, config: dict)
     stdout, _ = await proc.communicate()
     project_root = stdout.decode().strip() if proc.returncode == 0 else str(Path.home())
 
-    registry = load_registry()
+    registry = await asyncio.to_thread(_load_registry_sync)
     projects = registry.setdefault("projects", {})
     project = projects.setdefault(project_root, {"environments": {}})
     envs = project.setdefault("environments", {})
@@ -110,7 +126,7 @@ async def _update_registry_from_config(sim_dir: str, tb_type: str, config: dict)
         "bridge_port": config.get("bridge", {}).get("port", DEFAULT_BRIDGE_PORT),
     }
 
-    save_registry(registry)
+    await asyncio.to_thread(_save_registry_sync, registry)
 
 
 # ---------------------------------------------------------------------------
@@ -186,7 +202,7 @@ async def config_action(action: str, file: str, key: str, value: str) -> str:
 
     # Load target file
     if file == "registry":
-        data = load_registry()
+        data = await asyncio.to_thread(_load_registry_sync)
         path = _REGISTRY_PATH
     elif file == "checkpoint":
         try:
@@ -194,9 +210,10 @@ async def config_action(action: str, file: str, key: str, value: str) -> str:
         except ValueError as e:
             raise RuntimeError(str(e))
         path = Path(sim_dir) / "checkpoints" / "manifest.json"
-        if path.exists():
+        if await asyncio.to_thread(path.exists):
             try:
-                data = json.loads(path.read_text())
+                raw = await asyncio.to_thread(path.read_text)
+                data = json.loads(raw)
             except json.JSONDecodeError:
                 data = {}
         else:
@@ -228,12 +245,12 @@ async def config_action(action: str, file: str, key: str, value: str) -> str:
 
         parsed = _parse_json_value(value)
         _dot_set(data, key, parsed)
-        _write_json(path, data)
+        await asyncio.to_thread(_write_json_sync, path, data)
         return f"Set {key} = {json.dumps(parsed)}"
 
     if action == "delete":
         if _dot_delete(data, key):
-            _write_json(path, data)
+            await asyncio.to_thread(_write_json_sync, path, data)
             return f"Deleted {key}"
         return f"Key '{key}' not found"
 

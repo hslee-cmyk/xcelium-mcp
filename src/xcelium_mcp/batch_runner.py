@@ -3,9 +3,11 @@
 Extracted from sim_runner.py (v4.2 Phase 3 refactoring).
 v4.4: Tcl preprocessing extracted to tcl_preprocessing.py.
       Shell utilities imported from shell_utils.py.
+F-038: resolve_test_name/resolve_sim_params → test_resolution.py.
+       poll_batch_log/watch_pid_and_poll → batch_polling.py.
 
-Contains batch execution functions: single-test batch, regression, polling,
-parameter resolution, and test name resolution.
+Contains batch execution functions: single-test batch, regression,
+job parsing, command building, and nohup launch.
 """
 from __future__ import annotations
 
@@ -17,14 +19,13 @@ import time as _time
 from dataclasses import dataclass
 from datetime import datetime
 
-from xcelium_mcp.registry import load_sim_config, save_sim_config
+from xcelium_mcp.batch_polling import poll_batch_log, watch_pid_and_poll
 from xcelium_mcp.shell_utils import (
     build_redirect,
+    get_user_tmp_dir,
     login_shell_cmd,
+    shell_quote,
     ssh_run,
-)
-from xcelium_mcp.shell_utils import (
-    shell_quote as sq,
 )
 from xcelium_mcp.tcl_preprocessing import (
     _build_checkpoint_tcl,
@@ -34,6 +35,23 @@ from xcelium_mcp.tcl_preprocessing import (
     extract_setup_lines,
     read_setup_tcl,
 )
+from xcelium_mcp.test_resolution import resolve_sim_params, resolve_test_name
+
+# Re-export for backward compatibility
+__all__ = [
+    "ExecInfo",
+    "validate_extra_args",
+    "_resolve_exec_cmd",
+    "parse_existing_job",
+    "build_batch_cmd",
+    "launch_nohup_job",
+    "watch_pid_and_poll",
+    "run_batch_single",
+    "run_batch_regression",
+    "poll_batch_log",
+    "resolve_sim_params",
+    "resolve_test_name",
+]
 
 
 @dataclass
@@ -57,11 +75,6 @@ def validate_extra_args(s: str) -> str:
             "Only flags and values are allowed (no ;|&$`<>()\\n\\r' characters)."
         )
     return s
-
-
-
-
-# _build_checkpoint_tcl moved to tcl_preprocessing.py
 
 
 def _resolve_exec_cmd(runner: dict, regression: bool = False) -> ExecInfo:
@@ -104,7 +117,7 @@ def _resolve_exec_cmd(runner: dict, regression: bool = False) -> ExecInfo:
 
     # 4. build full cmd (env sourcing)
     if runner.get("source_separately"):
-        sources = " && ".join(f"source {sq(f)}" for f in runner.get("env_files", []))
+        sources = " && ".join(f"source {shell_quote(f)}" for f in runner.get("env_files", []))
         env_shell = runner.get("env_shell", runner["login_shell"])
         cmd = f"{env_shell} -c '{sources} && {script_run}'"
     else:
@@ -140,7 +153,7 @@ async def parse_existing_job(job_file: str, timeout: int) -> str | None:
             pid_alive = "DEAD"
         if "ALIVE" in pid_alive:
             # Previous batch still running → resume polling
-            result, _ = await _poll_batch_log(
+            result, _ = await poll_batch_log(
                 job["log_file"], timeout,
                 f"(Resumed monitoring existing batch PID {pid})\n"
             )
@@ -151,6 +164,9 @@ async def parse_existing_job(job_file: str, timeout: int) -> str | None:
     except (json.JSONDecodeError, KeyError):
         await ssh_run(f"rm -f {job_file}", timeout=5)
     return None
+
+
+_TEST_NAME_RE = _re.compile(r'^[A-Za-z0-9_.\-]+$')
 
 
 async def build_batch_cmd(
@@ -174,13 +190,19 @@ async def build_batch_cmd(
         - cmd: the resolved simulation command string
         - preprocessed_tcl: path to preprocessed tcl file, or None
     """
+    # Validate test_name at entry point — same regex as tcl_preprocessing
+    if not _TEST_NAME_RE.fullmatch(test_name):
+        raise ValueError(
+            f"Invalid test_name: {test_name!r}. "
+            "Only alphanumeric, underscore, dot, and hyphen characters are allowed."
+        )
     validate_extra_args(extra_args)
     params = resolve_sim_params(runner, sim_mode, extra_args, timeout, dump_depth=dump_depth)
     effective_dump_depth = params["dump_depth"]
 
     # Resolve exec command and format test args
     info = _resolve_exec_cmd(runner, regression=False)
-    test_args = params["test_args_format"].format(test_name=sq(test_name))
+    test_args = params["test_args_format"].format(test_name=shell_quote(test_name))
     cmd = info.cmd.format(test_name=test_args) if info.needs_test_name else info.cmd
     if params["extra_args"]:
         cmd = f"{cmd} {params['extra_args']}"
@@ -192,14 +214,14 @@ async def build_batch_cmd(
             cmd = f"{cmd} {sdf_extra}"
 
     # SHM naming + probe scope + dump window: preprocess setup_tcl
-    env_prefix = f"TEST_NAME={sq(test_name)} "
+    env_prefix = f"TEST_NAME={shell_quote(test_name)} "
     preprocessed_tcl = await _preprocess_setup_tcl(
         sim_dir, runner, test_name, sim_mode,
         dump_depth=effective_dump_depth, dump_signals=dump_signals,
         dump_window=dump_window,
     )
     if preprocessed_tcl:
-        env_prefix += f"MCP_INPUT_TCL={sq(preprocessed_tcl)} "
+        env_prefix += f"MCP_INPUT_TCL={shell_quote(preprocessed_tcl)} "
 
     return env_prefix, cmd, preprocessed_tcl
 
@@ -227,13 +249,12 @@ async def launch_nohup_job(
         PID of the launched process (0 if unknown).
     """
     ts = int(_time.time())
-    from xcelium_mcp.shell_utils import get_user_tmp_dir
     user_tmp = await get_user_tmp_dir()
 
     # B-0 fix: subshell wrapping to prevent PIPE fd inheritance
     pid_file = f"{user_tmp}/batch_pid_{ts}"
     await ssh_run(
-        f"cd {sq(sim_dir)} && "
+        f"cd {shell_quote(sim_dir)} && "
         f"(nohup {run_cmd} {build_redirect(log_file)} < /dev/null & echo $! > {pid_file}) "
         f">& /dev/null",
         timeout=15.0,
@@ -244,7 +265,7 @@ async def launch_nohup_job(
     pid_str = pid_str.strip()
     # Fallback — use pgrep if pid file didn't yield a number
     if not pid_str.isdigit():
-        pid_str = await ssh_run(f"(pgrep -f {sq(test_name)} || true) | tail -1")
+        pid_str = await ssh_run(f"(pgrep -f {shell_quote(test_name)} || true) | tail -1")
     pid = int(pid_str.strip()) if pid_str.strip().isdigit() else 0
 
     if pid:
@@ -266,32 +287,7 @@ async def launch_nohup_job(
     return pid
 
 
-async def watch_pid_and_poll(
-    pid: int,
-    log_file: str,
-    job_file: str,
-    timeout: int,
-) -> str:
-    """Poll batch log for completion and clean up job file.
-
-    Waits for the batch simulation to complete by polling the log file,
-    then removes the job state file.
-
-    Args:
-        pid: Process ID of the batch job (unused but kept for future use).
-        log_file: Path to the batch log file to poll.
-        job_file: Path to the job state file to clean up.
-        timeout: Timeout in seconds for polling.
-
-    Returns:
-        Result string from log polling.
-    """
-    result, _ = await _poll_batch_log(log_file, timeout)
-    await ssh_run(f"rm -f {job_file}", timeout=5)
-    return result
-
-
-async def _run_batch_single(
+async def run_batch_single(
     sim_dir: str,
     test_name: str,
     runner: dict,
@@ -313,7 +309,6 @@ async def _run_batch_single(
 
     Strategy: nohup + PID watcher + adaptive log polling (P6-1/P6-2/P6-5).
     """
-    from xcelium_mcp.shell_utils import get_user_tmp_dir
     user_tmp = await get_user_tmp_dir()
     job_file = f"{user_tmp}/batch_job.json"
 
@@ -341,16 +336,16 @@ async def _run_batch_single(
     # Method 6-B fallback (deprecated — kept for backward compat)
     if rename_dump and not preprocessed_tcl:
         mv_cmd = (
-            f"cd {sq(sim_dir)} && "
+            f"cd {shell_quote(sim_dir)} && "
             f"if [ -d dump/ci_top.shm ]; then "
-            f"mv dump/ci_top.shm dump/ci_top_{sq(test_name)}.shm; fi"
+            f"mv dump/ci_top.shm dump/ci_top_{shell_quote(test_name)}.shm; fi"
         )
         await ssh_run(mv_cmd, timeout=30.0)
 
     return result
 
 
-async def _run_batch_regression(
+async def run_batch_regression(
     sim_dir: str,
     test_list: list[str],
     runner: dict,
@@ -380,7 +375,6 @@ async def _run_batch_regression(
       These checkpoints are used later by sim_batch_run(from_checkpoint=...)
       for faster debugging (skip compile+init).
     """
-    from xcelium_mcp.shell_utils import get_user_tmp_dir
     user_tmp = await get_user_tmp_dir()
     job_file = f"{user_tmp}/regression_job.json"
     ts = int(_time.time())
@@ -396,7 +390,7 @@ async def _run_batch_regression(
     chk_dir = f"{sim_dir}/checkpoints"
     setup_lines = ""
     if save_checkpoints:
-        await ssh_run(f"mkdir -p {sq(chk_dir)}", timeout=5)
+        await ssh_run(f"mkdir -p {shell_quote(chk_dir)}", timeout=5)
         raw_tcl = read_setup_tcl(runner, sim_dir)
         setup_lines = extract_setup_lines(raw_tcl)
 
@@ -422,7 +416,7 @@ async def _run_batch_regression(
                     log_file = job.get("log_file", log_file)
                     current_log = job.get("current_log", "")
                     if current_log:
-                        _, _ = await _poll_batch_log(current_log, 600)
+                        _, _ = await poll_batch_log(current_log, 600)
                         completed_tests.append(current)
                 # else: PID dead → stale job, discard and start fresh
         except (json.JSONDecodeError, KeyError):
@@ -440,21 +434,21 @@ async def _run_batch_regression(
             # B-0 fix: subshell wrapping, stdbuf removed (Xcelium incompatible)
             run_cmd = cmd_with_extra
             await ssh_run(
-                f"cd {sq(sim_dir)} && "
+                f"cd {shell_quote(sim_dir)} && "
                 f"(nohup {run_cmd} {build_redirect(log_file)} < /dev/null &) "
                 f">& /dev/null",
                 timeout=15.0,
             )
-        # P6-1/P6-2: adaptive polling via _poll_batch_log
-        _, _ = await _poll_batch_log(log_file, timeout=3600)
+        # P6-1/P6-2: adaptive polling via poll_batch_log
+        _, _ = await poll_batch_log(log_file, timeout=3600)
 
     else:
         # Per-test loop — skip completed tests (resume support)
         remaining = [t for t in test_list if t not in completed_tests]
 
         for test_name in remaining:
-            test_log = f"{user_tmp}/regression_{ts}_{sq(test_name)}.log"
-            env_prefix = f"TEST_NAME={sq(test_name)} "
+            test_log = f"{user_tmp}/regression_{ts}_{shell_quote(test_name)}.log"
+            env_prefix = f"TEST_NAME={shell_quote(test_name)} "
 
             # SHM naming + probe scope + dump window: preprocess setup_tcl.
             # Skip when save_checkpoints — _build_checkpoint_tcl handles SHM
@@ -469,32 +463,32 @@ async def _run_batch_regression(
                     dump_window=dump_window,
                 )
                 if preprocessed_tcl:
-                    env_prefix += f"MCP_INPUT_TCL={sq(preprocessed_tcl)} "
+                    env_prefix += f"MCP_INPUT_TCL={shell_quote(preprocessed_tcl)} "
 
             # Phase 4: inject checkpoint save commands into xmsim Tcl
             if save_checkpoints and setup_lines:
                 chk_tcl = _build_checkpoint_tcl(
                     test_name, chk_dir, l1_time, setup_lines,
                 )
-                chk_tcl_path = f"{user_tmp}/chk_{sq(test_name)}.tcl"
+                chk_tcl_path = f"{user_tmp}/chk_{shell_quote(test_name)}.tcl"
                 b64 = _b64.b64encode(chk_tcl.encode()).decode()
                 await ssh_run(
-                    f"echo {sq(b64)} | base64 -d > {sq(chk_tcl_path)}",
+                    f"echo {shell_quote(b64)} | base64 -d > {shell_quote(chk_tcl_path)}",
                     timeout=5,
                 )
-                env_prefix += f"MCP_INPUT_TCL={sq(chk_tcl_path)} "
+                env_prefix += f"MCP_INPUT_TCL={shell_quote(chk_tcl_path)} "
 
-            test_args = params["test_args_format"].format(test_name=sq(test_name))
+            test_args = params["test_args_format"].format(test_name=shell_quote(test_name))
             cmd = info.cmd.format(test_name=test_args) if info.needs_test_name else info.cmd
             if params["extra_args"]:
                 cmd = f"{cmd} {params['extra_args']}"
 
             # B-0 fix: subshell wrapping, stdbuf removed (Xcelium incompatible)
-            # P6-5b: echo $! > pid_file inside subshell — aligns with _run_batch_single
+            # P6-5b: echo $! > pid_file inside subshell — aligns with run_batch_single
             run_cmd = f"env {env_prefix}{cmd}"
             pid_file = f"{test_log}.pid"
             await ssh_run(
-                f"cd {sq(sim_dir)} && "
+                f"cd {shell_quote(sim_dir)} && "
                 f"(nohup {run_cmd} {build_redirect(test_log)} < /dev/null & echo $! > {pid_file}) "
                 f">& /dev/null",
                 timeout=15.0,
@@ -524,8 +518,8 @@ async def _run_batch_regression(
             else:
                 await ssh_run(f"echo {b64} | base64 -d > {job_file}", timeout=5)
 
-            # Per-test poll (P6-1/P6-2/P6-5 via _poll_batch_log)
-            _, timed_out = await _poll_batch_log(test_log, 600)
+            # Per-test poll (P6-1/P6-2/P6-5 via poll_batch_log)
+            _, timed_out = await poll_batch_log(test_log, 600)
 
             if timed_out:
                 # Guard: kill stale xmsim/xmrm to prevent worklib lock on next test
@@ -547,7 +541,8 @@ async def _run_batch_regression(
             if save_checkpoints and not timed_out:
                 from xcelium_mcp import checkpoint_manager as _ckpt
                 l1_ns = _parse_l1_time_ns(l1_time)
-                _ckpt.register_checkpoint(
+                await asyncio.to_thread(
+                    _ckpt.register_checkpoint,
                     sim_dir, f"L1_{test_name}", l1_ns,
                     origin="regression", test_name=test_name,
                 )
@@ -555,15 +550,15 @@ async def _run_batch_regression(
             # Method 6-B fallback
             if rename_dump:
                 mv_cmd = (
-                    f"cd {sq(sim_dir)} && "
+                    f"cd {shell_quote(sim_dir)} && "
                     f"if [ -d dump/ci_top.shm ]; then "
-                    f"mv dump/ci_top.shm dump/ci_top_{sq(test_name)}.shm; fi"
+                    f"mv dump/ci_top.shm dump/ci_top_{shell_quote(test_name)}.shm; fi"
                 )
                 await ssh_run(mv_cmd, timeout=30.0)
 
             # Append per-test result to main log
             await ssh_run(
-                f"echo {sq('=== ' + test_name + ' ===')} >> {log_file} && "
+                f"echo {shell_quote('=== ' + test_name + ' ===')} >> {log_file} && "
                 f"(grep -E 'PASS|FAIL|Errors:' {test_log} || true) >> {log_file}",
                 timeout=10.0,
             )
@@ -582,7 +577,7 @@ async def _run_batch_regression(
     per_test_results: dict[str, list[str]] = {tn: [] for tn in test_list}
     for line in batch_grep.strip().splitlines():
         for tn in test_list:
-            if f"_{sq(tn)}.log:" in line:
+            if f"_{shell_quote(tn)}.log:" in line:
                 per_test_results[tn].append(line.split(":", 1)[1] if ":" in line else line)
                 break
 
@@ -600,157 +595,3 @@ async def _run_batch_regression(
     summary = f"{pass_count}/{total} tests PASS, {fail_count} FAIL"
     details = raw[:4000] if raw.strip() else "(no PASS/FAIL lines found in per-test logs)"
     return f"{summary}\n\nLog ({log_file}):\n{details}"
-
-
-async def _poll_batch_log(log_file: str, timeout: float, prefix: str = "") -> tuple[str, bool]:
-    """Poll a batch log file until completion keywords found or timeout.
-
-    P6-1: Adaptive polling interval — 2s → 3s → 4.5s → 6.75s → 10s cap.
-          Short gap catches fast tests; longer gap reduces SSH overhead for slow ones.
-    P6-2: Single SSH call per poll — tail + done-file check in one round-trip.
-    P6-5: .done marker file — reliable completion signal even when keywords scroll past tail.
-
-    Returns: (result_str, timed_out) — timed_out=True when poll exhausted without completion.
-    """
-    deadline = _time.time() + timeout
-    interval = 2.0          # P6-1: start at 2s
-    done_file = f"{log_file}.done"
-    timed_out = True
-
-    while _time.time() < deadline:
-        # P6-2: single SSH call — tail for keyword scan + done-file sentinel
-        out = await ssh_run(
-            f"(tail -10 {log_file} || true); "
-            f"test -f {done_file} && echo __DONE__"
-        )
-        if "__DONE__" in out or any(
-            kw in out for kw in ("$finish", "COMPLETE", "PASS", "FAIL", "Errors:")
-        ):
-            timed_out = False
-            break
-        # P6-1: adaptive backoff (×1.5, cap 10s)
-        await asyncio.sleep(interval)
-        interval = min(interval * 1.5, 10.0)
-
-    result = await ssh_run(
-        f"(grep -E 'PASS|FAIL|Errors:|\\$finish|COMPLETE' {log_file} || true) | tail -30"
-    )
-    await ssh_run(f"rm -f {done_file}", timeout=5)   # P6-5: cleanup marker
-    return prefix + result, timed_out
-
-
-# ===========================================================================
-# v4.1 Phase 1b: resolve_sim_params + resolve_test_name
-# ===========================================================================
-
-
-def resolve_sim_params(
-    runner: dict,
-    sim_mode: str = "rtl",
-    extra_args: str = "",
-    timeout: int = 600,
-    dump_depth: str | None = None,
-) -> dict:
-    """Resolve simulation parameters from registry schema — Single Point of Change.
-
-    All tools (sim_bridge_run, sim_batch_run, sim_regression) call this.
-    Schema changes → modify here only → all tools updated.
-
-    Returns:
-        {"test_args_format": str, "timeout": int,
-         "probe_strategy": str, "extra_args": str, "dump_depth": str}
-    """
-    # 1. args_format: dict → mode선택, string → 전 mode 동일
-    args_raw = runner.get("args_format", "-test {test_name} --")
-    if isinstance(args_raw, dict):
-        test_args_format = args_raw.get(sim_mode, args_raw.get("rtl", "-test {test_name} --"))
-    else:
-        test_args_format = args_raw
-
-    # 2. mode_defaults: common + mode merge
-    mode_defaults = runner.get("mode_defaults", {})
-    common_cfg = mode_defaults.get("common", {})
-    mode_cfg = mode_defaults.get(sim_mode, {})
-    effective = {**common_cfg, **mode_cfg}
-
-    # 3. extra_args: config + 1회성 합침
-    cfg_extra = effective.get("extra_args", "")
-    all_extra = f"{cfg_extra} {extra_args}".strip()
-
-    # v4.3: extra_args combo warnings (warn only, never block)
-    warnings: list[str] = []
-    if extra_args:
-        ea_lower = extra_args.lower()
-        if sim_mode == "rtl" and any(k in ea_lower for k in ("-max", "-worst", "-best", "-min")):
-            warnings.append("WARNING: corner options are typically for gate/ams mode, not rtl")
-        if sim_mode == "gate" and "-ams" in ea_lower:
-            warnings.append("WARNING: AMS option in gate mode — use sim_mode='ams_gate' instead")
-        if not sim_mode and ("-gate" in ea_lower or "-gate post" in ea_lower):
-            warnings.append("WARNING: use sim_mode='gate' instead of extra_args for gate mode")
-
-    # v4.3: dump_depth 결정
-    if dump_depth is not None:
-        effective_dump_depth = dump_depth
-    else:
-        effective_dump_depth = effective.get("dump_depth", "all")
-
-    return {
-        "test_args_format": test_args_format,
-        "timeout": effective.get("timeout", timeout),
-        "probe_strategy": effective.get("probe_strategy", "all"),
-        "extra_args": all_extra,
-        "dump_depth": effective_dump_depth,
-        "warnings": warnings,
-    }
-
-
-async def resolve_test_name(short_name: str, sim_dir: str = "") -> str:
-    """Short name → full test name via cached_tests.
-
-    "TOP015" → "VENEZIA_TOP015_i2c_8bit_offset_test"
-    Exact match → return. 1 substring match → return. 0 → error. 2+ → candidates.
-    Cache miss → triggers list_tests (mcp_config 경유 캐시 저장).
-    """
-    # Lazy import to avoid circular dependency (sim_runner → batch_runner → sim_runner)
-    from xcelium_mcp.discovery import resolve_sim_dir
-    try:
-        resolved_dir = await resolve_sim_dir(sim_dir)
-    except ValueError:
-        resolved_dir = sim_dir  # fallback: use as-is
-    cfg = await load_sim_config(resolved_dir) if resolved_dir else None
-    cached = cfg.get("test_discovery", {}).get("cached_tests", []) if cfg else []
-
-    if not cached:
-        # Cache miss — run test_discovery.command + cache via mcp_config
-        if cfg:
-            discovery = cfg.get("test_discovery", {})
-            cmd = discovery.get("command", "")
-            if cmd:
-                r = await ssh_run(f"cd {sq(resolved_dir)} && {cmd}", timeout=30)
-                cached = [t.strip() for t in r.strip().splitlines() if t.strip()]
-                if cached:
-                    # Cache via config_action (write centralization)
-                    cfg.setdefault("test_discovery", {})["cached_tests"] = cached
-                    cfg["test_discovery"]["cached_at"] = datetime.now().isoformat()
-                    await save_sim_config(resolved_dir, cfg)
-
-    if not cached:
-        return short_name  # No cache, no command → pass through
-
-    # Exact match
-    if short_name in cached:
-        return short_name
-
-    # Substring match
-    matches = [t for t in cached if short_name in t]
-    if len(matches) == 1:
-        return matches[0]
-    elif len(matches) == 0:
-        raise ValueError(f"No test matching '{short_name}'. Run list_tests() to see available.")
-    else:
-        raise ValueError(
-            f"Multiple tests match '{short_name}':\n"
-            + "\n".join(f"  {m}" for m in matches)
-            + "\nSpecify more precisely."
-        )
-
