@@ -1,6 +1,6 @@
 {
   "version": "2.0",
-  "lastUpdated": "2026-04-10T10:32:45.808Z",
+  "lastUpdated": "2026-04-10T10:47:21.219Z",
   "activeFeatures": [
     "tools",
     "xcelium_mcp",
@@ -18,7 +18,7 @@
       "documents": {},
       "timestamps": {
         "started": "2026-04-10T04:12:44.863Z",
-        "lastUpdated": "2026-04-10T10:32:45.807Z"
+        "lastUpdated": "2026-04-10T10:46:58.864Z"
       },
       "lastFile": "C:\\Users\\HSLEE\\Documents\\Todoc\\fpga\\xcelium-mcp\\src\\xcelium_mcp\\tools\\debug.py"
     },
@@ -31,9 +31,9 @@
       "documents": {},
       "timestamps": {
         "started": "2026-04-10T04:14:20.513Z",
-        "lastUpdated": "2026-04-10T10:28:04.886Z"
+        "lastUpdated": "2026-04-10T10:47:21.219Z"
       },
-      "lastFile": "C:\\Users\\HSLEE\\Documents\\Todoc\\fpga\\xcelium-mcp\\src\\xcelium_mcp\\csv_cache.py"
+      "lastFile": "C:\\Users\\HSLEE\\Documents\\Todoc\\fpga\\xcelium-mcp\\src\\xcelium_mcp\\tcl_preprocessing.py"
     },
     ".claude": {
       "phase": "do",
@@ -57,9 +57,9 @@
       "documents": {},
       "timestamps": {
         "started": "2026-04-10T08:31:01.136Z",
-        "lastUpdated": "2026-04-10T10:31:24.178Z"
+        "lastUpdated": "2026-04-10T10:42:48.431Z"
       },
-      "lastFile": "C:\\Users\\HSLEE\\Documents\\Todoc\\fpga\\xcelium-mcp\\tests\\test_imports.py"
+      "lastFile": "C:\\Users\\HSLEE\\Documents\\Todoc\\fpga\\xcelium-mcp\\tests\\test_bisect.py"
     }
   },
   "pipeline": {
@@ -70,7 +70,7 @@
   "session": {
     "startedAt": "2026-04-10T04:10:48.003Z",
     "onboardingCompleted": false,
-    "lastActivity": "2026-04-10T10:32:45.808Z"
+    "lastActivity": "2026-04-10T10:47:21.219Z"
   },
   "history": [
     {
@@ -2242,6 +2242,66 @@
     {
       "timestamp": "2026-04-10T10:32:45.807Z",
       "feature": "tools",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-10T10:41:45.173Z",
+      "feature": "xcelium_mcp",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-10T10:41:53.431Z",
+      "feature": "tools",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-10T10:42:05.072Z",
+      "feature": "tools",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-10T10:42:13.261Z",
+      "feature": "tools",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-10T10:42:22.249Z",
+      "feature": "tools",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-10T10:42:26.580Z",
+      "feature": "tools",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-10T10:42:48.431Z",
+      "feature": "tests",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-10T10:46:58.864Z",
+      "feature": "tools",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-10T10:47:15.318Z",
+      "feature": "xcelium_mcp",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-10T10:47:21.219Z",
+      "feature": "xcelium_mcp",
       "phase": "do",
       "action": "updated"
     }

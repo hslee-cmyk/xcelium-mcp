@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from xcelium_mcp.batch_polling import watch_pid_and_poll
 from xcelium_mcp.batch_runner import (
     _resolve_exec_cmd,
     _should_resume_regression,
@@ -21,9 +22,7 @@ from xcelium_mcp.batch_runner import (
     launch_nohup_job,
     parse_existing_job,
 )
-from xcelium_mcp.batch_polling import watch_pid_and_poll
 from xcelium_mcp.test_resolution import resolve_sim_params
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

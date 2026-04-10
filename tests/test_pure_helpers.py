@@ -3,18 +3,17 @@ from __future__ import annotations
 
 import pytest
 
+from xcelium_mcp.batch_runner import validate_extra_args
 from xcelium_mcp.discovery import (
     _extract_top_module_from_content,
     _parse_ifdef_around_sdf,
 )
-from xcelium_mcp.batch_runner import validate_extra_args
 from xcelium_mcp.shell_utils import (
     _parse_shm_path,
     _parse_time_ns,
     is_safe_tcl_string,
     sanitize_signal_name,
 )
-
 
 # ---------------------------------------------------------------------------
 # _extract_top_module_from_content
