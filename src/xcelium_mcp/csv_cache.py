@@ -14,7 +14,7 @@ import hashlib
 from collections import OrderedDict, deque
 from pathlib import Path
 
-from xcelium_mcp.shell_utils import get_user_tmp_dir, ssh_run
+from xcelium_mcp.shell_utils import get_user_tmp_dir, sanitize_signal_name, ssh_run
 
 # ---------------------------------------------------------------------------
 # simvisdbutil path resolution — MCP server runs in bash without EDA PATH
@@ -125,6 +125,7 @@ async def extract(
         parts.append("-missing")
 
     for sig in signals:
+        sanitize_signal_name(sig)  # defense-in-depth: reject Tcl injection chars
         parts += ["-sig", sig]
 
     svdb_cmd = " ".join(parts)
