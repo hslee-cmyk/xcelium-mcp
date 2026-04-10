@@ -7,7 +7,7 @@ that now catches import-time regressions.)
 """
 from __future__ import annotations
 
-from xcelium_mcp.sim_runner import (
+from xcelium_mcp.discovery import (
     _extract_top_module_from_content,
     _parse_ifdef_around_sdf,
 )

@@ -54,7 +54,15 @@ fi
 
 # Override verify command from prd.json if verifyCommand field exists
 if [ -f "$PRD_FILE" ]; then
-  PRD_VERIFY=$(jq -r '.verifyCommand // empty' "$PRD_FILE" 2>/dev/null || echo "")
+  PRD_VERIFY=$(python -c "
+import json, sys
+try:
+    with open(sys.argv[1], encoding='utf-8') as f:
+        v = json.load(f).get('verifyCommand', '')
+    print(v if v else '')
+except Exception:
+    print('')
+" "$PRD_FILE" 2>/dev/null || echo "")
   if [ -n "$PRD_VERIFY" ]; then
     VERIFY_COMMAND="$PRD_VERIFY"
   fi
@@ -69,19 +77,36 @@ if [ "$NEXT_ITERATION" -gt "$MAX_ITERATIONS" ]; then
 fi
 
 # Check for completion promise
-LAST_OUTPUT=$(echo "$HOOK_INPUT" | jq -r '.last_assistant_message // empty' 2>/dev/null || echo "")
+LAST_OUTPUT=$(echo "$HOOK_INPUT" | python -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    print(data.get('last_assistant_message', ''))
+except Exception:
+    print('')
+" 2>/dev/null || echo "")
 
 if [ -z "$LAST_OUTPUT" ]; then
-  TRANSCRIPT_PATH=$(echo "$HOOK_INPUT" | jq -r '.transcript_path // empty' 2>/dev/null || echo "")
+  TRANSCRIPT_PATH=$(echo "$HOOK_INPUT" | python -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    print(data.get('transcript_path', ''))
+except Exception:
+    print('')
+" 2>/dev/null || echo "")
   if [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then
     LAST_LINE=$(grep '"role":"assistant"' "$TRANSCRIPT_PATH" | tail -1 || echo "")
     if [ -n "$LAST_LINE" ]; then
-      LAST_OUTPUT=$(echo "$LAST_LINE" | jq -r '
-        .message.content |
-        map(select(.type == "text")) |
-        map(.text) |
-        join("\n")
-      ' 2>/dev/null || echo "")
+      LAST_OUTPUT=$(echo "$LAST_LINE" | python -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    texts = [b['text'] for b in data.get('message', {}).get('content', []) if b.get('type') == 'text']
+    print('\n'.join(texts))
+except Exception:
+    print('')
+" 2>/dev/null || echo "")
     fi
   fi
 fi
@@ -173,11 +198,11 @@ fi
 
 SYSTEM_MSG="Ralph loop iteration $NEXT_ITERATION/$MAX_ITERATIONS. Verification: $([ $VERIFY_EXIT_CODE -eq 0 ] && echo 'PASSED' || echo 'FAILED')"
 
-jq -n \
-  --arg prompt "$PROMPT" \
-  --arg msg "$SYSTEM_MSG" \
-  '{
-    "decision": "block",
-    "reason": $prompt,
-    "systemMessage": $msg
-  }'
+python -c "
+import json, sys
+print(json.dumps({
+    'decision': 'block',
+    'reason': sys.argv[1],
+    'systemMessage': sys.argv[2]
+}))
+" "$PROMPT" "$SYSTEM_MSG"

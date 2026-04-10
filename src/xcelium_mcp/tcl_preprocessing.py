@@ -240,7 +240,7 @@ async def _handle_sdf_override(
         raise ValueError(f"Invalid sdf_file path: {sdf_file!r}")
 
     from xcelium_mcp.registry import load_sim_config
-    from xcelium_mcp.sim_runner import get_user_tmp_dir
+    from xcelium_mcp.shell_utils import get_user_tmp_dir
 
     config = await load_sim_config(sim_dir)
     sdf_info = (config or {}).get("sdf_info", {})
@@ -283,7 +283,7 @@ async def _handle_sdf_override(
 
 async def _patch_tb_sdf_guard(sim_dir: str, sdf_info: dict) -> None:
     """Patch TB RTL: add `ifndef MCP_SDF_OVERRIDE guard around $sdf_annotate."""
-    from xcelium_mcp.sim_runner import get_user_tmp_dir
+    from xcelium_mcp.shell_utils import get_user_tmp_dir
 
     top_v = sdf_info.get("sdf_source_file", "")
     if not top_v:
@@ -347,7 +347,7 @@ async def _preprocess_setup_tcl(
     if not changed:
         return ""
 
-    from xcelium_mcp.sim_runner import get_user_tmp_dir
+    from xcelium_mcp.shell_utils import get_user_tmp_dir
     user_tmp = await get_user_tmp_dir()
     out_path = f"{user_tmp}/setup_batch_{test_name}.tcl"
     Path(out_path).write_text(content)

@@ -91,13 +91,15 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
                 return "ERROR: 'signals' list is required for action='check_dump'."
 
             from xcelium_mcp.csv_cache import _resolve_simvisdbutil
+            from xcelium_mcp.discovery import resolve_sim_dir
             from xcelium_mcp.registry import load_sim_config
-            from xcelium_mcp.sim_runner import (
+            from xcelium_mcp.shell_utils import (
                 get_user_tmp_dir,
                 login_shell_cmd,
-                resolve_sim_dir,
-                sq,
                 ssh_run,
+            )
+            from xcelium_mcp.shell_utils import (
+                shell_quote as sq,
             )
 
             # 1. Resolve SHM path

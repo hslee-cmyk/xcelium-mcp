@@ -8,7 +8,9 @@ from mcp.server.fastmcp import FastMCP
 
 import xcelium_mcp.checkpoint_manager as checkpoint_manager
 from xcelium_mcp.bridge_manager import BridgeManager
-from xcelium_mcp.sim_runner import get_user_tmp_dir, resolve_sim_dir, sq, ssh_run
+from xcelium_mcp.discovery import resolve_sim_dir
+from xcelium_mcp.shell_utils import get_user_tmp_dir, ssh_run
+from xcelium_mcp.shell_utils import shell_quote as sq
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +148,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
                 f"echo 'DEFINE worklib {abs_worklib}' > {sq(cds_lib)}",
                 timeout=5,
             )
-            from xcelium_mcp.sim_runner import login_shell_cmd
+            from xcelium_mcp.shell_utils import login_shell_cmd
             login_shell = "/usr/bin/tcsh"
             if cfg and "runner" in cfg:
                 login_shell = cfg["runner"].get("login_shell", login_shell)
@@ -214,7 +216,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             if cfg and "runner" in cfg:
                 login_shell = cfg["runner"].get("login_shell", login_shell)
 
-            from xcelium_mcp.sim_runner import login_shell_cmd
+            from xcelium_mcp.shell_utils import login_shell_cmd
             user_tmp = await get_user_tmp_dir()
             cds_lib = f"{user_tmp}/cleanup_cds.lib"
             chk_worklib = os.path.expanduser(os.path.join(resolved_dir, "checkpoints", "worklib"))

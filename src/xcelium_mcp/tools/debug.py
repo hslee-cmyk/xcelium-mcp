@@ -11,12 +11,10 @@ from mcp.server.fastmcp import FastMCP, Image
 import xcelium_mcp.csv_cache as csv_cache
 import xcelium_mcp.debug_tools as debug_tools
 from xcelium_mcp.bridge_manager import BridgeManager
+from xcelium_mcp.discovery import resolve_sim_dir
 from xcelium_mcp.registry import load_sim_config
 from xcelium_mcp.screenshot import ps_to_png
 from xcelium_mcp.shell_utils import sanitize_signal_name, validate_path
-from xcelium_mcp.sim_runner import (
-    resolve_sim_dir,
-)
 from xcelium_mcp.tcl_bridge import TclError
 
 # ---------------------------------------------------------------------------

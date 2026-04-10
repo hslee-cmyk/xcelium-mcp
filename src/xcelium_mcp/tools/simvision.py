@@ -11,18 +11,20 @@ from mcp.server.fastmcp import FastMCP
 
 from xcelium_mcp.batch_runner import resolve_test_name
 from xcelium_mcp.bridge_manager import BridgeManager, scan_ready_files
+from xcelium_mcp.discovery import resolve_sim_dir
 from xcelium_mcp.env_detection import _detect_vnc_display
 from xcelium_mcp.registry import load_sim_config
-from xcelium_mcp.shell_utils import validate_path
-from xcelium_mcp.sim_runner import (
+from xcelium_mcp.shell_utils import (
     _parse_shm_path,
     _parse_time_ns,
     build_redirect,
     get_user_tmp_dir,
     login_shell_cmd,
-    resolve_sim_dir,
-    sq,
     ssh_run,
+    validate_path,
+)
+from xcelium_mcp.shell_utils import (
+    shell_quote as sq,
 )
 from xcelium_mcp.tcl_bridge import BRIDGE_ERRORS, TclBridge, TclError
 

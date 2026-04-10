@@ -192,7 +192,7 @@ async def _run_batch_single(
     # nohup + polling returns grep summary only.
 
     # --- nohup + stdbuf + job resume ---
-    from xcelium_mcp.sim_runner import get_user_tmp_dir
+    from xcelium_mcp.shell_utils import get_user_tmp_dir
     user_tmp = await get_user_tmp_dir()
     job_file = f"{user_tmp}/batch_job.json"
 
@@ -317,7 +317,7 @@ async def _run_batch_regression(
     """
     import time as _time
 
-    from xcelium_mcp.sim_runner import get_user_tmp_dir
+    from xcelium_mcp.shell_utils import get_user_tmp_dir
     user_tmp = await get_user_tmp_dir()
     job_file = f"{user_tmp}/regression_job.json"
     ts = int(_time.time())
@@ -652,7 +652,7 @@ async def resolve_test_name(short_name: str, sim_dir: str = "") -> str:
     Cache miss → triggers list_tests (mcp_config 경유 캐시 저장).
     """
     # Lazy import to avoid circular dependency (sim_runner → batch_runner → sim_runner)
-    from xcelium_mcp.sim_runner import resolve_sim_dir
+    from xcelium_mcp.discovery import resolve_sim_dir
     try:
         resolved_dir = await resolve_sim_dir(sim_dir)
     except ValueError:

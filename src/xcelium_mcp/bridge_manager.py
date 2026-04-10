@@ -5,8 +5,7 @@ Single instance created in server.py, passed to tools and sim_runner via DI.
 """
 from __future__ import annotations
 
-from xcelium_mcp.shell_utils import ssh_run
-from xcelium_mcp.sim_runner import get_user_tmp_dir
+from xcelium_mcp.shell_utils import get_user_tmp_dir, ssh_run
 from xcelium_mcp.tcl_bridge import TclBridge
 
 

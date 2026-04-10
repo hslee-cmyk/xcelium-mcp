@@ -192,3 +192,54 @@ def sanitize_tcl_string(s: str) -> bool:
     if re.search(r'\[\s*open\b', lower):
         return False
     return True
+
+
+# ===================================================================
+# Utility functions (moved from sim_runner.py)
+# ===================================================================
+
+
+_USER_TMP: str = ""  # cached after first call
+
+
+async def get_user_tmp_dir() -> str:
+    """Get per-user temp directory. Creates on first call.
+
+    Returns /tmp/xcelium_mcp_{uid}/ — unique per Unix user.
+    Python and Tcl must use the same path pattern for ready file sync.
+    """
+    global _USER_TMP
+    if _USER_TMP:
+        return _USER_TMP
+    r = await ssh_run("id -u", timeout=5)
+    uid = r.strip()
+    _USER_TMP = f"/tmp/xcelium_mcp_{uid}"
+    await ssh_run(f"mkdir -p {_USER_TMP}", timeout=5)
+    return _USER_TMP
+
+
+def _parse_shm_path(db_list_output: str) -> str:
+    """Parse SHM path from xmsim 'database -list' output."""
+    for line in db_list_output.strip().splitlines():
+        line = line.strip().strip("'\"")
+        if ".shm" in line:
+            idx = line.index(".shm") + 4
+            return line[:idx]
+    return ""
+
+
+def _parse_time_ns(where_output: str) -> int:
+    """Parse simulation time from xmsim 'where' output into nanoseconds."""
+    m = re.search(r'(\d+)\s+MS\s*\+\s*(\d+)', where_output, re.IGNORECASE)
+    if m:
+        return int(m.group(1)) * 1_000_000 + int(m.group(2))
+    m = re.search(r'(\d+)\s+US\s*\+\s*(\d+)', where_output, re.IGNORECASE)
+    if m:
+        return int(m.group(1)) * 1000 + int(m.group(2))
+    m = re.search(r'(\d+)\s+NS\s*\+\s*(\d+)', where_output, re.IGNORECASE)
+    if m:
+        return int(m.group(1)) + int(m.group(2))
+    m = re.search(r'(\d+)', where_output)
+    if m:
+        return int(m.group(1))
+    return 0

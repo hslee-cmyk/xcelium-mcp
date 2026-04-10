@@ -175,7 +175,7 @@ def _parse_json_value(value: str) -> int | float | bool | str:
 async def config_action(action: str, file: str, key: str, value: str) -> str:
     """Execute mcp_config action."""
     # Lazy import to avoid circular dependency (sim_runner imports from registry)
-    from xcelium_mcp.sim_runner import resolve_sim_dir
+    from xcelium_mcp.discovery import resolve_sim_dir
 
     # Load target file
     if file == "registry":

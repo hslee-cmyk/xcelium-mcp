@@ -65,31 +65,33 @@
       "title": "Split sim_runner.py god module",
       "priority": 2,
       "passes": false,
-      "skip": true,
-      "skipReason": "Large structural refactor requiring extensive testing across all tool modules. Do after security fixes.",
       "acceptanceCriteria": [
-        "sim_runner.py split into bridge_lifecycle.py + discovery.py",
-        "Utility functions moved to shell_utils.py",
-        "All lazy imports in downstream modules eliminated",
-        "All 61+ tests pass",
-        "No circular import at import time"
+        "bridge_lifecycle.py 신규: _patch_legacy_run_script, _update_simvisionrc, run_with_dump_window, start_bridge_simulation, _start_bridge 이동",
+        "discovery.py 신규: run_full_discovery, _format_discovery_result, _extract_top_module_*, _parse_ifdef_around_sdf, _analyze_sdf_annotate 이동",
+        "shell_utils.py에 get_user_tmp_dir, _parse_shm_path, _parse_time_ns 이동",
+        "7개 tool 모듈(9곳)의 from xcelium_mcp.sim_runner import → 실제 출처 모듈로 변경",
+        "lazy import 2곳(checkpoint.py:149, signal_inspection.py:95) 제거 — 직접 import로 교체",
+        "sim_runner.py 삭제 또는 deprecated re-export stub만 유지",
+        "No circular import at import time (python -c 'import xcelium_mcp.server' 성공)",
+        "pytest passes"
       ],
-      "notes": "811-line god module with 20+ circular-import workarounds. Re-export shim forces lazy imports everywhere."
+      "notes": "842-line god module. Re-export facade(L27-78, ~30 names) + 자체 로직 혼재. 분리 대상: bridge_lifecycle(~300줄), discovery(~300줄), shell_utils(+50줄). 7 tool 모듈 import 변경 필수."
     },
     {
       "id": "F-006",
       "title": "Extract pure helpers from batch_runner._run_batch_*",
       "priority": 2,
       "passes": false,
-      "skip": true,
-      "skipReason": "Depends on F-005 (sim_runner split). Large refactor — skip until structural work is done.",
       "acceptanceCriteria": [
-        "build_launch_cmd, parse_existing_job, launch_nohup_job, watch_pid_and_poll extracted as pure/thin helpers",
-        "_run_batch_single becomes a 30-line orchestrator",
-        "New helpers have unit tests",
+        "parse_existing_job(job_file) — 기존 job 파일 파싱, dict 반환",
+        "build_launch_cmd(runner, test_name, ...) — nohup launch 명령 구성, str 반환",
+        "launch_nohup_job(cmd, ...) — 실행 + PID 수집, int 반환",
+        "watch_pid_and_poll(pid, log_file, timeout) — PID 감시 + 로그 polling, result 반환",
+        "_run_batch_single이 30줄 이내 orchestrator로 축소",
+        "추출된 4개 헬퍼에 단위 테스트 추가",
         "pytest passes"
       ],
-      "notes": "batch_runner.py:128-285 and 288-540. 150-line procedural blobs with 6+ responsibilities each."
+      "notes": "batch_runner.py _run_batch_single(L128-285, 157줄) 6개 책임 혼재. F-005 완료 후 import 경로 안정화된 상태에서 진행. F-020 SSH 통합 이미 반영됨."
     },
     {
       "id": "F-007",
