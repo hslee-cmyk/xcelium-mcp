@@ -108,21 +108,39 @@ async def test_parse_existing_job_alive_pid_no_test_name() -> None:
 
 @pytest.mark.asyncio
 async def test_parse_existing_job_alive_pid_different_test() -> None:
-    """Alive PID + different test_name: kills existing, returns None (fresh start)."""
+    """Alive PID + different test_name: kills existing + orphan xmsim, returns None."""
     job = json.dumps({"pid": 99, "log_file": "/tmp/batch.log", "test_name": "T1"})
     with patch("xcelium_mcp.batch_runner.shell_run", new_callable=AsyncMock) as mock_ssh:
         mock_ssh.side_effect = [
             job,       # cat job_file
             "ALIVE",   # kill -0 check
-            "",        # kill 99 (kill stale)
-            "",        # pkill -P 99 (kill children)
+            "",        # kill 99
+            "",        # pkill -P 99
+            "",        # pkill -f xmsim.*T1 (orphan cleanup)
             "",        # rm -f job_file
         ]
         result = await parse_existing_job("/tmp/batch_job.json", timeout=600, test_name="T2")
         assert result is None
-        # Verify kill was called
-        kill_calls = [c for c in mock_ssh.call_args_list if "kill 99" in str(c)]
-        assert kill_calls, "Must kill the existing PID when test_name differs"
+        kill_calls = [str(c) for c in mock_ssh.call_args_list]
+        assert any("kill 99" in c for c in kill_calls), "Must kill wrapper PID"
+        assert any("pkill -f" in c and "T1" in c for c in kill_calls), "Must kill orphaned xmsim by test_name"
+
+
+@pytest.mark.asyncio
+async def test_parse_existing_job_dead_pid_different_test_kills_orphan() -> None:
+    """Dead wrapper PID + different test_name: kills orphaned xmsim, returns None."""
+    job = json.dumps({"pid": 99, "log_file": "/tmp/batch.log", "test_name": "T1"})
+    with patch("xcelium_mcp.batch_runner.shell_run", new_callable=AsyncMock) as mock_ssh:
+        mock_ssh.side_effect = [
+            job,       # cat job_file
+            "DEAD",    # kill -0 check → wrapper dead
+            "",        # pkill -f xmsim.*T1 (orphan cleanup)
+            "",        # rm -f job_file
+        ]
+        result = await parse_existing_job("/tmp/batch_job.json", timeout=600, test_name="T2")
+        assert result is None
+        kill_calls = [str(c) for c in mock_ssh.call_args_list]
+        assert any("pkill -f" in c and "T1" in c for c in kill_calls), "Must kill orphaned xmsim even when wrapper is dead"
 
 
 @pytest.mark.asyncio

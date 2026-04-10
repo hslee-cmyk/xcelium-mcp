@@ -127,12 +127,19 @@ def _resolve_exec_cmd(runner: dict, regression: bool = False) -> ExecInfo:
     return ExecInfo(cmd=cmd, needs_test_name=needs_test_name)
 
 
-async def _kill_stale_pid(pid: int) -> None:
-    """Kill a stale simulation process and wait briefly for cleanup."""
+async def _kill_stale_sim(pid: int, test_name: str = "") -> None:
+    """Kill a stale simulation process — both wrapper PID and orphaned xmsim.
+
+    nohup xmsim becomes an orphan when the wrapper exits. We must kill both:
+    1. The wrapper PID (if alive)
+    2. Any xmsim process matching the test_name (catches orphans)
+    """
     if pid > 0:
         await shell_run(f"kill {pid} 2>/dev/null || true", timeout=5)
-        # Also kill any child xmsim process that may have been spawned
         await shell_run(f"pkill -P {pid} 2>/dev/null || true", timeout=5)
+    if test_name:
+        # Kill orphaned xmsim that contains this test_name in its command line
+        await shell_run(f"pkill -f 'xmsim.*{shell_quote(test_name)}' 2>/dev/null || true", timeout=5)
 
 
 async def parse_existing_job(job_file: str, timeout: int, test_name: str = "") -> str | None:
@@ -162,8 +169,8 @@ async def parse_existing_job(job_file: str, timeout: int, test_name: str = "") -
             pid_alive = await shell_run(f"(kill -0 {pid}) && echo ALIVE || echo DEAD")
         else:
             pid_alive = "DEAD"
+        saved_test = job.get("test_name", "")
         if "ALIVE" in pid_alive:
-            saved_test = job.get("test_name", "")
             if not test_name or not saved_test or saved_test == test_name:
                 # Same test → resume polling
                 result, _ = await poll_batch_log(
@@ -173,8 +180,11 @@ async def parse_existing_job(job_file: str, timeout: int, test_name: str = "") -
                 await shell_run(f"rm -f {job_file}", timeout=5)
                 return result
             # Different test → kill existing and start fresh
-            await _kill_stale_pid(pid)
-        # PID dead → stale job file, remove and start fresh
+            await _kill_stale_sim(pid, saved_test)
+        else:
+            # PID dead → kill orphaned xmsim (nohup makes it survive wrapper death)
+            if saved_test and test_name and saved_test != test_name:
+                await _kill_stale_sim(0, saved_test)
         await shell_run(f"rm -f {job_file}", timeout=5)
     except (json.JSONDecodeError, KeyError):
         await shell_run(f"rm -f {job_file}", timeout=5)
@@ -445,8 +455,13 @@ async def run_batch_regression(
                             completed_tests.append(current)
                     else:
                         # Different test_list → kill existing and start fresh
-                        await _kill_stale_pid(pid)
-                # else: PID dead → discard and start fresh
+                        current = job.get("current", "")
+                        await _kill_stale_sim(pid, current)
+                else:
+                    # PID dead → kill orphaned xmsim from previous test
+                    current = job.get("current", "")
+                    if current:
+                        await _kill_stale_sim(0, current)
         except (json.JSONDecodeError, KeyError):
             pass
         await shell_run(f"rm -f {job_file}", timeout=5)
