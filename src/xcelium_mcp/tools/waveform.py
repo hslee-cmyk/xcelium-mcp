@@ -16,17 +16,15 @@ _CURSOR_NAME_RE = re.compile(r'^[A-Za-z0-9_]+$')
 
 
 def _encode_group_arg(group_name: str) -> str:
-    """Encode group_name for Tcl protocol. Empty → '""', spaces → {braced}."""
+    """Validate and encode group_name for Tcl protocol.
+
+    Empty → '""', spaces → {braced}. Raises ValueError for invalid chars.
+    """
     if not group_name:
         return '""'
+    if "{" in group_name or "}" in group_name:
+        raise ValueError("Group name cannot contain { or } characters")
     return "{" + group_name + "}" if " " in group_name else group_name
-
-
-def _validate_group_name(group_name: str) -> str | None:
-    """Return error message if group_name contains invalid chars, else None."""
-    if group_name and ("{" in group_name or "}" in group_name):
-        return "ERROR: Group name cannot contain { or } characters"
-    return None
 
 
 async def _list_waveform_windows(bridge: TclBridge) -> str:
@@ -47,9 +45,10 @@ async def _waveform_add_impl(
     """Internal add implementation — callable from simvision.py via dict reference."""
     bridge = bridges.simvision
 
-    err = _validate_group_name(group_name)
-    if err:
-        return err
+    try:
+        grp = _encode_group_arg(group_name)
+    except ValueError as e:
+        return f"ERROR: {e}"
 
     try:
         signals = [sanitize_signal_name(s) for s in signals]
@@ -64,8 +63,6 @@ async def _waveform_add_impl(
         except TclError:
             avail = await _list_waveform_windows(bridge)
             return f"ERROR: Window '{window_name}' not found. Available: {avail}"
-
-    grp = _encode_group_arg(group_name)
     sig_str = " ".join(signals)
     result = await bridge.execute(
         f"__WAVEFORM_ADD__ {grp} {sig_str}", timeout=30.0
@@ -110,9 +107,6 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
 
         elif action == "remove":
             bridge = bridges.simvision
-            err = _validate_group_name(group_name)
-            if err:
-                return err
             if not signals and not group_name:
                 return "ERROR: Provide signals to remove, or group_name to remove a group."
             if signals:
@@ -120,7 +114,10 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
                     signals = [sanitize_signal_name(s) for s in signals]
                 except ValueError as e:
                     return f"ERROR: {e}"
-            grp = _encode_group_arg(group_name)
+            try:
+                grp = _encode_group_arg(group_name)
+            except ValueError as e:
+                return f"ERROR: {e}"
             sig_str = " ".join(signals) if signals else ""
             result = await bridge.execute(
                 f"__WAVEFORM_REMOVE__ {grp} {sig_str}".strip(), timeout=30.0
