@@ -64,7 +64,8 @@
       "id": "F-005",
       "title": "Split sim_runner.py god module",
       "priority": 2,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-04-10",
       "acceptanceCriteria": [
         "bridge_lifecycle.py 신규: _patch_legacy_run_script, _update_simvisionrc, run_with_dump_window, start_bridge_simulation, _start_bridge 이동",
         "discovery.py 신규: run_full_discovery, _format_discovery_result, _extract_top_module_*, _parse_ifdef_around_sdf, _analyze_sdf_annotate 이동",
@@ -81,7 +82,8 @@
       "id": "F-006",
       "title": "Extract pure helpers from batch_runner._run_batch_*",
       "priority": 2,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-04-10",
       "acceptanceCriteria": [
         "parse_existing_job(job_file) — 기존 job 파일 파싱, dict 반환",
         "build_launch_cmd(runner, test_name, ...) — nohup launch 명령 구성, str 반환",

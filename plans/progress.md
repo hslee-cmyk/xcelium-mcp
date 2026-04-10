@@ -28,6 +28,16 @@ python -m pytest && python -m ruff check src/
 
 ---
 
+### Task: Ralph loop — F-005, F-006 (structural refactor)
+
+**Completed:**
+- **F-005** — Split sim_runner.py (842→106 lines stub). New: discovery.py (446), bridge_lifecycle.py (343). Moved utils to shell_utils.py. Updated 13 files.
+- **F-006** — Extracted 4 helpers from _run_batch_single: parse_existing_job, build_batch_cmd, launch_nohup_job, watch_pid_and_poll. Added 20 unit tests. Total: 81 tests.
+
+**All 21 prd.json tasks complete.**
+
+---
+
 ### Task: Ralph loop — F-020, F-021 (performance optimization)
 
 **Completed:**
