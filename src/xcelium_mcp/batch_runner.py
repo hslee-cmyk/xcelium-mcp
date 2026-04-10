@@ -427,21 +427,6 @@ async def _run_batch_regression(
             if params["extra_args"]:
                 cmd = f"{cmd} {params['extra_args']}"
 
-            # Save job state (for resume on reconnection)
-            import base64 as _b64
-            from datetime import datetime
-            job_info = json.dumps({
-                "type": "regression",
-                "pid": 0,  # updated after nohup
-                "log_file": log_file,
-                "current": test_name,
-                "current_log": test_log,
-                "completed": completed_tests,
-                "started_at": datetime.now().isoformat(),
-            })
-            b64 = _b64.b64encode(job_info.encode()).decode()
-            await ssh_run(f"echo {b64} | base64 -d > {job_file}", timeout=5)
-
             # B-0 fix: subshell wrapping, stdbuf removed (Xcelium incompatible)
             # P6-5b: echo $! > pid_file inside subshell — aligns with _run_batch_single
             run_cmd = f"env {env_prefix}{cmd}"
@@ -453,17 +438,23 @@ async def _run_batch_regression(
                 timeout=15.0,
             )
 
-            # Read PID from pid_file (pgrep -f {test_name} fails: xmsim cmdline has no test name)
+            # Read PID + save job state in single cycle (F-020: was 2 base64 writes)
+            import base64 as _b64
+            from datetime import datetime
             pid_str = await ssh_run(f"(cat {pid_file} || true); rm -f {pid_file}", timeout=5)
-            if pid_str.strip().isdigit():
-                test_pid = int(pid_str.strip())
-                job_update = json.dumps({
-                    "type": "regression", "pid": test_pid,
-                    "log_file": log_file, "current": test_name,
-                    "current_log": test_log, "completed": completed_tests,
-                })
-                b64_upd = _b64.b64encode(job_update.encode()).decode()
-                await ssh_run(f"echo {b64_upd} | base64 -d > {job_file}", timeout=5)
+            test_pid = int(pid_str.strip()) if pid_str.strip().isdigit() else 0
+            job_info = json.dumps({
+                "type": "regression",
+                "pid": test_pid,
+                "log_file": log_file,
+                "current": test_name,
+                "current_log": test_log,
+                "completed": completed_tests,
+                "started_at": datetime.now().isoformat(),
+            })
+            b64 = _b64.b64encode(job_info.encode()).decode()
+            await ssh_run(f"echo {b64} | base64 -d > {job_file}", timeout=5)
+            if test_pid:
                 # P6-5: PID watcher for per-test done marker
                 # >& /dev/null: B-0 fix — detach from asyncio PIPE fds
                 test_done = f"{test_log}.done"
@@ -519,16 +510,26 @@ async def _run_batch_regression(
     # Cleanup job file
     await ssh_run(f"rm -f {job_file}", timeout=5)
 
-    # Parse final results from per-test logs (reliable regardless of append timing)
+    # Parse final results from per-test logs (F-020: single grep instead of N)
+    # Build one command that greps all test logs and prefixes each with filename
+    log_pattern = f"{user_tmp}/regression_{ts}_*.log"
+    batch_grep = await ssh_run(
+        f"(grep -H -E 'PASS|FAIL|Errors:|COMPLETE' {log_pattern} || true) | tail -200",
+        timeout=30.0,
+    )
+    # Parse grep -H output: "filename:matched_line"
+    per_test_results: dict[str, list[str]] = {tn: [] for tn in test_list}
+    for line in batch_grep.strip().splitlines():
+        for tn in test_list:
+            if f"_{sq(tn)}.log:" in line:
+                per_test_results[tn].append(line.split(":", 1)[1] if ":" in line else line)
+                break
+
     all_parts: list[str] = []
     pass_count = 0
     fail_count = 0
     for tn in test_list:
-        t_log = f"{user_tmp}/regression_{ts}_{sq(tn)}.log"
-        t_raw = await ssh_run(
-            f"grep -E 'PASS|FAIL|Errors:|COMPLETE' {t_log} | tail -20",
-            timeout=30.0,
-        )
+        t_raw = "\n".join(per_test_results[tn])
         all_parts.append(f"=== {tn} ===\n{t_raw}")
         pass_count += t_raw.count("PASS")
         fail_count += t_raw.count("FAIL")
