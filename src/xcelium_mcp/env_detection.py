@@ -5,6 +5,24 @@ Contains all environment/shell/runner/directory detection logic.
 """
 from __future__ import annotations
 
+__all__ = [
+    "_analyze_tb_type",
+    "_auto_detect_runner",
+    "_ask_user_runner",
+    "_detect_bridge_port",
+    "_detect_bridge_tcl",
+    "_detect_run_dir",
+    "_detect_setup_tcls",
+    "_detect_shell_and_env",
+    "_detect_vnc_display",
+    "_discover_sim_dir",
+    "_extract_script_name",
+    "_load_or_detect_runner",
+    "_pick_default_mode",
+    "_resolve_eda_tools",
+    "_resolve_external_tools",
+]
+
 from pathlib import Path
 
 from xcelium_mcp.registry import load_sim_config
