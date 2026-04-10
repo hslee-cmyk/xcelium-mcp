@@ -29,7 +29,6 @@ from xcelium_mcp.tcl_bridge import TclBridge, TclError
 # Type aliases for cross-tool callable references
 WaveformAddImplFn = Callable[..., Coroutine[Any, Any, str]]
 ConnectSimulatorFn = Callable[..., Coroutine[Any, Any, str]]
-GenerateDebugTclFn = Callable[..., Coroutine[Any, Any, str]]
 
 _DISPLAY_RE = re.compile(r'^:?[0-9]+(\.[0-9]+)?$')
 
@@ -40,7 +39,6 @@ def register(
     *,
     waveform_add_impl_fn: WaveformAddImplFn,
     connect_simulator_fn: ConnectSimulatorFn,
-    generate_debug_tcl_fn: GenerateDebugTclFn,
     csv_cache: Any,
 ) -> None:
     """Register SimVision GUI tools.
@@ -50,7 +48,6 @@ def register(
         bridges: BridgeManager for simulator bridge access.
         waveform_add_impl_fn: Reference to internal waveform add implementation.
         connect_simulator_fn: Reference to connect_simulator tool.
-        generate_debug_tcl_fn: Reference to debug_snapshot tool (mode="tcl").
         csv_cache: csv_cache module (extract, bisect_csv).
     """
 

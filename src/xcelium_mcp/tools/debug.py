@@ -105,7 +105,7 @@ async def _bisect_signal_dump_impl(
 # Tool registration
 # ---------------------------------------------------------------------------
 
-def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
+def register(mcp: FastMCP, bridges: BridgeManager) -> None:
 
     @mcp.tool()
     async def watch(
@@ -497,4 +497,3 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         Path(output_path).write_text(content, encoding="utf-8")
         return f"Debug context exported to: {output_path}"
 
-    return {"generate_debug_tcl": debug_snapshot}

@@ -47,7 +47,7 @@ checkpoint.register(mcp, bridges)
 # Phase 2: modules that return tool references
 lifecycle_tools = sim_lifecycle.register(mcp, bridges)
 waveform_tools = waveform.register(mcp, bridges)
-debug_tools = debug.register(mcp, bridges)
+debug.register(mcp, bridges)
 
 # Phase 3: batch needs restore_checkpoint
 # functools.partial pre-fills `bridges` so batch.py can call fn(name, sim_dir)
@@ -62,7 +62,6 @@ simvision.register(
     bridges,
     waveform_add_impl_fn=waveform_tools["_waveform_add_impl"],
     connect_simulator_fn=lifecycle_tools["connect_simulator"],
-    generate_debug_tcl_fn=debug_tools["generate_debug_tcl"],
     csv_cache=csv_cache,
 )
 

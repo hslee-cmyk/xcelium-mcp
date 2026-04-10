@@ -1,6 +1,8 @@
 """Waveform viewing and control tools."""
 from __future__ import annotations
 
+import functools
+
 from mcp.server.fastmcp import FastMCP, Image
 
 from xcelium_mcp.bridge_manager import BridgeManager
@@ -171,6 +173,5 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         return Image(data=png_bytes, format="png")
 
     return {
-        "waveform_add": waveform,
-        "_waveform_add_impl": lambda **kwargs: _waveform_add_impl(bridges, **kwargs),
+        "_waveform_add_impl": functools.partial(_waveform_add_impl, bridges),
     }
