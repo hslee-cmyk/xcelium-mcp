@@ -79,6 +79,26 @@ def test_duration_re_matches_with_leading_trailing_space() -> None:
 
 
 # ---------------------------------------------------------------------------
+# F-081: sim_stop passes timeout to bridge.execute
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sim_stop_passes_timeout_to_bridge() -> None:
+    """sim_stop should forward its timeout argument to bridge.execute."""
+    from xcelium_mcp.tools.sim_lifecycle import register
+
+    mock_mcp = _MockMCP()
+    mock_bridges = MagicMock()
+    mock_bridges.xmsim.execute = AsyncMock(return_value="ok")
+
+    register(mock_mcp, mock_bridges)
+
+    await mock_mcp.tools["sim_stop"](timeout=99.0)
+    mock_bridges.xmsim.execute.assert_called_once_with("stop", timeout=99.0)
+
+
+# ---------------------------------------------------------------------------
 # F-080: Harden sim_run duration — length cap + ASCII-only digits
 # ---------------------------------------------------------------------------
 
