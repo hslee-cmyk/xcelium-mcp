@@ -1156,6 +1156,21 @@
         "pytest passes + ruff check passes"
       ],
       "notes": "sim-run-timeout-fix 코드 리뷰 Low #4 (kieran). sim_lifecycle.py:314. timeout 초과 시 원인/해결책이 client에게 전달되지 않음. MCP 에러 메시지로 actionable guidance 제공."
+    },
+    {
+      "id": "F-083",
+      "title": "Require explicit time unit in sim_run duration",
+      "priority": 3,
+      "passes": false,
+      "acceptanceCriteria": [
+        "_DURATION_RE에서 unit group 옵셔널 '?' 제거 → 단위 필수화",
+        "최종 패턴: r'^[0-9]+\\s*(ns|us|ms|s|ps|fs)$' (F-080과 병행 적용)",
+        "docstring 'duration:' 줄에 accepted suffix (ns/us/ms/s/ps/fs) 명시",
+        "pytest: '100' (단위 없음) 거부 확인, '100ns' 통과 확인",
+        "기존 호출부에서 단위 없이 전달하는 케이스 없는지 repo grep 확인 (sim_run(duration='숫자만') 호출)",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "sim-run-timeout-fix 코드 리뷰 Medium #3 (kieran). sim_lifecycle.py:297. 현재 regex가 bare integer 허용 → Xcelium default timescale 해석으로 사용자 의도 불명확. Behavior change라 별도 항목으로 분리. F-080과 함께 적용 권장 (같은 regex 수정)."
     }
   ]
 }
