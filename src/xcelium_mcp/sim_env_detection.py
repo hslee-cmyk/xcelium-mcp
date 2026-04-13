@@ -252,11 +252,15 @@ async def detect_bridge_port(sim_dir: str, bridge_tcl: str) -> int:
 # Run directory detection
 # ---------------------------------------------------------------------------
 
-async def detect_run_dir(sim_dir: str, runner_info: dict) -> dict:
+async def detect_run_dir(sim_dir: str, runner_info: dict, run_dir: str = "") -> dict:
     """Detect simulation run directory and whether runner script has internal cd.
 
+    Args:
+        run_dir: If provided, skip detection and use this value directly.
     Returns: {"run_dir": str, "script_has_cd": bool}
     """
+    if run_dir:
+        return {"run_dir": run_dir, "script_has_cd": False}
     from xcelium_mcp.runner_detection import extract_script_name
 
     candidates: list[str] = []
@@ -307,9 +311,12 @@ async def detect_run_dir(sim_dir: str, runner_info: dict) -> dict:
 
     # 5. Multiple -> ask user
     if len(candidates) > 1:
+        choices = "\n".join(f"  {i+1}. {c}" for i, c in enumerate(candidates))
         raise UserInputRequired(
             "Multiple run directories found. Select one:\n"
-            + "\n".join(f"  {i+1}. {c}" for i, c in enumerate(candidates))
+            + choices
+            + "\nRe-call sim_discover with run_dir=<choice>, e.g. run_dir='"
+            + candidates[0] + "'"
         )
 
     # 6. None -> ask user

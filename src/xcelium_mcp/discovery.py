@@ -370,7 +370,7 @@ async def _update_simvisionrc(bridge_tcl: str) -> str:
 
 
 async def run_full_discovery(
-    sim_dir: str = "", force: bool = False, top_module: str = "",
+    sim_dir: str = "", force: bool = False, top_module: str = "", run_dir: str = "",
 ) -> str:
     """Main discovery orchestrator. Called by sim_discover MCP tool."""
 
@@ -409,7 +409,7 @@ async def run_full_discovery(
             resolve_eda_tools(shell_env),
             resolve_external_tools(shell_env),
             detect_bridge_port(sim_dir, bridge_tcl),
-            detect_run_dir(sim_dir, runner_info),
+            detect_run_dir(sim_dir, runner_info, run_dir=run_dir),
         )
     )
     patch_result = await _patch_legacy_run_script(sim_dir, runner_info)

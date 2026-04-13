@@ -199,6 +199,33 @@ async def test_run_full_discovery_uses_registry_default_sim_dir() -> None:
     assert "Registry already exists" in result
 
 
+# ---------------------------------------------------------------------------
+# F-089: sim_discover run_dir parameter — detect_run_dir hint
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_detect_run_dir_uses_hint_directly() -> None:
+    """When run_dir hint provided, detect_run_dir returns it without shell calls."""
+    from xcelium_mcp.sim_env_detection import detect_run_dir
+
+    result = await detect_run_dir("/some/sim", runner_info={}, run_dir="run")
+    assert result["run_dir"] == "run"
+    assert result["script_has_cd"] is False
+
+
+@pytest.mark.asyncio
+async def test_detect_run_dir_hint_skips_ssh() -> None:
+    """With run_dir hint, no shell_run calls should be made."""
+    from unittest.mock import AsyncMock, patch
+    from xcelium_mcp.sim_env_detection import detect_run_dir
+
+    with patch("xcelium_mcp.sim_env_detection.shell_run", new_callable=AsyncMock) as mock_shell:
+        result = await detect_run_dir("/sim", runner_info={"exec_cmd": "run_sim.sh"}, run_dir="run")
+        mock_shell.assert_not_called()
+    assert result["run_dir"] == "run"
+
+
 @pytest.mark.asyncio
 async def test_run_full_discovery_falls_back_to_discover_when_no_registry() -> None:
     """When registry has no default sim_dir, discover_sim_dir() is called."""

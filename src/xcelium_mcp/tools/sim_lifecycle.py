@@ -129,6 +129,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         sim_dir: str = "",
         force: bool = False,
         top_module: str = "",
+        run_dir: str = "",
     ) -> str:
         """Discover simulation environment and register in mcp_registry.
 
@@ -139,9 +140,11 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             sim_dir:    Explicit simulation directory. Empty = auto-discover.
             force:      Re-detect even if registry already exists.
             top_module: Top module name for SDF analysis. Empty = auto-detect from script.
+            run_dir:    Run directory override. Use when multiple candidates found
+                        and USER INPUT REQUIRED prompted you to re-call with run_dir=.
         """
         try:
-            return await run_full_discovery(sim_dir, force, top_module=top_module)
+            return await run_full_discovery(sim_dir, force, top_module=top_module, run_dir=run_dir)
         except UserInputRequired as e:
             return f"USER INPUT REQUIRED:\n{e.prompt}"
 
