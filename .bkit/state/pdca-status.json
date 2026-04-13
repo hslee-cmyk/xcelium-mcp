@@ -1,6 +1,6 @@
 {
   "version": "2.0",
-  "lastUpdated": "2026-04-10T10:47:21.219Z",
+  "lastUpdated": "2026-04-13T10:43:18.097Z",
   "activeFeatures": [
     "tools",
     "xcelium_mcp",
@@ -18,9 +18,9 @@
       "documents": {},
       "timestamps": {
         "started": "2026-04-10T04:12:44.863Z",
-        "lastUpdated": "2026-04-10T10:46:58.864Z"
+        "lastUpdated": "2026-04-13T10:43:02.709Z"
       },
-      "lastFile": "C:\\Users\\HSLEE\\Documents\\Todoc\\fpga\\xcelium-mcp\\src\\xcelium_mcp\\tools\\debug.py"
+      "lastFile": "C:\\Users\\HSLEE\\Documents\\Todoc\\fpga\\xcelium-mcp\\src\\xcelium_mcp\\tools\\sim_lifecycle.py"
     },
     "xcelium_mcp": {
       "phase": "do",
@@ -31,9 +31,9 @@
       "documents": {},
       "timestamps": {
         "started": "2026-04-10T04:14:20.513Z",
-        "lastUpdated": "2026-04-10T10:47:21.219Z"
+        "lastUpdated": "2026-04-13T10:42:51.846Z"
       },
-      "lastFile": "C:\\Users\\HSLEE\\Documents\\Todoc\\fpga\\xcelium-mcp\\src\\xcelium_mcp\\tcl_preprocessing.py"
+      "lastFile": "C:\\Users\\HSLEE\\Documents\\Todoc\\fpga\\xcelium-mcp\\src\\xcelium_mcp\\discovery.py"
     },
     ".claude": {
       "phase": "do",
@@ -44,9 +44,9 @@
       "documents": {},
       "timestamps": {
         "started": "2026-04-10T04:24:41.562Z",
-        "lastUpdated": "2026-04-10T04:25:39.551Z"
+        "lastUpdated": "2026-04-10T12:53:07.807Z"
       },
-      "lastFile": "C:\\Users\\HSLEE\\Documents\\Todoc\\fpga\\xcelium-mcp\\.claude\\hooks\\stop-hook.sh"
+      "lastFile": "C:\\Users\\HSLEE\\.claude\\statusline-command.sh"
     },
     "tests": {
       "phase": "do",
@@ -57,9 +57,9 @@
       "documents": {},
       "timestamps": {
         "started": "2026-04-10T08:31:01.136Z",
-        "lastUpdated": "2026-04-10T10:42:48.431Z"
+        "lastUpdated": "2026-04-13T10:43:18.097Z"
       },
-      "lastFile": "C:\\Users\\HSLEE\\Documents\\Todoc\\fpga\\xcelium-mcp\\tests\\test_bisect.py"
+      "lastFile": "C:\\Users\\HSLEE\\Documents\\Todoc\\fpga\\xcelium-mcp\\tests\\test_regression_summary.py"
     }
   },
   "pipeline": {
@@ -70,7 +70,7 @@
   "session": {
     "startedAt": "2026-04-10T04:10:48.003Z",
     "onboardingCompleted": false,
-    "lastActivity": "2026-04-10T10:47:21.219Z"
+    "lastActivity": "2026-04-13T10:43:18.097Z"
   },
   "history": [
     {
@@ -2302,6 +2302,270 @@
     {
       "timestamp": "2026-04-10T10:47:21.219Z",
       "feature": "xcelium_mcp",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-10T12:40:12.028Z",
+      "feature": ".claude",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-10T12:51:00.101Z",
+      "feature": ".claude",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-10T12:53:07.807Z",
+      "feature": ".claude",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T03:17:26.845Z",
+      "feature": "tools",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T03:18:31.663Z",
+      "feature": "tests",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T03:19:15.612Z",
+      "feature": "tools",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T03:19:24.092Z",
+      "feature": "tools",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T03:19:28.105Z",
+      "feature": "tests",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T03:19:41.081Z",
+      "feature": "tests",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T03:20:08.439Z",
+      "feature": "tools",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T03:20:16.166Z",
+      "feature": "tools",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T03:20:26.423Z",
+      "feature": "tests",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T03:20:52.628Z",
+      "feature": "tools",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T03:21:16.691Z",
+      "feature": "tools",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T03:21:30.724Z",
+      "feature": "tests",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T03:22:06.212Z",
+      "feature": "tools",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T03:22:12.205Z",
+      "feature": "tools",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T03:22:19.869Z",
+      "feature": "tests",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T03:24:33.181Z",
+      "feature": "tests",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T09:37:45.601Z",
+      "feature": "xcelium_mcp",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T09:38:22.411Z",
+      "feature": "xcelium_mcp",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T09:38:34.719Z",
+      "feature": "xcelium_mcp",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T09:39:12.873Z",
+      "feature": "tests",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T09:39:55.580Z",
+      "feature": "xcelium_mcp",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T09:40:16.526Z",
+      "feature": "xcelium_mcp",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T09:40:20.462Z",
+      "feature": "xcelium_mcp",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T09:40:43.526Z",
+      "feature": "tests",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T10:12:19.899Z",
+      "feature": "xcelium_mcp",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T10:12:35.631Z",
+      "feature": "tests",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T10:12:49.282Z",
+      "feature": "tests",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T10:40:48.576Z",
+      "feature": "xcelium_mcp",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T10:40:54.179Z",
+      "feature": "xcelium_mcp",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T10:41:00.626Z",
+      "feature": "xcelium_mcp",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T10:41:05.597Z",
+      "feature": "xcelium_mcp",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T10:41:10.777Z",
+      "feature": "xcelium_mcp",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T10:41:17.377Z",
+      "feature": "xcelium_mcp",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T10:41:23.471Z",
+      "feature": "xcelium_mcp",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T10:41:38.397Z",
+      "feature": "xcelium_mcp",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T10:42:38.808Z",
+      "feature": "xcelium_mcp",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T10:42:44.609Z",
+      "feature": "xcelium_mcp",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T10:42:48.615Z",
+      "feature": "xcelium_mcp",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T10:42:51.846Z",
+      "feature": "xcelium_mcp",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T10:43:02.709Z",
+      "feature": "tools",
+      "phase": "do",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-04-13T10:43:18.097Z",
+      "feature": "tests",
       "phase": "do",
       "action": "updated"
     }
