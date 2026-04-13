@@ -380,8 +380,8 @@ async def run_full_discovery(
             envs = await discover_sim_dir()
             sim_dir = envs[0]["sim_dir"]
 
-    # B-tilde fix: resolve ~ to absolute path before any shell_quote() calls.
-    sim_dir = os.path.expanduser(sim_dir)
+    # Normalize: expand ~ then resolve symlinks so registry keys are consistent.
+    sim_dir = os.path.realpath(os.path.expanduser(sim_dir))
 
     if not force:
         existing = await load_sim_config(sim_dir)

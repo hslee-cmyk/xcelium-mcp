@@ -112,7 +112,10 @@ async def _update_registry_from_config(sim_dir: str, tb_type: str, config: dict)
         cwd=sim_dir,
     )
     stdout, _ = await proc.communicate()
-    project_root = stdout.decode().strip() if proc.returncode == 0 else str(Path.home())
+    raw_root = stdout.decode().strip() if proc.returncode == 0 else str(Path.home())
+    # Normalize both paths so symlink vs realpath variants map to the same key.
+    project_root = str(Path(raw_root).resolve())
+    sim_dir = str(Path(sim_dir).resolve())
 
     registry = await asyncio.to_thread(_load_registry_sync)
     projects = registry.setdefault("projects", {})

@@ -1292,6 +1292,20 @@
       ],
       "notes": "resolve_eda_tools()에서 which_cmds를 bash $() 문법으로 생성하여 csh/tcsh에서 실행하면 command substitution이 동작하지 않음. eda.env가 csh 스크립트인 경우(#/bin/csh shebang 또는 setenv 키워드로 감지), _detect_env_shell()이 env_shell=/bin/csh를 반환하고 shell_env에 저장됨. 이후 resolve_eda_tools()에서 csh -c 'source eda.env && echo __TOOL_simvisdbutil__=$(which simvisdbutil)'를 실행하면 $()가 빈 문자열로 평가되어 결과가 __TOOL_simvisdbutil__=(빈값)이 됨. _detect_eda_env Step 3의 which xrun은 csh native 문법이라 성공하지만 resolve_eda_tools의 $() 혼용으로 실패. force=True + run_dir 제공 시에만 이 경로가 실행되므로 F-088 이전에는 드러나지 않았음.",
       "completed_at": "2026-04-13"
+    },
+    {
+      "id": "F-091",
+      "title": "mcp_registry.json project_root/sim_dir 경로 불일치 — symlink vs 실경로 혼재",
+      "priority": 3,
+      "passes": false,
+      "acceptanceCriteria": [
+        "run_full_discovery() 진입 시 sim_dir에 os.path.realpath() 적용 (사용자 입력 정규화)",
+        "_update_registry_from_config()에서 sim_dir, project_root 모두 os.path.realpath() 적용",
+        "sim_discover(force=True) 후 mcp_registry.json의 project key와 env key가 모두 realpath 기준으로 통일",
+        "기존 registry 파일은 삭제 후 sim_discover 재실행으로 초기화 (마이그레이션 코드 불필요)",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "~/git.clone이 /usrdata/.../git.clone의 symlink인 환경에서 불일치 발생. sim_dir(env key)은 /users/.../ncsim (symlink 미해소 경로), project_root(project key)는 git rev-parse --show-toplevel이 내부적으로 realpath를 적용하여 /usrdata/.../venezia-t0를 반환. 현재 get_default_sim_dir()은 env_key만 반환하고 project_root를 무시하므로 현재 동작에는 영향 없음. 그러나 사용자가 다른 경로 형식으로 sim_discover를 호출하면 동일 환경이 다른 key로 중복 등록 가능. 수정: run_full_discovery() 진입 시와 _update_registry_from_config() 내부에서 sim_dir/project_root 모두 os.path.realpath()로 정규화. 기존 registry는 파일 삭제 후 sim_discover 재실행으로 클린 초기화."
     }
   ]
 }
