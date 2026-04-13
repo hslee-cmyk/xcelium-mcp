@@ -152,6 +152,41 @@ async def test_sim_run_strips_duration_before_validation() -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# F-083: Require explicit time unit in sim_run duration
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sim_run_rejects_bare_integer_duration() -> None:
+    """Duration without unit (e.g. '100') should be rejected."""
+    from xcelium_mcp.tools.sim_lifecycle import register
+
+    mock_mcp = _MockMCP()
+    mock_bridges = MagicMock()
+    mock_bridges.xmsim.execute = AsyncMock(return_value="ok")
+
+    register(mock_mcp, mock_bridges)
+
+    result = await mock_mcp.tools["sim_run"](duration="100")
+    assert "ERROR" in result
+
+
+@pytest.mark.asyncio
+async def test_sim_run_accepts_duration_with_unit() -> None:
+    """Duration with explicit unit should pass validation."""
+    from xcelium_mcp.tools.sim_lifecycle import register
+
+    mock_mcp = _MockMCP()
+    mock_bridges = MagicMock()
+    mock_bridges.xmsim.execute = AsyncMock(return_value="Time: 100 NS")
+
+    register(mock_mcp, mock_bridges)
+
+    result = await mock_mcp.tools["sim_run"](duration="100ns")
+    assert "Simulation advanced" in result
+
+
 @pytest.mark.asyncio
 async def test_sim_run_timeout_returns_actionable_error() -> None:
     """asyncio.TimeoutError from bridge should surface as ERROR with timeout guidance."""

@@ -71,8 +71,9 @@ async def _auto_connect_all(bridges: BridgeManager, host: str, timeout: float) -
 # ---------------------------------------------------------------------------
 
 # fullmatch required — changing to match/search opens Tcl injection
-# re.ASCII ensures \d matches only [0-9], blocking Unicode digits (e.g. '１００ns')
-_DURATION_RE = re.compile(r'^[0-9]+\s*(ns|us|ms|s|ps|fs)?$', re.IGNORECASE | re.ASCII)
+# re.ASCII ensures [0-9] blocks Unicode digits (e.g. '１００ns')
+# Unit is mandatory — bare integers are ambiguous (Xcelium uses default timescale)
+_DURATION_RE = re.compile(r'^[0-9]+\s*(ns|us|ms|s|ps|fs)$', re.IGNORECASE | re.ASCII)
 _DURATION_MAX_LEN = 32
 
 # ---------------------------------------------------------------------------
@@ -308,7 +309,8 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         """Run the simulation, optionally for a specified duration.
 
         Args:
-            duration: Simulation time to run (e.g. "100ns", "1us"). Empty = run until breakpoint or end.
+            duration: Simulation time to run with explicit unit (ns/us/ms/s/ps/fs),
+                e.g. "100ns", "1us", "500ps". Empty = run until breakpoint or end.
             timeout: MCP response timeout in seconds (default 600s for gate-level sim support).
         """
         duration = duration.strip()
