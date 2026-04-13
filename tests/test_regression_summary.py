@@ -206,24 +206,36 @@ async def test_run_full_discovery_uses_registry_default_sim_dir() -> None:
 
 @pytest.mark.asyncio
 async def test_detect_run_dir_uses_hint_directly() -> None:
-    """When run_dir hint provided, detect_run_dir returns it without shell calls."""
-    from xcelium_mcp.sim_env_detection import detect_run_dir
-
-    result = await detect_run_dir("/some/sim", runner_info={}, run_dir="run")
-    assert result["run_dir"] == "run"
-    assert result["script_has_cd"] is False
-
-
-@pytest.mark.asyncio
-async def test_detect_run_dir_hint_skips_ssh() -> None:
-    """With run_dir hint, no shell_run calls should be made."""
+    """When run_dir hint provided, detect_run_dir returns it (skips dir scanning)."""
     from unittest.mock import AsyncMock, patch
     from xcelium_mcp.sim_env_detection import detect_run_dir
 
-    with patch("xcelium_mcp.sim_env_detection.shell_run", new_callable=AsyncMock) as mock_shell:
-        result = await detect_run_dir("/sim", runner_info={"exec_cmd": "run_sim.sh"}, run_dir="run")
-        mock_shell.assert_not_called()
+    # Grep returns empty (no cd line) — script_has_cd should be False.
+    with patch("xcelium_mcp.sim_env_detection.shell_run", new_callable=AsyncMock,
+               return_value="") as mock_shell:
+        result = await detect_run_dir("/some/sim", runner_info={}, run_dir="run")
+
     assert result["run_dir"] == "run"
+    assert result["script_has_cd"] is False
+    # Only the script_has_cd grep is called — not find/cds.lib checks.
+    assert mock_shell.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_detect_run_dir_hint_skips_dir_scan() -> None:
+    """With run_dir hint, only the script_has_cd grep runs (no find/cds.lib calls)."""
+    from unittest.mock import AsyncMock, patch
+    from xcelium_mcp.sim_env_detection import detect_run_dir
+
+    # Script has a cd run/ line → script_has_cd=True.
+    with patch("xcelium_mcp.sim_env_detection.shell_run", new_callable=AsyncMock,
+               return_value="cd run") as mock_shell:
+        result = await detect_run_dir("/sim", runner_info={"exec_cmd": "run_sim.sh"}, run_dir="run")
+
+    assert result["run_dir"] == "run"
+    assert result["script_has_cd"] is True
+    # Only one shell_run call (the grep) — find and cds.lib checks are skipped.
+    assert mock_shell.call_count == 1
 
 
 @pytest.mark.asyncio

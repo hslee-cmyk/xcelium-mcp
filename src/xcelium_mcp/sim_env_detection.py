@@ -259,12 +259,27 @@ async def detect_run_dir(sim_dir: str, runner_info: dict, run_dir: str = "") -> 
         run_dir: If provided, skip detection and use this value directly.
     Returns: {"run_dir": str, "script_has_cd": bool}
     """
-    if run_dir:
-        return {"run_dir": run_dir, "script_has_cd": False}
     from xcelium_mcp.runner_detection import extract_script_name
 
-    candidates: list[str] = []
-    script_has_cd = False
+    # Detect script_has_cd first — needed regardless of whether run_dir hint is provided.
+    script_name = extract_script_name(runner_info.get("exec_cmd", ""))
+    script_path = f"{sim_dir}/{script_name}"
+    cd_targets: list[str] = []
+    r = await shell_run(f"(grep -E '^[[:space:]]*cd[[:space:]]+' {shell_quote(script_path)} 2>/dev/null || true) | head -3")
+    for line in r.strip().splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 2 and parts[0] == 'cd' and '$' not in parts[1]:
+            cd_target = parts[1].strip("'\"").rstrip("/")
+            # Skip navigation-only targets (cd .., cd /, cd ~)
+            if cd_target and cd_target not in ("..", "/", "~"):
+                cd_targets.append(cd_target)
+    script_has_cd = len(cd_targets) > 0
+
+    # Hint path: run_dir explicitly provided — skip directory scanning, return with detected script_has_cd.
+    if run_dir:
+        return {"run_dir": run_dir, "script_has_cd": script_has_cd}
+
+    candidates: list[str] = list(cd_targets)
     _sd = shell_quote(sim_dir)
 
     # 1. run*/ directories with cds.lib or hdl.var
@@ -278,26 +293,11 @@ async def detect_run_dir(sim_dir: str, runner_info: dict, run_dir: str = "") -> 
             f"test -f {shell_quote(d + '/cds.lib')} -o -L {shell_quote(d + '/cds.lib')} -o -f {shell_quote(d + '/hdl.var')} && echo YES || echo NO"
         )
         if "YES" in has_cds:
-            candidates.append(d.split("/")[-1])
+            name = d.split("/")[-1]
+            if name not in candidates:
+                candidates.append(name)
 
-    # 2. Parse 'cd' from runner script -> detect script_has_cd
-    script_name = extract_script_name(runner_info.get("exec_cmd", ""))
-    script_path = f"{sim_dir}/{script_name}"
-    cd_targets: list[str] = []
-    r = await shell_run(f"(grep -E '^[[:space:]]*cd[[:space:]]+' {shell_quote(script_path)} 2>/dev/null || true) | head -3")
-    for line in r.strip().splitlines():
-        parts = line.strip().split()
-        if len(parts) >= 2 and parts[0] == 'cd' and '$' not in parts[1]:
-            cd_target = parts[1].strip("'\"").rstrip("/")
-            # Skip navigation-only targets (cd .., cd /, cd ~)
-            if cd_target and cd_target not in ("..", "/", "~"):
-                cd_targets.append(cd_target)
-                if cd_target not in candidates:
-                    candidates.append(cd_target)
-
-    script_has_cd = len(cd_targets) > 0
-
-    # 3. sim_dir itself -- only if no cd targets found (script doesn't cd to subdirectory)
+    # 2. sim_dir itself -- only if no cd targets found (script doesn't cd to subdirectory)
     if not script_has_cd:
         has_cds = await shell_run(
             f"test -f {shell_quote(sim_dir + '/cds.lib')} -o -L {shell_quote(sim_dir + '/cds.lib')} && echo YES || echo NO"

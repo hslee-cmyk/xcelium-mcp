@@ -168,14 +168,15 @@ async def _start_bridge(
         f"setenv MCP_INPUT_TCL {bridge_tcl}",
         f"setenv MCP_SETUP_TCL {filtered_tcl}",
     ]
+    script_abs = shell_quote(f"{sim_dir}/{script}")
     if runner.get("source_separately") and env_files:
         for ef in env_files:
             inner_parts.append(f"source {shell_quote(ef)}")
-        inner_parts.append(f"./{script} {test_args}")
+        inner_parts.append(f"{script_abs} {test_args}")
         inner_cmd = "; ".join(inner_parts)
         shell_cmd = f"{env_shell} -c '{inner_cmd}'"
     else:
-        inner_parts.append(f"./{script} {test_args}")
+        inner_parts.append(f"{script_abs} {test_args}")
         inner_cmd = "; ".join(inner_parts)
         shell_cmd = login_shell_cmd(login_shell, inner_cmd)
 
