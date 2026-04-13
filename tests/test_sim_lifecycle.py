@@ -78,6 +78,57 @@ def test_duration_re_matches_with_leading_trailing_space() -> None:
     assert _DURATION_RE.fullmatch("  100ns  ") is None  # regex gets pre-stripped value
 
 
+# ---------------------------------------------------------------------------
+# F-080: Harden sim_run duration — length cap + ASCII-only digits
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sim_run_rejects_too_long_duration() -> None:
+    """Duration longer than 32 chars should be rejected immediately."""
+    from xcelium_mcp.tools.sim_lifecycle import register
+
+    mock_mcp = _MockMCP()
+    mock_bridges = MagicMock()
+    mock_bridges.xmsim.execute = AsyncMock(return_value="ok")
+
+    register(mock_mcp, mock_bridges)
+
+    long_dur = "9" * 100 + "ns"
+    result = await mock_mcp.tools["sim_run"](duration=long_dur)
+    assert "ERROR" in result and "too long" in result
+
+
+@pytest.mark.asyncio
+async def test_sim_run_rejects_unicode_digits() -> None:
+    """Unicode digits like '１００ns' should be rejected (ASCII-only check)."""
+    from xcelium_mcp.tools.sim_lifecycle import register
+
+    mock_mcp = _MockMCP()
+    mock_bridges = MagicMock()
+    mock_bridges.xmsim.execute = AsyncMock(return_value="ok")
+
+    register(mock_mcp, mock_bridges)
+
+    result = await mock_mcp.tools["sim_run"](duration="１００ns")
+    assert "ERROR" in result
+
+
+@pytest.mark.asyncio
+async def test_sim_run_accepts_normal_duration() -> None:
+    """'100ns' should pass all validation."""
+    from xcelium_mcp.tools.sim_lifecycle import register
+
+    mock_mcp = _MockMCP()
+    mock_bridges = MagicMock()
+    mock_bridges.xmsim.execute = AsyncMock(return_value="Time: 100 NS")
+
+    register(mock_mcp, mock_bridges)
+
+    result = await mock_mcp.tools["sim_run"](duration="100ns")
+    assert "ERROR" not in result or "RUN_ERROR" in result
+
+
 @pytest.mark.asyncio
 async def test_sim_run_strips_duration_before_validation() -> None:
     """sim_run with leading/trailing space on duration should pass validation."""

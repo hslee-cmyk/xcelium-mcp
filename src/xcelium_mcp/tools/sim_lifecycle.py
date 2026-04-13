@@ -71,7 +71,9 @@ async def _auto_connect_all(bridges: BridgeManager, host: str, timeout: float) -
 # ---------------------------------------------------------------------------
 
 # fullmatch required — changing to match/search opens Tcl injection
-_DURATION_RE = re.compile(r'^\d+\s*(ns|us|ms|s|ps|fs)?$', re.IGNORECASE)
+# re.ASCII ensures \d matches only [0-9], blocking Unicode digits (e.g. '１００ns')
+_DURATION_RE = re.compile(r'^[0-9]+\s*(ns|us|ms|s|ps|fs)?$', re.IGNORECASE | re.ASCII)
+_DURATION_MAX_LEN = 32
 
 # ---------------------------------------------------------------------------
 # Tool registration
@@ -310,6 +312,8 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             timeout: MCP response timeout in seconds (default 600s for gate-level sim support).
         """
         duration = duration.strip()
+        if duration and len(duration) > _DURATION_MAX_LEN:
+            return "ERROR: duration too long"
         if duration and not _DURATION_RE.fullmatch(duration):
             return (
                 f"ERROR: Invalid duration {duration!r}. "
