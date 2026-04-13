@@ -1247,19 +1247,22 @@
       "title": "shell_run stderr 오염 전면 수정 (find/grep/ls 파싱 안전화)",
       "priority": 2,
       "passes": true,
-      "completed_at": "2026-04-13",
       "acceptanceCriteria": [
         "CRITICAL A: sim_env_detection.py detect_run_dir grep (L283) — 2>/dev/null 추가, 파싱 전 'cd'로 시작하는지 검증",
         "CRITICAL B: discovery.py git rev-parse (L~395) — 2>/dev/null 추가 (F-084와 동일 패턴)",
         "CRITICAL C: sim_env_detection.py find {project_root} (L95-96) — 2>/dev/null 추가",
         "CRITICAL D: runner_detection.py find+grep candidates (L104-106) — 2>/dev/null 추가",
+        "CRITICAL E: runner_detection.py auto_detect_runner Makefile grep (L180) — 2>/dev/null 추가",
+        "CRITICAL F: runner_detection.py auto_detect_runner Makefile targets grep (L183) — 2>/dev/null 추가, splitlines()[0] 파싱 전 패턴 검증",
         "HIGH G: sim_env_detection.py grep -rl uvm_component (L39-43) — 2>/dev/null 추가, stderr 있으면 False 처리",
         "HIGH H: sim_env_detection.py grep -rl interface (L57-60) — 2>/dev/null 추가",
         "HIGH I: discovery.py grep -n 'xmsim.*-input' (L305) — 2>/dev/null 추가",
         "HIGH J: simvision_ops.py ls -td *.shm (L110-112) — 2>/dev/null 추가",
+        "sim_discover(force=True, run_dir='run') 결과에서 runner: grep: 미표시",
         "pytest passes + ruff check passes"
       ],
-      "notes": "shell_run()은 stderr를 stdout에 append하는 구조. find/grep/ls/git 명령이 실패 시 stderr 출력이 파싱 결과를 오염시킴. F-084(git rev-parse)와 detect_run_dir(grep::) 아티팩트에서 확인된 패턴이 코드베이스 전반에 존재. CRITICAL 4건: 실제로 잘못된 값(garbage path/candidates) 생성. HIGH 4건: bool() 오판 또는 regex 오염. 수정 원칙: (1) 파싱에 사용되는 shell_run 호출에 2>/dev/null 추가, (2) splitlines() 후 예상 패턴으로 라인 필터링."
+      "notes": "shell_run()은 stderr를 stdout에 append하는 구조. find/grep/ls/git 명령이 실패 시 stderr 출력이 파싱 결과를 오염시킴. F-084(git rev-parse)와 detect_run_dir(grep::) 아티팩트에서 확인된 패턴이 코드베이스 전반에 존재. CRITICAL A~D는 1차 수정됐으나 E/F(auto_detect_runner Makefile grep)가 누락됨 — sim_discover(force=True) 결과에서 runner: grep: 출력으로 확인. CRITICAL E: Makefile 없는 환경에서 grep stderr가 bool() 통과 → CRITICAL F: targets.strip().splitlines()[0]이 'grep: /path/Makefile: No such file' → extract_script_name이 'grep:' 반환. 수정 원칙: (1) 파싱에 사용되는 shell_run 호출에 2>/dev/null 추가, (2) splitlines() 후 예상 패턴으로 라인 필터링.",
+      "completed_at": "2026-04-13"
     },
     {
       "id": "F-089",
