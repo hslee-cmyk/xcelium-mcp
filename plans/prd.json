@@ -1224,6 +1224,23 @@
         "pytest passes + ruff check passes"
       ],
       "notes": "venezia-fpga 프로젝트 17개 테스트 중 13개(TOP000~TOP012)가 PASS/FAIL/COMPLETE 출력 없이 $finish만으로 종료하는 waveform-only 테스트. 현재 sim_regression의 grep 패턴에 걸리지 않아 per_test_results가 빈 배열 → pass_count/fail_count 모두 0으로 묵살됨. 단기 구현: $finish 도달 + 에러 없음 → COMPLETE로 분류. 에러 패턴: '*E , Error:, fatal error, Segmentation'. 중장기: testbench에 PASS/FAIL verdict 추가(별도 이슈). F-085(HAS_VERDICT pass_count 수정)와 함께 적용."
+    },
+    {
+      "id": "F-087",
+      "title": "run_full_discovery: registry 우선 확인 후 discover_sim_dir() fallback",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-13",
+      "acceptanceCriteria": [
+        "run_full_discovery(sim_dir='', force=False) 호출 시: discover_sim_dir() 전에 get_default_sim_dir()로 registry 먼저 확인",
+        "registry에 is_default sim_dir 있음 → 해당 sim_dir 사용 → load_sim_config → 기존 config 있으면 조기 종료 반환",
+        "registry 없거나 is_default 없음 → discover_sim_dir() fallback (기존 동작 유지)",
+        "수정 위치: discovery.py run_full_discovery() 상단 'if not sim_dir:' 블록",
+        "코드: sim_dir = await get_default_sim_dir(); if not sim_dir: envs = await discover_sim_dir(); sim_dir = envs[0]['sim_dir']",
+        "sim_discover(force=False) 재호출(sim_dir='') 시 'Registry already exists for {sim_dir}.' 반환 확인",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "run_full_discovery에서 sim_dir=''일 때 registry 확인보다 discover_sim_dir() CWD 기반 탐색을 먼저 수행하는 순서 버그. 원래 설계 의도(v4 plan §3.4): 최초 1회 sim_discover(sim_dir=explicit) → registry 생성 → 이후 sim_dir='' 재호출 시 registry 기반 조기 종료. 현재는 registry가 있어도 discover_sim_dir()를 먼저 호출하여 CWD 기반 탐색 실패 시 UserInputRequired 발생(F-084 수정 후). get_default_sim_dir()는 ~/.xcelium_mcp/mcp_registry.json 읽기 → CWD 무관하게 항상 접근 가능."
     }
   ]
 }
