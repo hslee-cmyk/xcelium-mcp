@@ -375,8 +375,10 @@ async def run_full_discovery(
     """Main discovery orchestrator. Called by sim_discover MCP tool."""
 
     if not sim_dir:
-        envs = await discover_sim_dir()
-        sim_dir = envs[0]["sim_dir"]
+        sim_dir = await get_default_sim_dir()
+        if not sim_dir:
+            envs = await discover_sim_dir()
+            sim_dir = envs[0]["sim_dir"]
 
     # B-tilde fix: resolve ~ to absolute path before any shell_quote() calls.
     sim_dir = os.path.expanduser(sim_dir)

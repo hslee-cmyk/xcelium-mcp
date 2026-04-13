@@ -1,4 +1,5 @@
-"""Tests for sim_regression result counting logic (F-085, F-086).
+"""Tests for sim_regression result counting logic (F-085, F-086)
+and run_full_discovery registry-first ordering (F-087).
 
 Tests _COMPLETE_RE pattern and the dual-level summary behavior.
 """
@@ -171,3 +172,46 @@ class TestNoVerdictClassification:
         assert fail_count == 1
         assert complete_count == 1
         assert error_count == 2
+
+
+# ---------------------------------------------------------------------------
+# F-087: run_full_discovery checks registry before discover_sim_dir()
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_full_discovery_uses_registry_default_sim_dir() -> None:
+    """When registry has a default sim_dir, discover_sim_dir() must NOT be called."""
+    from unittest.mock import AsyncMock, patch
+
+    fake_config = {"version": 2, "sim_dir": "/remote/sim"}
+
+    with patch("xcelium_mcp.discovery.get_default_sim_dir", new_callable=AsyncMock,
+               return_value="/remote/sim") as mock_default, \
+         patch("xcelium_mcp.discovery.discover_sim_dir", new_callable=AsyncMock) as mock_discover, \
+         patch("xcelium_mcp.discovery.load_sim_config", new_callable=AsyncMock,
+               return_value=fake_config):
+        from xcelium_mcp.discovery import run_full_discovery
+        result = await run_full_discovery(sim_dir="", force=False)
+
+    mock_default.assert_called_once()
+    mock_discover.assert_not_called()  # registry hit → no CWD scan
+    assert "Registry already exists" in result
+
+
+@pytest.mark.asyncio
+async def test_run_full_discovery_falls_back_to_discover_when_no_registry() -> None:
+    """When registry has no default sim_dir, discover_sim_dir() is called."""
+    from unittest.mock import AsyncMock, patch
+
+    with patch("xcelium_mcp.discovery.get_default_sim_dir", new_callable=AsyncMock,
+               return_value="") as mock_default, \
+         patch("xcelium_mcp.discovery.discover_sim_dir", new_callable=AsyncMock,
+               return_value=[{"sim_dir": "/detected/sim"}]) as mock_discover, \
+         patch("xcelium_mcp.discovery.load_sim_config", new_callable=AsyncMock,
+               return_value={"version": 2}):
+        from xcelium_mcp.discovery import run_full_discovery
+        await run_full_discovery(sim_dir="", force=False)
+
+    mock_default.assert_called_once()
+    mock_discover.assert_called_once()  # no registry → CWD scan performed
