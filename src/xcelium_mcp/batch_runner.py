@@ -646,7 +646,7 @@ async def run_batch_regression(
             # Append per-test result to main log
             await shell_run(
                 f"echo {shell_quote('=== ' + test_name + ' ===')} >> {log_file} && "
-                f"(grep -E 'PASS|FAIL|Errors:' {shell_quote(test_log)} || true) >> {log_file}",
+                f"(grep -E 'PASS|FAIL|Errors:|COMPLETE|\\$finish' {shell_quote(test_log)} || true) >> {log_file}",
                 timeout=10.0,
             )
 
@@ -656,6 +656,7 @@ async def run_batch_regression(
     # Parse final results from per-test logs
     # For each test, find its log file — current ts first, then most recent
     per_test_results: dict[str, list[str]] = {tn: [] for tn in test_list}
+    per_test_errors: dict[str, str] = {tn: "" for tn in test_list}
     for tn in test_list:
         # Try current ts first, then find most recent log for this test
         test_log_path = f"{user_tmp}/regression_{ts}_{tn}.log"
@@ -667,37 +668,63 @@ async def run_batch_regression(
             )).strip()
         if test_log_path:
             result_lines = await shell_run(
-                f"(grep -E 'PASS|FAIL|Errors:|COMPLETE' {shell_quote(test_log_path)} || true) | tail -30"
+                f"(grep -E 'PASS|FAIL|Errors:|COMPLETE|\\$finish' {shell_quote(test_log_path)} || true) | tail -30"
             )
             per_test_results[tn] = result_lines.strip().splitlines() if result_lines.strip() else []
+            # Collect error lines for waveform-only tests (NO_VERDICT classification)
+            err_lines = await shell_run(
+                f"(grep -iE '\\*E |^Error:|fatal error|Segmentation' {shell_quote(test_log_path)} || true) | head -3"
+            )
+            per_test_errors[tn] = err_lines.strip()
 
     all_parts: list[str] = []
-    pass_count = 0   # test-level: COMPLETE. Errors: 0
-    fail_count = 0   # test-level: COMPLETE. Errors: N>0 or FAIL without COMPLETE
-    check_pass = 0   # check-level: substring count of PASS lines
-    check_fail = 0   # check-level: substring count of FAIL lines
+    pass_count = 0       # HAS_VERDICT: COMPLETE. Errors: 0
+    fail_count = 0       # HAS_VERDICT: COMPLETE. Errors: N>0, or FAIL without COMPLETE
+    complete_count = 0   # NO_VERDICT: $finish + no errors
+    error_count = 0      # NO_VERDICT: $finish + errors, or no $finish (timeout/crash)
+    check_pass = 0       # check-level substring count
+    check_fail = 0       # check-level substring count
     for tn in test_list:
         t_raw = "\n".join(per_test_results[tn])
         all_parts.append(f"=== {tn} ===\n{t_raw}")
-        # Test-level verdict: parse COMPLETE. Errors: N
+        # 5-way classification
         m = _COMPLETE_RE.search(t_raw)
         if m:
+            # (1) HAS_VERDICT: COMPLETE. Errors: N
             if int(m.group(1)) == 0:
                 pass_count += 1
             else:
                 fail_count += 1
         elif "FAIL" in t_raw:
-            # COMPLETE absent but FAIL present → crash/abort
+            # (2) HAS_VERDICT: crash/abort with FAIL but no COMPLETE
             fail_count += 1
+        elif "$finish" in t_raw:
+            # (3)/(4) NO_VERDICT: $finish reached
+            if per_test_errors.get(tn):
+                error_count += 1  # $finish + errors
+            else:
+                complete_count += 1  # $finish, no errors → waveform complete
+        else:
+            # (5) NO_VERDICT: no $finish → timeout or crash
+            error_count += 1
         # Check-level counts (individual assertion lines)
         check_pass += t_raw.count("PASS")
         check_fail += t_raw.count("FAIL")
 
     total = len(test_list)
     raw = "\n".join(all_parts)
-    summary = (
-        f"{pass_count}/{total} tests PASS "
-        f"({check_pass} checks passed, {check_fail} failed)"
-    )
-    details = raw[:4000] if raw.strip() else "(no PASS/FAIL lines found in per-test logs)"
+    verdict_total = pass_count + fail_count
+    waveform_total = complete_count + error_count
+    summary_lines: list[str] = []
+    if verdict_total > 0:
+        summary_lines.append(
+            f"{pass_count}/{verdict_total} verdict tests PASS "
+            f"({check_pass} checks passed, {check_fail} failed)"
+        )
+    if waveform_total > 0:
+        summary_lines.append(f"{complete_count}/{waveform_total} waveform tests COMPLETE")
+    if not summary_lines:
+        summary_lines.append(f"0/{total} tests classified")
+    summary = "\n".join(summary_lines)
+    details = raw[:4000] if raw.strip() else "(no PASS/FAIL/$finish lines found in per-test logs)"
     return f"{summary}\n\nLog ({log_file}):\n{details}"

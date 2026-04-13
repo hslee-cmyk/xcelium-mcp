@@ -109,3 +109,65 @@ class TestSummaryLogic:
         r = self._aggregate([log])
         assert r["pass_count"] == 0
         assert r["fail_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# F-086: NO_VERDICT ($finish-only) classification
+# ---------------------------------------------------------------------------
+
+
+class TestNoVerdictClassification:
+    """Simulate 5-way classification logic for NO_VERDICT tests."""
+
+    def _classify(self, t_raw: str, err_raw: str) -> str:
+        """Returns 'pass'/'fail'/'complete'/'error' per the 5-way logic."""
+        from xcelium_mcp.batch_runner import _COMPLETE_RE
+        m = _COMPLETE_RE.search(t_raw)
+        if m:
+            return "pass" if int(m.group(1)) == 0 else "fail"
+        if "FAIL" in t_raw:
+            return "fail"
+        if "$finish" in t_raw:
+            return "error" if err_raw.strip() else "complete"
+        return "error"
+
+    def test_finish_no_errors_is_complete(self):
+        assert self._classify("$finish called at 1000ns", "") == "complete"
+
+    def test_finish_with_errors_is_error(self):
+        assert self._classify("$finish called at 1000ns", "*E some error") == "error"
+
+    def test_no_finish_is_error(self):
+        """Timeout or crash — no $finish, no COMPLETE."""
+        assert self._classify("Running simulation...", "") == "error"
+
+    def test_has_verdict_complete_zero_is_pass(self):
+        assert self._classify("COMPLETE. Errors: 0", "") == "pass"
+
+    def test_has_verdict_complete_nonzero_is_fail(self):
+        assert self._classify("COMPLETE. Errors: 2", "") == "fail"
+
+    def test_mixed_regression_summary_lines(self):
+        """2 HAS_VERDICT + 3 NO_VERDICT → correct summary counts."""
+        logs = [
+            ("COMPLETE. Errors: 0\n[V-01] PASS: check", ""),   # pass
+            ("COMPLETE. Errors: 1\n[V-02] FAIL: check", ""),   # fail
+            ("$finish called", ""),                              # complete
+            ("$finish called", "*E fatal"),                     # error
+            ("Running...", ""),                                  # error (timeout)
+        ]
+        pass_count = fail_count = complete_count = error_count = 0
+        for t_raw, err_raw in logs:
+            cls = self._classify(t_raw, err_raw)
+            if cls == "pass":
+                pass_count += 1
+            elif cls == "fail":
+                fail_count += 1
+            elif cls == "complete":
+                complete_count += 1
+            else:
+                error_count += 1
+        assert pass_count == 1
+        assert fail_count == 1
+        assert complete_count == 1
+        assert error_count == 2
