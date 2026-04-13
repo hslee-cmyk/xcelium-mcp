@@ -203,6 +203,8 @@ async def parse_existing_job(job_file: str, timeout: int, test_name: str = "") -
 
 
 _TEST_NAME_RE = _re.compile(r'^[A-Za-z0-9_.\-]+$')
+# Matches "COMPLETE. Errors: N" verdict line produced by UVM test harness
+_COMPLETE_RE = _re.compile(r'COMPLETE\.\s*Errors:\s*(\d+)')
 
 
 async def build_batch_cmd(
@@ -670,16 +672,32 @@ async def run_batch_regression(
             per_test_results[tn] = result_lines.strip().splitlines() if result_lines.strip() else []
 
     all_parts: list[str] = []
-    pass_count = 0
-    fail_count = 0
+    pass_count = 0   # test-level: COMPLETE. Errors: 0
+    fail_count = 0   # test-level: COMPLETE. Errors: N>0 or FAIL without COMPLETE
+    check_pass = 0   # check-level: substring count of PASS lines
+    check_fail = 0   # check-level: substring count of FAIL lines
     for tn in test_list:
         t_raw = "\n".join(per_test_results[tn])
         all_parts.append(f"=== {tn} ===\n{t_raw}")
-        pass_count += t_raw.count("PASS")
-        fail_count += t_raw.count("FAIL")
+        # Test-level verdict: parse COMPLETE. Errors: N
+        m = _COMPLETE_RE.search(t_raw)
+        if m:
+            if int(m.group(1)) == 0:
+                pass_count += 1
+            else:
+                fail_count += 1
+        elif "FAIL" in t_raw:
+            # COMPLETE absent but FAIL present → crash/abort
+            fail_count += 1
+        # Check-level counts (individual assertion lines)
+        check_pass += t_raw.count("PASS")
+        check_fail += t_raw.count("FAIL")
 
     total = len(test_list)
     raw = "\n".join(all_parts)
-    summary = f"{pass_count}/{total} tests PASS, {fail_count} FAIL"
+    summary = (
+        f"{pass_count}/{total} tests PASS "
+        f"({check_pass} checks passed, {check_fail} failed)"
+    )
     details = raw[:4000] if raw.strip() else "(no PASS/FAIL lines found in per-test logs)"
     return f"{summary}\n\nLog ({log_file}):\n{details}"
