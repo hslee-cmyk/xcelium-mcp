@@ -145,3 +145,25 @@ async def test_sim_run_strips_duration_before_validation() -> None:
     assert "ERROR" not in result or "RUN_ERROR" in result, (
         f"Whitespace duration should not trigger validation error: {result!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# F-082: Catch asyncio.TimeoutError in sim_run with actionable message
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sim_run_timeout_returns_actionable_error() -> None:
+    """asyncio.TimeoutError from bridge should surface as ERROR with timeout guidance."""
+    import asyncio as _asyncio
+    from xcelium_mcp.tools.sim_lifecycle import register
+
+    mock_mcp = _MockMCP()
+    mock_bridges = MagicMock()
+    mock_bridges.xmsim.execute = AsyncMock(side_effect=_asyncio.TimeoutError())
+
+    register(mock_mcp, mock_bridges)
+
+    result = await mock_mcp.tools["sim_run"](duration="100ns", timeout=5.0)
+    assert result.startswith("ERROR"), f"Expected ERROR prefix: {result!r}"
+    assert "timeout" in result.lower() or "5.0" in result
