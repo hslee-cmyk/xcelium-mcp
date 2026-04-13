@@ -177,13 +177,14 @@ async def auto_detect_runner(sim_dir: str) -> dict:
     candidates: list[dict] = []
 
     # 1. Makefile with sim/test/run target
-    r = await shell_run(f"grep -lE 'sim:|test:|run:' {shell_quote(sim_dir + '/Makefile')} || true")
+    r = await shell_run(f"grep -lE 'sim:|test:|run:' {shell_quote(sim_dir + '/Makefile')} 2>/dev/null || true")
     if r.strip():
         targets = await shell_run(
             f"grep -oE '^(sim|test|run|simulate|regression)[^:]*:' {shell_quote(sim_dir + '/Makefile')} "
-            f"| tr -d ':'"
+            f"2>/dev/null | tr -d ':'"
         )
-        best_target = targets.strip().splitlines()[0] if targets.strip() else "sim"
+        valid_targets = [t for t in targets.strip().splitlines() if t and not t.startswith("grep:")]
+        best_target = valid_targets[0] if valid_targets else "sim"
         candidates.append({
             "runner": "make",
             "exec_cmd": f"make {best_target} TEST={{test_name}}",
