@@ -327,10 +327,15 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         return f"Simulation advanced. Current position: {where}"
 
     @mcp.tool()
-    async def sim_stop() -> str:
-        """Stop a running simulation."""
+    async def sim_stop(timeout: float = 30.0) -> str:
+        """Stop a running simulation.
+
+        Args:
+            timeout: Seconds to wait for the stop command (default 30s).
+                     Increase if the simulator is slow to respond.
+        """
         bridge = bridges.xmsim
-        await bridge.execute("stop")
+        await bridge.execute("stop", timeout=timeout)
         return "Simulation stopped."
 
     @mcp.tool()
