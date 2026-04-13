@@ -1087,6 +1087,75 @@
       ],
       "notes": "5차 Security #2. tcl_preprocessing.py:253,282 — sdf_file regex r'[\\w./\\-]+' 가 ../../ 패턴 허용. validate_path 없이 generated tfile에 literal 삽입 (shell_quote 없음). MCP tool access 필요하므로 Low이지만 다른 경로 입력점과 일관성 차원에서 수정 권장.",
       "completed_at": "2026-04-11"
+    },
+    {
+      "id": "F-078",
+      "title": "Surface RUN_ERROR from __RUN_AND_REPORT__ as ERROR response",
+      "priority": 2,
+      "passes": false,
+      "acceptanceCriteria": [
+        "tools/sim_lifecycle.py sim_run (line 300-315)에서 bridge.execute 반환값 확인",
+        "where.startswith('RUN_ERROR') 또는 'RUN_ERROR:' 포함 시 f'ERROR: {where}' 반환",
+        "정상 케이스는 기존 'Simulation advanced. Current position: ...' 유지",
+        "pytest: mock bridge가 'RUN_ERROR:bad duration\n(pos)' 반환할 때 response가 'ERROR'로 시작하는지 검증",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "sim-run-timeout-fix 코드 리뷰 High #1. tools/sim_lifecycle.py:314-315. Tcl 매크로 do_run_and_report는 run 실패 시 'RUN_ERROR:$err\n$pos' (mcp_bridge.tcl:932,939) 반환하지만 Python 측에서 success 포맷으로 무조건 래핑. MCP 클라이언트가 실패를 감지 못함."
+    },
+    {
+      "id": "F-079",
+      "title": "Move _DURATION_RE to module scope and consolidate duration.strip()",
+      "priority": 3,
+      "passes": false,
+      "acceptanceCriteria": [
+        "_DURATION_RE를 tools/sim_lifecycle.py 모듈 최상단(register() 외부)으로 이동",
+        "sim_run 내부에서 duration = duration.strip() 먼저 수행 후 _DURATION_RE.fullmatch(duration) 호출",
+        "이후 Tcl 전달도 strip된 duration 변수 사용 (현재는 원본 duration 보간)",
+        "모듈 상단 regex 정의 옆에 주석: '# fullmatch required — changing to match/search opens Tcl injection'",
+        "pytest: import 시 regex 접근 가능 확인, strip 전후 동일 검증",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "sim-run-timeout-fix 코드 리뷰 Medium #1+#2. sim_lifecycle.py:297,307,314. 현재 _DURATION_RE가 register() 내부라 re-compile 및 단위 테스트 불가. 또한 검증은 strip된 값, Tcl 전달은 원본 — code smell (실제 취약 없음)."
+    },
+    {
+      "id": "F-080",
+      "title": "Harden sim_run duration: length cap + ASCII-only digits",
+      "priority": 3,
+      "passes": false,
+      "acceptanceCriteria": [
+        "sim_lifecycle.py sim_run에서 regex 검증 전 len(duration) > 32 거부 ('ERROR: duration too long')",
+        "_DURATION_RE를 r'^\\d+\\s*(ns|us|ms|s|ps|fs)?$'에서 r'^[0-9]+\\s*(ns|us|ms|s|ps|fs)?$'로 변경 (또는 re.ASCII 플래그)",
+        "pytest: '9'*100 + 'ns' 거부, Unicode digit '１００ns' 거부, 정상 '100ns' 통과",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "sim-run-timeout-fix 코드 리뷰 Low #1+#2 (security-sentinel). Payload DoS 및 Unicode digit 혼입 방지. 실제 MCP 클라이언트는 신뢰되지만 defense-in-depth."
+    },
+    {
+      "id": "F-081",
+      "title": "Add timeout parameter to sim_stop",
+      "priority": 3,
+      "passes": false,
+      "acceptanceCriteria": [
+        "tools/sim_lifecycle.py sim_stop 시그니처를 'async def sim_stop(timeout: float = 30.0) -> str'로 변경",
+        "bridge.execute('stop', timeout=timeout) 로 timeout 전달",
+        "docstring에 timeout 인자 설명 추가",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "sim-run-timeout-fix 코드 리뷰 Low #3. sim_lifecycle.py:318-322. 모듈 내 다른 bridge 호출은 timeout override 하는데 sim_stop만 default. 시뮬레이터 wedged 상태에서 stop이 hang 가능."
+    },
+    {
+      "id": "F-082",
+      "title": "Catch asyncio.TimeoutError in sim_run with actionable message",
+      "priority": 3,
+      "passes": false,
+      "acceptanceCriteria": [
+        "sim_run에서 bridge.execute await을 try/except asyncio.TimeoutError로 감쌈",
+        "timeout 초과 시 'ERROR: sim_run exceeded {timeout}s. Pass larger timeout= argument or split the run duration.' 반환",
+        "기존 정상 경로 영향 없음",
+        "pytest: mock bridge가 asyncio.TimeoutError 발생시 response에 'ERROR' 및 'timeout' 포함 확인",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "sim-run-timeout-fix 코드 리뷰 Low #4 (kieran). sim_lifecycle.py:314. timeout 초과 시 원인/해결책이 client에게 전달되지 않음. MCP 에러 메시지로 actionable guidance 제공."
     }
   ]
 }
