@@ -67,6 +67,13 @@ async def _auto_connect_all(bridges: BridgeManager, host: str, timeout: float) -
 
 
 # ---------------------------------------------------------------------------
+# Module-level constants
+# ---------------------------------------------------------------------------
+
+# fullmatch required — changing to match/search opens Tcl injection
+_DURATION_RE = re.compile(r'^\d+\s*(ns|us|ms|s|ps|fs)?$', re.IGNORECASE)
+
+# ---------------------------------------------------------------------------
 # Tool registration
 # ---------------------------------------------------------------------------
 
@@ -294,8 +301,6 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         else:
             return f"ERROR: Unknown action '{action}'. Use 'bridge' or 'shutdown'."
 
-    _DURATION_RE = re.compile(r'^\d+\s*(ns|us|ms|s|ps|fs)?$', re.IGNORECASE)
-
     @mcp.tool()
     async def sim_run(duration: str = "", timeout: float = 600.0) -> str:
         """Run the simulation, optionally for a specified duration.
@@ -304,7 +309,8 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             duration: Simulation time to run (e.g. "100ns", "1us"). Empty = run until breakpoint or end.
             timeout: MCP response timeout in seconds (default 600s for gate-level sim support).
         """
-        if duration and not _DURATION_RE.fullmatch(duration.strip()):
+        duration = duration.strip()
+        if duration and not _DURATION_RE.fullmatch(duration):
             return (
                 f"ERROR: Invalid duration {duration!r}. "
                 "Expected format like '100ns', '1us', '500ps'."
