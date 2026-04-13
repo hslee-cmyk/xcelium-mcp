@@ -84,7 +84,7 @@ async def discover_sim_dir(hint: str = "") -> list[dict]:
     if hint:
         project_root = hint
     else:
-        r = await shell_run("git rev-parse --show-toplevel || echo ~")
+        r = await shell_run("git rev-parse --show-toplevel 2>/dev/null || echo ~")
         project_root = r.strip()
 
     # 2. find candidate directories by name pattern, maxdepth 3
