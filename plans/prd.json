@@ -1307,6 +1307,21 @@
       ],
       "notes": "~/git.clone이 /usrdata/.../git.clone의 symlink인 환경에서 불일치 발생. sim_dir(env key)은 /users/.../ncsim (symlink 미해소 경로), project_root(project key)는 git rev-parse --show-toplevel이 내부적으로 realpath를 적용하여 /usrdata/.../venezia-t0를 반환. 현재 get_default_sim_dir()은 env_key만 반환하고 project_root를 무시하므로 현재 동작에는 영향 없음. 그러나 사용자가 다른 경로 형식으로 sim_discover를 호출하면 동일 환경이 다른 key로 중복 등록 가능. 수정: run_full_discovery() 진입 시와 _update_registry_from_config() 내부에서 sim_dir/project_root 모두 os.path.realpath()로 정규화. 기존 registry는 파일 삭제 후 sim_discover 재실행으로 클린 초기화.",
       "completed_at": "2026-04-13"
+    },
+    {
+      "id": "F-094",
+      "title": "bridge_lifecycle: ./script 상대경로 오류 + detect_run_dir early-return 시 script_has_cd 미감지",
+      "priority": 2,
+      "passes": true,
+      "acceptanceCriteria": [
+        "bridge_lifecycle.py _start_bridge()에서 script 실행 시 상대경로 ./script 대신 {sim_dir}/{script} 절대경로 사용",
+        "detect_run_dir()에서 run_dir가 명시적으로 전달된 경우에도 script_has_cd 감지 로직 실행 (early-return 제거)",
+        "sim_discover(force=True) 후 생성된 config의 script_has_cd 값이 run_sim 스크립트 내 cd 유무와 일치",
+        "sim_bridge_run(test_name='TOP015') 성공적으로 xmsim 새 프로세스를 시작하고 bridge 연결 확인",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "root cause 2개: (1) bridge_lifecycle.py L174/L178에서 ./{script} 상대경로 사용. cwd={sim_dir}/{run_dir}(e.g. ncsim/run/)이지만 run_sim은 ncsim/에 위치 → ./run_sim: Command not found. (2) detect_run_dir()에서 run_dir가 명시적 전달되면 즉시 script_has_cd=False 반환. F-089 추가 시 early-return 삽입했으나 script_has_cd 감지를 건너뜀. 결과: script_has_cd=False 저장 → bridge_lifecycle이 cwd=sim_dir/run_dir로 설정하고 ./run_sim 실행 시도 → Command not found → 기존 SimVision 포트에 연결 → sim_run 실패. fix: (A) bridge_lifecycle: shell_quote(f'{sim_dir}/{script}') 절대경로 사용, (B) detect_run_dir: early-return 제거하고 run_dir 반환 전에도 script_has_cd 감지 실행",
+      "completed_at": "2026-04-13"
     }
   ]
 }
