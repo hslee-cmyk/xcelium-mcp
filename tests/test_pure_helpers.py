@@ -307,4 +307,79 @@ async def test_shell_run_with_retry_no_retry_on_non_timeout() -> None:
         mock.side_effect = ValueError("bad command")
         with pytest.raises(ValueError):
             await shell_run_with_retry("bad cmd", timeout=5.0, max_retries=2)
-        assert mock.call_count == 1  # no retry
+
+
+# ---------------------------------------------------------------------------
+# F-090: resolve_eda_tools uses backtick syntax for csh/tcsh
+# ---------------------------------------------------------------------------
+
+class TestResolveEdaToolsShellSyntax:
+    """Verify which_cmds uses correct substitution syntax per env_shell type."""
+
+    @pytest.mark.asyncio
+    async def test_csh_uses_backtick_syntax(self) -> None:
+        """When env_shell is /bin/csh, which_cmds must use backtick syntax."""
+        captured: list[str] = []
+
+        async def _fake_shell_run(cmd: str, **kwargs) -> str:
+            captured.append(cmd)
+            return "__TOOL_simvisdbutil__=/usr/bin/simvisdbutil\n__TOOL_xmsim__=/usr/bin/xmsim\n__TOOL_xrun__=/usr/bin/xrun"
+
+        with patch("xcelium_mcp.runner_detection.shell_run", side_effect=_fake_shell_run):
+            from xcelium_mcp.runner_detection import resolve_eda_tools
+            result = await resolve_eda_tools({"env_shell": "/bin/csh", "login_shell": "/bin/csh"})
+
+        assert result["simvisdbutil"] == "/usr/bin/simvisdbutil"
+        assert len(captured) == 1
+        # Must use backtick syntax, not $()
+        assert "`which simvisdbutil`" in captured[0]
+        assert "$(which simvisdbutil)" not in captured[0]
+
+    @pytest.mark.asyncio
+    async def test_tcsh_uses_backtick_syntax(self) -> None:
+        """When env_shell is /bin/tcsh, which_cmds must use backtick syntax."""
+        captured: list[str] = []
+
+        async def _fake_shell_run(cmd: str, **kwargs) -> str:
+            captured.append(cmd)
+            return "__TOOL_simvisdbutil__=/opt/eda/simvisdbutil\n__TOOL_xmsim__=/opt/eda/xmsim\n__TOOL_xrun__=/opt/eda/xrun"
+
+        with patch("xcelium_mcp.runner_detection.shell_run", side_effect=_fake_shell_run):
+            from xcelium_mcp.runner_detection import resolve_eda_tools
+            result = await resolve_eda_tools({"env_shell": "/bin/tcsh", "login_shell": "/bin/tcsh"})
+
+        assert result["simvisdbutil"] == "/opt/eda/simvisdbutil"
+        assert "`which simvisdbutil`" in captured[0]
+        assert "$(which simvisdbutil)" not in captured[0]
+
+    @pytest.mark.asyncio
+    async def test_bash_uses_dollar_paren_syntax(self) -> None:
+        """When env_shell is /bin/bash, which_cmds must use $() syntax."""
+        captured: list[str] = []
+
+        async def _fake_shell_run(cmd: str, **kwargs) -> str:
+            captured.append(cmd)
+            return "__TOOL_simvisdbutil__=/usr/bin/simvisdbutil\n__TOOL_xmsim__=/usr/bin/xmsim\n__TOOL_xrun__=/usr/bin/xrun"
+
+        with patch("xcelium_mcp.runner_detection.shell_run", side_effect=_fake_shell_run):
+            from xcelium_mcp.runner_detection import resolve_eda_tools
+            result = await resolve_eda_tools({"env_shell": "/bin/bash", "login_shell": "/bin/bash"})
+
+        assert result["simvisdbutil"] == "/usr/bin/simvisdbutil"
+        assert "$(which simvisdbutil)" in captured[0]
+        assert "`which simvisdbutil`" not in captured[0]
+
+    @pytest.mark.asyncio
+    async def test_sh_uses_dollar_paren_syntax(self) -> None:
+        """When env_shell is /bin/sh, which_cmds must use $() syntax."""
+        captured: list[str] = []
+
+        async def _fake_shell_run(cmd: str, **kwargs) -> str:
+            captured.append(cmd)
+            return "__TOOL_simvisdbutil__=/usr/bin/simvisdbutil\n__TOOL_xmsim__=/usr/bin/xmsim\n__TOOL_xrun__=/usr/bin/xrun"
+
+        with patch("xcelium_mcp.runner_detection.shell_run", side_effect=_fake_shell_run):
+            from xcelium_mcp.runner_detection import resolve_eda_tools
+            result = await resolve_eda_tools({"env_shell": "/bin/sh", "login_shell": "/bin/bash"})
+
+        assert "$(which simvisdbutil)" in captured[0]

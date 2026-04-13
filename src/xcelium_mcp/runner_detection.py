@@ -321,8 +321,12 @@ async def resolve_eda_tools(shell_env: dict) -> dict[str, str]:
     env_files = shell_env.get("env_files", [])
     login_shell = shell_env.get("login_shell", "/bin/sh")
 
-    # Batch all which queries into a single subprocess call
-    which_cmds = " && ".join(f"echo __TOOL_{t}__=$(which {t})" for t in tools)
+    # csh/tcsh requires backtick substitution; bash/sh uses $()
+    _is_csh = any(x in env_shell for x in ("csh", "tcsh"))
+    if _is_csh:
+        which_cmds = " && ".join(f"echo __TOOL_{t}__=`which {t}`" for t in tools)
+    else:
+        which_cmds = " && ".join(f"echo __TOOL_{t}__=$(which {t})" for t in tools)
     if shell_env.get("source_separately") and env_files:
         source_cmd = " && ".join(f"source {shell_quote(f)}" for f in env_files)
         r = await shell_run(
