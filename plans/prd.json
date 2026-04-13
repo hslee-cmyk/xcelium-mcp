@@ -1364,6 +1364,20 @@
       ],
       "notes": "root cause: F-096 fix가 'ss -tlnp 2>/dev/null | grep :{port}\\b'를 사용. cloud0에는 ss가 없음(which ss → not found). 2>/dev/null이 'ss: command not found' stderr를 삼키므로 빈 출력 → port 점유 감지 실패. 대안: (1) command -v ss >/dev/null 2>&1 로 ss 가용 여부 체크 후 ss 없으면 netstat -tlnp으로 fallback (2) /proc/net/tcp 직접 파싱(hex port, 0A=LISTEN) — 외부 명령 의존성 없음. 검증: cloud0에서 netstat -tlnp 2>/dev/null | grep ':9875' → '0.0.0.0:9875 ... 18949/python3' 정상 출력 확인됨.",
       "completed_at": "2026-04-13"
+    },
+    {
+      "id": "F-098",
+      "title": "F-097 fix 오류: _LIST_LISTENERS에 '2>&1' 포함 → shell_run() hard-check에 차단",
+      "priority": 1,
+      "passes": true,
+      "acceptanceCriteria": [
+        "_start_bridge() port check에서 2>&1 미사용",
+        "ss/netstat 모두 없는 환경에서도 동작 — /proc/net/tcp fallback 포함",
+        "sim_bridge_run 호출 시 port 9876을 python3가 점유한 상태에서 'ERROR: Bridge port ... occupied by python3' 반환",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "root cause: F-097 fix의 _LIST_LISTENERS = '(command -v ss >/dev/null 2>&1 && ...)'. shell_run()이 L98에서 '2>&1' 포함 명령을 하드 차단 — tcsh 호환성 규칙. 수정 방향: (A) 'command -v ss >& /dev/null'로 교체 — >& /dev/null는 shell_run() 검사를 통과하고 bash/tcsh 양쪽에서 동작. (B) 가장 단순: _LIST_LISTENERS 없애고 /proc/net/tcp 파싱 — hex(port).upper().zfill(4)로 LISTEN 상태(0A) 직접 확인, 외부 명령 의존성 0. 추천: (A)로 최소 변경. '>/dev/null 2>&1' → '>& /dev/null' 한 줄 수정으로 해결.",
+      "completed_at": "2026-04-13"
     }
   ]
 }

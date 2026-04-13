@@ -25,10 +25,11 @@ from xcelium_mcp.test_resolution import resolve_sim_params
 logger = logging.getLogger(__name__)
 
 # List TCP listeners: prefer ss (iproute2), fall back to netstat (net-tools).
-# ss absent on some hosts (e.g. cloud0 has net-tools only) — 2>/dev/null on both
-# sides so a missing command produces no output rather than an error line.
+# ss absent on some hosts (e.g. cloud0 has net-tools only).
+# '>& /dev/null' suppresses both stdout+stderr in bash and tcsh (unlike '>/dev/null 2>&1'
+# which shell_run() blocks for tcsh compatibility).
 _LIST_LISTENERS = (
-    "(command -v ss >/dev/null 2>&1 && ss -tlnp 2>/dev/null"
+    "(command -v ss >& /dev/null && ss -tlnp 2>/dev/null"
     " || netstat -tlnp 2>/dev/null)"
 )
 
