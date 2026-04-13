@@ -134,6 +134,25 @@ async def _start_bridge(
             f"Use shutdown_simulator or 'pkill -f xmsim' first."
         )
 
+    # Check bridge port is not occupied by a non-xmsim process (e.g. a stale SimVision).
+    port_info = await shell_run(f"ss -tlnp 2>/dev/null | grep ':{port}\\b' || true", timeout=5)
+    if port_info.strip():
+        # Port is in use — verify it is xmsim
+        occupant = await shell_run(
+            f"ss -tlnp 2>/dev/null | grep ':{port}\\b' | grep -oE 'pid=[0-9]+' | head -1 || true",
+            timeout=5,
+        )
+        pid = occupant.strip().split("=")[-1] if "=" in occupant else ""
+        proc_name = ""
+        if pid:
+            proc_name = (await shell_run(f"ps -p {pid} -o comm= 2>/dev/null || true", timeout=5)).strip()
+        if "xmsim" not in proc_name:
+            detail = f"{proc_name}(pid={pid})" if pid else port_info.strip()
+            return (
+                f"ERROR: Bridge port {port} is already occupied by {detail}.\n"
+                f"Shut down that process first, or reconfigure bridge.port."
+            )
+
     # P4: per-user temp directory
     user_tmp = await get_user_tmp_dir()
     await shell_run(f"rm -f {user_tmp}/bridge_ready_*", timeout=5)

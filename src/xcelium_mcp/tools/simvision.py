@@ -80,6 +80,10 @@ def register(
         if action == "start":
             return await start_simvision(bridges, test_name, shm_path, display, sim_dir)
         elif action == "attach":
+            # Already connected — avoid duplicate TCP connect to the single-client TCL server.
+            if bridges.simvision_raw and bridges.simvision_raw.connected:
+                sv = bridges.simvision_raw
+                return f"SimVision already connected at {sv.host}:{sv.port} (reusing existing bridge)."
             return await connect_simulator_fn(host="localhost", port=port, target="simvision", timeout=timeout)
         elif action == "open_db":
             return await open_database(bridges, shm_path, name)
