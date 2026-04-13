@@ -312,6 +312,8 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         bridge = bridges.xmsim
         # Single round-trip: run + where combined in Tcl
         where = await bridge.execute(f"__RUN_AND_REPORT__ {duration}", timeout=timeout)
+        if "RUN_ERROR:" in where:
+            return f"ERROR: {where}"
         return f"Simulation advanced. Current position: {where}"
 
     @mcp.tool()
