@@ -1275,6 +1275,20 @@
         "pytest passes + ruff check passes"
       ],
       "notes": "MCP 툴은 stateless single-call — 툴 실행 중 사용자 입력 불가. sim_dir UserInputRequired는 sim_dir 파라미터로 해결 가능하지만 run_dir UserInputRequired는 해결 수단 없음. F-088로 grep:: 가짜 후보는 제거되지만, 실제로 run 서브디렉토리가 여러 개 존재하는 환경에서는 여전히 발생. run_dir 파라미터 추가로 재호출 패턴 완성."
+    },
+    {
+      "id": "F-090",
+      "title": "resolve_eda_tools: csh/tcsh env_shell에서 $() 문법 실패 수정",
+      "priority": 2,
+      "passes": true,
+      "acceptanceCriteria": [
+        "env_shell이 csh/tcsh일 때 which_cmds를 backtick 문법으로 생성: echo __TOOL_simvisdbutil__=`which simvisdbutil`",
+        "env_shell이 bash/sh일 때 기존 $() 문법 유지",
+        "sim_discover(force=True, run_dir='run') 호출 시 simvisdbutil 경로 정상 감지",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "resolve_eda_tools()에서 which_cmds를 bash $() 문법으로 생성하여 csh/tcsh에서 실행하면 command substitution이 동작하지 않음. eda.env가 csh 스크립트인 경우(#/bin/csh shebang 또는 setenv 키워드로 감지), _detect_env_shell()이 env_shell=/bin/csh를 반환하고 shell_env에 저장됨. 이후 resolve_eda_tools()에서 csh -c 'source eda.env && echo __TOOL_simvisdbutil__=$(which simvisdbutil)'를 실행하면 $()가 빈 문자열로 평가되어 결과가 __TOOL_simvisdbutil__=(빈값)이 됨. _detect_eda_env Step 3의 which xrun은 csh native 문법이라 성공하지만 resolve_eda_tools의 $() 혼용으로 실패. force=True + run_dir 제공 시에만 이 경로가 실행되므로 F-088 이전에는 드러나지 않았음.",
+      "completed_at": "2026-04-13"
     }
   ]
 }
