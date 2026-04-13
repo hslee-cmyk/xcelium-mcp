@@ -1241,6 +1241,40 @@
         "pytest passes + ruff check passes"
       ],
       "notes": "run_full_discovery에서 sim_dir=''일 때 registry 확인보다 discover_sim_dir() CWD 기반 탐색을 먼저 수행하는 순서 버그. 원래 설계 의도(v4 plan §3.4): 최초 1회 sim_discover(sim_dir=explicit) → registry 생성 → 이후 sim_dir='' 재호출 시 registry 기반 조기 종료. 현재는 registry가 있어도 discover_sim_dir()를 먼저 호출하여 CWD 기반 탐색 실패 시 UserInputRequired 발생(F-084 수정 후). get_default_sim_dir()는 ~/.xcelium_mcp/mcp_registry.json 읽기 → CWD 무관하게 항상 접근 가능."
+    },
+    {
+      "id": "F-088",
+      "title": "shell_run stderr 오염 전면 수정 (find/grep/ls 파싱 안전화)",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-13",
+      "acceptanceCriteria": [
+        "CRITICAL A: sim_env_detection.py detect_run_dir grep (L283) — 2>/dev/null 추가, 파싱 전 'cd'로 시작하는지 검증",
+        "CRITICAL B: discovery.py git rev-parse (L~395) — 2>/dev/null 추가 (F-084와 동일 패턴)",
+        "CRITICAL C: sim_env_detection.py find {project_root} (L95-96) — 2>/dev/null 추가",
+        "CRITICAL D: runner_detection.py find+grep candidates (L104-106) — 2>/dev/null 추가",
+        "HIGH G: sim_env_detection.py grep -rl uvm_component (L39-43) — 2>/dev/null 추가, stderr 있으면 False 처리",
+        "HIGH H: sim_env_detection.py grep -rl interface (L57-60) — 2>/dev/null 추가",
+        "HIGH I: discovery.py grep -n 'xmsim.*-input' (L305) — 2>/dev/null 추가",
+        "HIGH J: simvision_ops.py ls -td *.shm (L110-112) — 2>/dev/null 추가",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "shell_run()은 stderr를 stdout에 append하는 구조. find/grep/ls/git 명령이 실패 시 stderr 출력이 파싱 결과를 오염시킴. F-084(git rev-parse)와 detect_run_dir(grep::) 아티팩트에서 확인된 패턴이 코드베이스 전반에 존재. CRITICAL 4건: 실제로 잘못된 값(garbage path/candidates) 생성. HIGH 4건: bool() 오판 또는 regex 오염. 수정 원칙: (1) 파싱에 사용되는 shell_run 호출에 2>/dev/null 추가, (2) splitlines() 후 예상 패턴으로 라인 필터링."
+    },
+    {
+      "id": "F-089",
+      "title": "sim_discover에 run_dir 파라미터 추가 — run_dir 후보 복수 시 재호출 지원",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-13",
+      "acceptanceCriteria": [
+        "sim_discover에 run_dir: str = '' 파라미터 추가",
+        "run_dir != '' 이면 detect_run_dir() 호출 생략, 해당 값을 직접 사용",
+        "run_dir == '' + 후보 복수 → UserInputRequired 메시지에 're-call with run_dir=<choice>' 안내 포함",
+        "sim_discover(force=True, run_dir='run') 재호출 시 정상 등록 완료",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "MCP 툴은 stateless single-call — 툴 실행 중 사용자 입력 불가. sim_dir UserInputRequired는 sim_dir 파라미터로 해결 가능하지만 run_dir UserInputRequired는 해결 수단 없음. F-088로 grep:: 가짜 후보는 제거되지만, 실제로 run 서브디렉토리가 여러 개 존재하는 환경에서는 여전히 발생. run_dir 파라미터 추가로 재호출 패턴 완성."
     }
   ]
 }
