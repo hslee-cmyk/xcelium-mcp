@@ -1092,7 +1092,8 @@
       "id": "F-078",
       "title": "Surface RUN_ERROR from __RUN_AND_REPORT__ as ERROR response",
       "priority": 2,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-04-13",
       "acceptanceCriteria": [
         "tools/sim_lifecycle.py sim_run (line 300-315)에서 bridge.execute 반환값 확인",
         "where.startswith('RUN_ERROR') 또는 'RUN_ERROR:' 포함 시 f'ERROR: {where}' 반환",
@@ -1106,7 +1107,8 @@
       "id": "F-079",
       "title": "Move _DURATION_RE to module scope and consolidate duration.strip()",
       "priority": 3,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-04-13",
       "acceptanceCriteria": [
         "_DURATION_RE를 tools/sim_lifecycle.py 모듈 최상단(register() 외부)으로 이동",
         "sim_run 내부에서 duration = duration.strip() 먼저 수행 후 _DURATION_RE.fullmatch(duration) 호출",
@@ -1121,7 +1123,8 @@
       "id": "F-080",
       "title": "Harden sim_run duration: length cap + ASCII-only digits",
       "priority": 3,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-04-13",
       "acceptanceCriteria": [
         "sim_lifecycle.py sim_run에서 regex 검증 전 len(duration) > 32 거부 ('ERROR: duration too long')",
         "_DURATION_RE를 r'^\\d+\\s*(ns|us|ms|s|ps|fs)?$'에서 r'^[0-9]+\\s*(ns|us|ms|s|ps|fs)?$'로 변경 (또는 re.ASCII 플래그)",
@@ -1134,7 +1137,8 @@
       "id": "F-081",
       "title": "Add timeout parameter to sim_stop",
       "priority": 3,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-04-13",
       "acceptanceCriteria": [
         "tools/sim_lifecycle.py sim_stop 시그니처를 'async def sim_stop(timeout: float = 30.0) -> str'로 변경",
         "bridge.execute('stop', timeout=timeout) 로 timeout 전달",
@@ -1147,7 +1151,8 @@
       "id": "F-082",
       "title": "Catch asyncio.TimeoutError in sim_run with actionable message",
       "priority": 3,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-04-13",
       "acceptanceCriteria": [
         "sim_run에서 bridge.execute await을 try/except asyncio.TimeoutError로 감쌈",
         "timeout 초과 시 'ERROR: sim_run exceeded {timeout}s. Pass larger timeout= argument or split the run duration.' 반환",
@@ -1161,7 +1166,8 @@
       "id": "F-083",
       "title": "Require explicit time unit in sim_run duration",
       "priority": 3,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-04-13",
       "acceptanceCriteria": [
         "_DURATION_RE에서 unit group 옵셔널 '?' 제거 → 단위 필수화",
         "최종 패턴: r'^[0-9]+\\s*(ns|us|ms|s|ps|fs)$' (F-080과 병행 적용)",

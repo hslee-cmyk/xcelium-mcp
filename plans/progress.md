@@ -1,5 +1,25 @@
 # Ralph Progress Log
 
+---
+
+### Task: Ralph loop — F-078 through F-083 (sim_run hardening)
+
+**Completed (6 tasks):**
+
+1. **F-078** — Surface RUN_ERROR from `__RUN_AND_REPORT__` as ERROR: added `'RUN_ERROR:' in where` check in `sim_run`
+2. **F-079** — `_DURATION_RE` moved to module scope; `duration.strip()` before fullmatch; Tcl gets stripped value
+3. **F-080** — `_DURATION_MAX_LEN = 32` length cap + `re.ASCII` flag to block Unicode digits
+4. **F-081** — `sim_stop` now accepts `timeout: float = 30.0` parameter passed to `bridge.execute`
+5. **F-082** — `asyncio.TimeoutError` caught in `sim_run` with actionable guidance message
+6. **F-083** — Unit mandatory in duration regex (removed `?`); bare `'100'` now rejected
+
+**Key patterns:**
+- `_MockMCP` test harness captures `@mcp.tool()` closures for unit testing without MCP bootstrap
+- All tests in `tests/test_sim_lifecycle.py` (new file, 11 tests)
+- 170 → 185 tests total
+
+
+
 Started: 2026-04-10
 Project: xcelium-mcp — MCP server for Cadence Xcelium/SimVision simulator control
 
