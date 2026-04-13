@@ -302,7 +302,7 @@ async def _patch_legacy_run_script(sim_dir: str, runner_info: dict) -> str:
     if r.strip() and r.strip() != "0":
         return "already patched"
 
-    r = await shell_run(f"grep -n 'xmsim.*-input' {_sp} || true")
+    r = await shell_run(f"grep -n 'xmsim.*-input' {_sp} 2>/dev/null || true")
     if not r.strip():
         return "no xmsim -input found — manual patch needed"
 
@@ -392,7 +392,7 @@ async def run_full_discovery(
     tb_type, runner_info, r_root, bridge_tcl = await asyncio.gather(
         analyze_tb_type(sim_dir),
         auto_detect_runner(sim_dir),
-        shell_run("git rev-parse --show-toplevel || echo ~"),
+        shell_run("git rev-parse --show-toplevel 2>/dev/null || echo ~"),
         detect_bridge_tcl(),
     )
 

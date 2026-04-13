@@ -38,7 +38,7 @@ async def analyze_tb_type(sim_dir: str) -> str:
     _sd = shell_quote(sim_dir)
     r_uvm = await shell_run(
         f"(grep -rl 'uvm_component\\|uvm_test\\|UVM_TEST' {_sd} "
-        f"--include='*.sv' --include='*.svh' || true) | head -1"
+        f"--include='*.sv' --include='*.svh' 2>/dev/null || true) | head -1"
     )
     has_uvm = bool(r_uvm.strip())
 
@@ -55,7 +55,7 @@ async def analyze_tb_type(sim_dir: str) -> str:
 
     # sv_directed: non-UVM SystemVerilog with interface/program
     r = await shell_run(
-        f"(grep -rl 'interface\\|program ' {shell_quote(sim_dir)} --include='*.sv' || true) | head -1"
+        f"(grep -rl 'interface\\|program ' {shell_quote(sim_dir)} --include='*.sv' 2>/dev/null || true) | head -1"
     )
     if r.strip():
         return "sv_directed"
@@ -93,7 +93,7 @@ async def discover_sim_dir(hint: str = "") -> list[dict]:
         r"-o -name 'verif*' -o -name 'bench*' -o -name 'dv'"
     )
     r = await shell_run(
-        f"(find {shell_quote(project_root)} -maxdepth 3 -mindepth 1 -type d \\( {patterns} \\) || true) | sort"
+        f"(find {shell_quote(project_root)} -maxdepth 3 -mindepth 1 -type d \\( {patterns} \\) 2>/dev/null || true) | sort"
     )
     raw = r.strip().splitlines()
 
@@ -280,10 +280,10 @@ async def detect_run_dir(sim_dir: str, runner_info: dict) -> dict:
     script_name = extract_script_name(runner_info.get("exec_cmd", ""))
     script_path = f"{sim_dir}/{script_name}"
     cd_targets: list[str] = []
-    r = await shell_run(f"(grep -E '^[[:space:]]*cd[[:space:]]+' {shell_quote(script_path)} || true) | head -3")
+    r = await shell_run(f"(grep -E '^[[:space:]]*cd[[:space:]]+' {shell_quote(script_path)} 2>/dev/null || true) | head -3")
     for line in r.strip().splitlines():
         parts = line.strip().split()
-        if len(parts) >= 2 and '$' not in parts[1]:
+        if len(parts) >= 2 and parts[0] == 'cd' and '$' not in parts[1]:
             cd_target = parts[1].strip("'\"").rstrip("/")
             # Skip navigation-only targets (cd .., cd /, cd ~)
             if cd_target and cd_target not in ("..", "/", "~"):

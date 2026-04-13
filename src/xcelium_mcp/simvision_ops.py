@@ -107,11 +107,11 @@ async def start_simvision(
             test_name = await resolve_test_name(test_name, resolved_dir)
         dump_dir = f"{resolved_dir}/dump"
         if test_name:
-            r2 = await shell_run(f"(ls -td {dump_dir}/*{test_name}*.shm || true) | head -1")
+            r2 = await shell_run(f"(ls -td {dump_dir}/*{test_name}*.shm 2>/dev/null || true) | head -1")
             if not r2.strip():
-                r2 = await shell_run(f"(ls -td {dump_dir}/*.shm || true) | head -1")
+                r2 = await shell_run(f"(ls -td {dump_dir}/*.shm 2>/dev/null || true) | head -1")
         else:
-            r2 = await shell_run(f"(ls -td {dump_dir}/*.shm || true) | head -1")
+            r2 = await shell_run(f"(ls -td {dump_dir}/*.shm 2>/dev/null || true) | head -1")
         shm_path = r2.strip() if r2.strip() else ""
 
     # 4. Display — validate format before use in shell commands

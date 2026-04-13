@@ -103,7 +103,7 @@ async def _detect_eda_env(sim_dir: str, project_root: str, login_shell: str) -> 
         """Find files matching pattern and grep for EDA keywords in one SSH call."""
         r = await shell_run(
             f"find {shell_quote(search_dir)} -maxdepth 1 \\( -type f -o -type l \\) {pat} "
-            f"-exec grep -lE '{kw_grep}' {{}} + || true"
+            f"-exec grep -lE '{kw_grep}' {{}} + 2>/dev/null || true"
         )
         return [f for f in r.strip().splitlines() if f]
 
