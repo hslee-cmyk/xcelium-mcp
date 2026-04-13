@@ -1177,6 +1177,53 @@
         "pytest passes + ruff check passes"
       ],
       "notes": "sim-run-timeout-fix 코드 리뷰 Medium #3 (kieran). sim_lifecycle.py:297. 현재 regex가 bare integer 허용 → Xcelium default timescale 해석으로 사용자 의도 불명확. Behavior change라 별도 항목으로 분리. F-080과 함께 적용 권장 (같은 regex 수정)."
+    },
+    {
+      "id": "F-084",
+      "title": "Suppress git rev-parse stderr in discover_sim_dir",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-13",
+      "acceptanceCriteria": [
+        "sim_env_detection.py discover_sim_dir() 내 'git rev-parse --show-toplevel || echo ~'를 'git rev-parse --show-toplevel 2>/dev/null || echo ~'로 변경",
+        "수정 후 sim_discover(force=False, sim_dir='') 호출 시 'simvisdbutil not found' 대신 'USER INPUT REQUIRED: Could not auto-detect...' 반환",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "shell_run()이 stderr를 stdout에 append하는 설계로 인해, git rev-parse가 git repo 외부에서 실행되면 'fatal: Not a git repository...' stderr가 project_root에 혼입됨. 이 garbage path로 find/grep/ls가 실행되고, 그 에러 출력도 다시 혼입되어 analyze_tb_type이 'mixed'를 반환. 결국 garbage sim_dir로 full discovery 진행 → resolve_eda_tools() 실패 → RuntimeError('simvisdbutil not found'). 수정: 2>/dev/null로 git stderr 억제. cloud0 서버 CWD: /users/hoseung.lee (HOME, git repo 아님). 검증 완료: 수정 시 project_root='/users/hoseung.lee' (clean), find 결과 empty, UserInputRequired 정상 발생."
+    },
+    {
+      "id": "F-085",
+      "title": "Fix sim_regression pass_count unit mismatch — Option C dual-level summary",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-13",
+      "acceptanceCriteria": [
+        "batch_runner.py 672-683 블록 수정: 테스트 레벨(pass_count/fail_count)과 체크 레벨(check_pass/check_fail) 분리 카운트",
+        "테스트 레벨 판정: _COMPLETE_RE = re.compile(r'COMPLETE\\.\\s*Errors:\\s*(\\d+)') 로 COMPLETE 라인 파싱. Errors=0 → pass_count+1, Errors>0 → fail_count+1. COMPLETE 없이 FAIL 포함 → fail_count+1 (crash/abort)",
+        "체크 레벨: check_pass = t_raw.count('PASS'), check_fail = t_raw.count('FAIL') (기존 로직 유지, 변수명만 변경)",
+        "summary 형식: '{pass_count}/{total} tests PASS ({check_pass} checks passed, {check_fail} failed)'",
+        "TOP015+TOP016 regression 실행 결과: '2/2 tests PASS (15 checks passed, 0 failed)' 형태로 출력",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "sim_regression 결과 '15/2 tests PASS' 오출력. pass_count += t_raw.count('PASS')가 테스트 내 개별 체크라인([V-xx] PASS: ...)을 모두 카운트하여 분자(체크 수)와 분모(테스트 수)의 단위가 불일치. TOP015 로그에 12개 PASS 라인, TOP016에 3개 → 15/2. 수정: 테스트 레벨(COMPLETE. Errors: N 파싱)과 체크 레벨(기존 substring count) 분리하여 Option C 포맷으로 출력. _COMPLETE_RE는 모듈 레벨 상수로 정의. 대상: HAS_VERDICT 테스트(TOP013~TOP016)만. NO_VERDICT 테스트 처리는 F-086."
+    },
+    {
+      "id": "F-086",
+      "title": "sim_regression: waveform-only (NO_VERDICT) 테스트 판정 지원",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-13",
+      "acceptanceCriteria": [
+        "per_test_results 수집 grep 패턴에 '\\$finish' 추가: grep -E 'PASS|FAIL|Errors:|COMPLETE|\\$finish'",
+        "per_test_errors: dict[str, str] 신규 추가 — 테스트별 에러 라인 수집. grep -iE '\\*E |^Error:|fatal error|Segmentation' log | head -3",
+        "집계 로직 분기: (1) COMPLETE. Errors: N 있음 → HAS_VERDICT (pass/fail_count, check_pass/fail_count). (2) FAIL만 있음 → fail_count+1. (3) $finish 있음 + no errors → complete_count+1. (4) $finish 있음 + errors → error_count+1. (5) $finish 없음 → error_count+1 (timeout/crash)",
+        "summary 포맷: '{pass_count}/{verdict_total} verdict tests PASS ({check_pass} checks passed, {check_fail} failed)\\n{complete_count}/{waveform_total} waveform tests COMPLETE'",
+        "verdict_total = pass_count + fail_count, waveform_total = complete_count + error_count",
+        "verdict_total=0 또는 waveform_total=0인 경우 해당 라인 생략",
+        "venezia TOP000~TOP012 regression 실행: '13/13 waveform tests COMPLETE' 출력 확인",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "venezia-fpga 프로젝트 17개 테스트 중 13개(TOP000~TOP012)가 PASS/FAIL/COMPLETE 출력 없이 $finish만으로 종료하는 waveform-only 테스트. 현재 sim_regression의 grep 패턴에 걸리지 않아 per_test_results가 빈 배열 → pass_count/fail_count 모두 0으로 묵살됨. 단기 구현: $finish 도달 + 에러 없음 → COMPLETE로 분류. 에러 패턴: '*E , Error:, fatal error, Segmentation'. 중장기: testbench에 PASS/FAIL verdict 추가(별도 이슈). F-085(HAS_VERDICT pass_count 수정)와 함께 적용."
     }
   ]
 }
