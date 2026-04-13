@@ -341,17 +341,13 @@ class TestStartBridgePortCheck:
             "setup_tcls": {"rtl": "scripts/setup_rtl.tcl"},
         }
 
-        call_count = 0
-
         async def _fake_shell(cmd: str, **kwargs) -> str:
-            nonlocal call_count
-            call_count += 1
             if "pgrep" in cmd:
                 return ""                          # xmsim not running
-            if "ss -tlnp" in cmd and "pid=" not in cmd:
+            if "grep" in cmd and "oE" in cmd:
+                return "pid=1234"                  # PID extraction (ss format)
+            if "grep" in cmd and "9876" in cmd:
                 return "LISTEN 0 128 *:9876 *:* users:((\"simvision\",pid=1234,fd=7))"
-            if "ss -tlnp" in cmd and "pid=" in cmd:
-                return "pid=1234"
             if "ps -p" in cmd:
                 return "simvision"
             return ""
@@ -395,8 +391,8 @@ class TestStartBridgePortCheck:
         async def _fake_shell(cmd: str, **kwargs) -> str:
             if "pgrep" in cmd:
                 return ""   # xmsim not running
-            if "ss -tlnp" in cmd:
-                return ""   # port free
+            if "grep" in cmd and "9876" in cmd:
+                return ""   # port free (ss or netstat output is empty)
             return ""
 
         with patch("xcelium_mcp.bridge_lifecycle.shell_run", side_effect=_fake_shell), \
@@ -461,4 +457,83 @@ class TestStartBridgePortCheck:
 
         # pgrep catches xmsim running — error must mention xmsim, not "occupied"
         assert "xmsim" in result
+        assert "occupied" not in result.lower()
+
+
+# ---------------------------------------------------------------------------
+# F-097: port check works on hosts without ss (netstat fallback + PID parsing)
+# ---------------------------------------------------------------------------
+
+class TestPortCheckNetstatFallback:
+    """Port occupancy check must work when ss is absent (netstat only env)."""
+
+    _config = {
+        "runner": {
+            "script": "run_sim", "script_shell": "/bin/sh",
+            "env_shell": "/bin/sh", "login_shell": "/bin/sh",
+            "run_dir": "run", "script_has_cd": False,
+            "args_format": "-test {test_name}",
+        },
+        "bridge": {"port": 9876, "tcl_path": "/opt/mcp_bridge.tcl"},
+        "setup_tcls": {"rtl": "scripts/setup_rtl.tcl"},
+    }
+
+    @pytest.mark.asyncio
+    async def test_netstat_format_pid_detected(self) -> None:
+        """netstat N/procname PID format must be parsed correctly."""
+        from xcelium_mcp.bridge_lifecycle import _start_bridge
+
+        async def _fake_shell(cmd: str, **kwargs) -> str:
+            if "pgrep" in cmd:
+                return ""
+            if "grep" in cmd and "oE" in cmd:
+                return "1234/simvision"     # netstat PID format
+            if "grep" in cmd and "9876" in cmd:
+                return "tcp 0 0 0.0.0.0:9876 0.0.0.0:* LISTEN 1234/simvision"
+            if "ps -p" in cmd:
+                return "simvision"
+            return ""
+
+        with patch("xcelium_mcp.bridge_lifecycle.shell_run", side_effect=_fake_shell), \
+             patch("xcelium_mcp.bridge_lifecycle.get_user_tmp_dir",
+                   new_callable=AsyncMock, return_value="/tmp/mcp_test"):
+            result = await _start_bridge(
+                sim_dir="/sim/ncsim", config=self._config,
+                test_name="TOP015", setup_tcl="scripts/setup_rtl.tcl",
+                sim_mode="rtl", timeout=5, bridges=None,
+            )
+
+        assert result.startswith("ERROR"), f"Expected ERROR, got: {result!r}"
+        assert "9876" in result
+        assert "simvision" in result.lower() or "1234" in result
+
+    @pytest.mark.asyncio
+    async def test_no_listeners_command_port_free(self) -> None:
+        """When both ss and netstat return empty for the port, proceed normally."""
+        from xcelium_mcp.bridge_lifecycle import _start_bridge
+
+        async def _fake_shell(cmd: str, **kwargs) -> str:
+            if "pgrep" in cmd:
+                return ""
+            if "grep" in cmd and "9876" in cmd:
+                return ""   # port free regardless of ss or netstat
+            return ""
+
+        with patch("xcelium_mcp.bridge_lifecycle.shell_run", side_effect=_fake_shell), \
+             patch("xcelium_mcp.bridge_lifecycle.get_user_tmp_dir",
+                   new_callable=AsyncMock, return_value="/tmp/mcp_test"), \
+             patch("xcelium_mcp.bridge_lifecycle.resolve_sim_params",
+                   return_value={
+                       "test_args_format": "-test {test_name}",
+                       "extra_args": "", "timeout": 2, "dump_args": "",
+                   }):
+            try:
+                result = await _start_bridge(
+                    sim_dir="/sim/ncsim", config=self._config,
+                    test_name="TOP015", setup_tcl="scripts/setup_rtl.tcl",
+                    sim_mode="rtl", timeout=2, bridges=None,
+                )
+            except Exception:
+                result = ""
+
         assert "occupied" not in result.lower()

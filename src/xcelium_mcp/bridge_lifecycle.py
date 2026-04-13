@@ -24,6 +24,14 @@ from xcelium_mcp.test_resolution import resolve_sim_params
 
 logger = logging.getLogger(__name__)
 
+# List TCP listeners: prefer ss (iproute2), fall back to netstat (net-tools).
+# ss absent on some hosts (e.g. cloud0 has net-tools only) — 2>/dev/null on both
+# sides so a missing command produces no output rather than an error line.
+_LIST_LISTENERS = (
+    "(command -v ss >/dev/null 2>&1 && ss -tlnp 2>/dev/null"
+    " || netstat -tlnp 2>/dev/null)"
+)
+
 
 # ===================================================================
 # Legacy script patching
@@ -135,14 +143,24 @@ async def _start_bridge(
         )
 
     # Check bridge port is not occupied by a non-xmsim process (e.g. a stale SimVision).
-    port_info = await shell_run(f"ss -tlnp 2>/dev/null | grep ':{port}\\b' || true", timeout=5)
+    # Uses ss (iproute2) with netstat (net-tools) fallback via _LIST_LISTENERS.
+    port_info = await shell_run(
+        f"{_LIST_LISTENERS} | grep ':{port}\\b' || true", timeout=5
+    )
     if port_info.strip():
-        # Port is in use — verify it is xmsim
+        # Extract PID — ss format: pid=N  netstat format: N/procname
         occupant = await shell_run(
-            f"ss -tlnp 2>/dev/null | grep ':{port}\\b' | grep -oE 'pid=[0-9]+' | head -1 || true",
+            f"{_LIST_LISTENERS} | grep ':{port}\\b'"
+            f" | grep -oE 'pid=[0-9]+|[0-9]+/[^[:space:]]+' | head -1 || true",
             timeout=5,
         )
-        pid = occupant.strip().split("=")[-1] if "=" in occupant else ""
+        raw = occupant.strip()
+        if "pid=" in raw:
+            pid = raw.split("=")[-1]
+        elif "/" in raw:
+            pid = raw.split("/")[0]
+        else:
+            pid = ""
         proc_name = ""
         if pid:
             proc_name = (await shell_run(f"ps -p {pid} -o comm= 2>/dev/null || true", timeout=5)).strip()

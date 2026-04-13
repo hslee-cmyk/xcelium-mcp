@@ -1350,6 +1350,20 @@
       ],
       "notes": "root cause: _start_bridge()가 'pgrep xmsim'으로 xmsim 실행 여부만 체크. port 9876이 SimVision 등 다른 프로세스에 점유된 경우 체크 없이 xmsim 시작 → xmsim은 IPv6 9876(:::9876)만 바인드 성공, IPv4 9876은 SimVision 점유 유지 → MCP bridge가 localhost:9876 연결 시 OS가 IPv4 리스너(SimVision)로 라우팅 → sim_run에서 'invalid command name run' 에러. 발생 조건: 이전 세션의 SimVision 프로세스가 종료 없이 살아있거나, 포트 분리 fix 이전 config로 시작된 SimVision이 잔존하는 경우. fix: xmsim pgrep 체크 후 추가로 'ss -tlnp | grep {port}'로 port 점유 프로세스 확인, xmsim이 아닌 프로세스가 점유 중이면 에러 반환.",
       "completed_at": "2026-04-13"
+    },
+    {
+      "id": "F-097",
+      "title": "F-096 port check 무효: cloud0에 ss 미설치 → ss -tlnp가 silently fail, 포트 점유 감지 불가",
+      "priority": 2,
+      "passes": true,
+      "acceptanceCriteria": [
+        "_start_bridge() port check가 ss 대신 ss-then-netstat fallback 또는 /proc/net/tcp 파싱으로 대체",
+        "ss 없는 환경(cloud0: net-tools 2.10-alpha, netstat만 존재)에서도 port 점유 프로세스 정확히 감지",
+        "netstat -tlnp 2>/dev/null | grep ':{port}' 로 대체 시 정상 동작 확인 (cloud0 검증: python3 bind IPv4 9875 → netstat에서 검출됨)",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "root cause: F-096 fix가 'ss -tlnp 2>/dev/null | grep :{port}\\b'를 사용. cloud0에는 ss가 없음(which ss → not found). 2>/dev/null이 'ss: command not found' stderr를 삼키므로 빈 출력 → port 점유 감지 실패. 대안: (1) command -v ss >/dev/null 2>&1 로 ss 가용 여부 체크 후 ss 없으면 netstat -tlnp으로 fallback (2) /proc/net/tcp 직접 파싱(hex port, 0A=LISTEN) — 외부 명령 의존성 없음. 검증: cloud0에서 netstat -tlnp 2>/dev/null | grep ':9875' → '0.0.0.0:9875 ... 18949/python3' 정상 출력 확인됨.",
+      "completed_at": "2026-04-13"
     }
   ]
 }
