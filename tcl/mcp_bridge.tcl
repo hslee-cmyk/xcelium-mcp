@@ -135,11 +135,23 @@ proc ::mcp_bridge::init {} {
 proc ::mcp_bridge::accept {channel addr port} {
     variable client_channel
 
-    # Only allow one client at a time
+    # Only allow one client at a time — but clean up stale CLOSE_WAIT connections first.
+    # eof true means Python sent FIN (_force_close) and TCP is in CLOSE_WAIT.
+    # The Tcl event loop may not have fired on_readable yet (e.g. blocked during
+    # 'run', or SIGINT cleared the fileevent registration).  Detect and reclaim.
     if {$client_channel ne ""} {
-        puts $channel "ERROR 30\nAnother client is connected\n<<<END>>>"
-        close $channel
-        return
+        set is_dead 0
+        catch {set is_dead [eof $client_channel]}
+        if {$is_dead} {
+            catch {close $client_channel}
+            set client_channel ""
+            puts "MCP Bridge: stale client_channel reclaimed (CLOSE_WAIT), accepting new connection"
+            # fall-through to accept the new connection below
+        } else {
+            puts $channel "ERROR 30\nAnother client is connected\n<<<END>>>"
+            close $channel
+            return
+        }
     }
 
     set client_channel $channel
