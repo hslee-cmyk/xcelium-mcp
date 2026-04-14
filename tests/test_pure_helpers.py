@@ -383,3 +383,136 @@ class TestResolveEdaToolsShellSyntax:
             result = await resolve_eda_tools({"env_shell": "/bin/sh", "login_shell": "/bin/bash"})
 
         assert "$(which simvisdbutil)" in captured[0]
+
+
+# ---------------------------------------------------------------------------
+# F-102: debug_snapshot snapshot mode — absolute describe + dot-padding parse
+# ---------------------------------------------------------------------------
+
+class _MockMCP:
+    def __init__(self):
+        self.tools: dict = {}
+
+    def tool(self):
+        def decorator(f):
+            self.tools[f.__name__] = f
+            return f
+        return decorator
+
+
+@pytest.mark.asyncio
+async def test_debug_snapshot_uses_absolute_describe_path() -> None:
+    """describe command uses scope absolute path, not bare 'describe *'."""
+    from unittest.mock import AsyncMock, MagicMock
+    from xcelium_mcp.tools.debug import register
+
+    mock_mcp = _MockMCP()
+    mock_bridges = MagicMock()
+
+    describe_calls: list[str] = []
+    value_calls: list[str] = []
+
+    async def _fake_execute(cmd, **kwargs):
+        if cmd == "__DEBUG_SNAPSHOT__":
+            return "POSITION:Time: 100 NS\nSCOPE:/tb/dut\nSTOPS:"
+        if cmd.startswith("describe"):
+            describe_calls.append(cmd)
+            # dot-padded output as xmsim returns
+            return "/tb/dut/r_rst..........variable reg = 1'h0\n/tb/dut/clk............variable reg = 1'h1"
+        if cmd.startswith("value"):
+            value_calls.append(cmd)
+            return "1'h0"
+        if cmd == "__SCREENSHOT__":
+            raise Exception("no screenshot")
+        return ""
+
+    mock_bridges.get_bridge.return_value.execute = AsyncMock(side_effect=_fake_execute)
+    mock_bridges.get_bridge.return_value.screenshot = AsyncMock(side_effect=RuntimeError("no ss"))
+
+    register(mock_mcp, mock_bridges)
+    result = await mock_mcp.tools["debug_snapshot"](mode="snapshot", target="auto")
+
+    # Verify absolute-path describe was used
+    assert describe_calls, "No describe command was issued"
+    assert describe_calls[0] == "describe /tb/dut.*", (
+        f"Expected absolute describe, got: {describe_calls[0]!r}"
+    )
+
+    # Verify parsed signal names are clean (no dot-padding)
+    assert any("r_rst" in c for c in value_calls), f"value calls: {value_calls}"
+    for c in value_calls:
+        assert ".." not in c, f"Dot-padding leaked into value call: {c!r}"
+
+
+@pytest.mark.asyncio
+async def test_debug_snapshot_strips_dot_padding_from_signal_names() -> None:
+    """Signal names are parsed by split('..')[0], stripping xmsim dot-padding."""
+    from unittest.mock import AsyncMock, MagicMock
+    from xcelium_mcp.tools.debug import register
+
+    mock_mcp = _MockMCP()
+    mock_bridges = MagicMock()
+
+    value_calls: list[str] = []
+
+    async def _fake_execute(cmd, **kwargs):
+        if cmd == "__DEBUG_SNAPSHOT__":
+            return "POSITION:Time: 200 NS\nSCOPE:/tb\nSTOPS:"
+        if cmd.startswith("describe"):
+            # dot-padded names as returned by real xmsim
+            return (
+                "/tb/data_out[7:0]..variable reg = 8'h00\n"
+                "  /tb/data_out[7]....bit      = 1'h0\n"
+                "/tb/r_rst..........variable reg = 1'h0"
+            )
+        if cmd.startswith("value"):
+            value_calls.append(cmd)
+            return "0"
+        if cmd == "__SCREENSHOT__":
+            raise RuntimeError("no screenshot")
+        return ""
+
+    mock_bridges.get_bridge.return_value.execute = AsyncMock(side_effect=_fake_execute)
+    mock_bridges.get_bridge.return_value.screenshot = AsyncMock(side_effect=RuntimeError("no ss"))
+
+    register(mock_mcp, mock_bridges)
+    result = await mock_mcp.tools["debug_snapshot"](mode="snapshot", target="auto")
+
+    for c in value_calls:
+        assert ".." not in c, f"Dot-padding must be stripped from value command: {c!r}"
+
+    assert any("/tb/data_out[7:0]" in c for c in value_calls)
+    assert any("/tb/r_rst" in c for c in value_calls)
+
+
+@pytest.mark.asyncio
+async def test_debug_snapshot_falls_back_when_scope_unavailable() -> None:
+    """Falls back to 'describe *' when scope is not available."""
+    from unittest.mock import AsyncMock, MagicMock
+    from xcelium_mcp.tools.debug import register
+
+    mock_mcp = _MockMCP()
+    mock_bridges = MagicMock()
+
+    describe_calls: list[str] = []
+
+    async def _fake_execute(cmd, **kwargs):
+        if cmd == "__DEBUG_SNAPSHOT__":
+            return "POSITION:Time: 0 NS\nSCOPE:\nSTOPS:"
+        if cmd.startswith("describe"):
+            describe_calls.append(cmd)
+            return ""
+        if cmd == "__SCREENSHOT__":
+            raise RuntimeError("no screenshot")
+        return ""
+
+    mock_bridges.get_bridge.return_value.execute = AsyncMock(side_effect=_fake_execute)
+    mock_bridges.get_bridge.return_value.screenshot = AsyncMock(side_effect=RuntimeError("no ss"))
+
+    register(mock_mcp, mock_bridges)
+    await mock_mcp.tools["debug_snapshot"](mode="snapshot", target="auto")
+
+    assert describe_calls, "Expected a describe command"
+    assert describe_calls[0] == "describe *", (
+        f"Expected fallback 'describe *' when scope empty, got: {describe_calls[0]!r}"
+    )

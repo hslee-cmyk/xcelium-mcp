@@ -309,11 +309,21 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
         # 2. Signal values in current scope (up to 50)
         sections.append("\n## Signal Values (current scope)")
         try:
-            sig_list = await bridge.execute("describe *")
+            # Use absolute scope path so describe returns full signal paths;
+            # fall back to relative 'describe *' only when scope is unavailable.
+            describe_cmd = (
+                f"describe {scope_val.strip()}.*"
+                if scope_val and not scope_val.startswith("(")
+                else "describe *"
+            )
+            sig_list = await bridge.execute(describe_cmd)
             lines = sig_list.strip().splitlines()[:50]
             if lines:
                 for line in lines:
-                    sig_name = line.split()[0] if line.split() else ""
+                    # xmsim describe output uses dot-padding between name and type:
+                    #   /tb/dut/r_rst..........variable reg = 1'h0
+                    # split('..')[0] strips the padding to get the clean signal name.
+                    sig_name = line.strip().split('..')[0] if line.strip() else ""
                     if sig_name:
                         try:
                             val = await bridge.execute(f"value {sig_name}")
