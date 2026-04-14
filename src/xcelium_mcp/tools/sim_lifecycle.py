@@ -76,6 +76,18 @@ async def _auto_connect_all(bridges: BridgeManager, host: str, timeout: float) -
 # Unit is mandatory — bare integers are ambiguous (Xcelium uses default timescale)
 _DURATION_RE = re.compile(r'^[0-9]+\s*(ns|us|ms|s|ps|fs)$', re.IGNORECASE | re.ASCII)
 _DURATION_MAX_LEN = 32
+_UNIT_TO_NS: dict[str, float] = {
+    "fs": 1e-6, "ps": 1e-3, "ns": 1.0, "us": 1e3, "ms": 1e6, "s": 1e9,
+}
+
+
+def _duration_to_ns(duration: str) -> int:
+    """Convert a validated duration string (e.g. '10ms', '100us') to integer nanoseconds."""
+    d = duration.strip().lower()
+    for unit in sorted(_UNIT_TO_NS, key=len, reverse=True):
+        if d.endswith(unit):
+            return int(float(d[: -len(unit)]) * _UNIT_TO_NS[unit])
+    raise ValueError(f"Cannot parse duration: {duration!r}")
 
 
 def _parse_chunked_run_report(raw: str) -> str:
@@ -393,8 +405,12 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         # chunk=0 → legacy 1-shot (backward compat).
         effective_chunk = max(0, int(chunk))
         if not duration or effective_chunk == 0:
-            effective_chunk = 0
-        payload = f"__RUN_AND_REPORT__ {duration} {effective_chunk}"
+            # Empty duration or chunk=0 → legacy 1-shot path in Tcl
+            payload = f"__RUN_AND_REPORT__ {duration} 0"
+        else:
+            # Chunked path: Tcl needs integer ns for arithmetic (incr remaining -$step)
+            duration_ns = _duration_to_ns(duration)
+            payload = f"__RUN_AND_REPORT__ {duration_ns} {effective_chunk}"
         try:
             result = await bridge.execute(payload, timeout=timeout)
         except asyncio.TimeoutError:

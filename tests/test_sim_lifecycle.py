@@ -348,3 +348,56 @@ async def test_connect_simulator_xmsim_result_contains_pid() -> None:
         )
 
     assert "xmsim_pid: 12345" in result, f"Expected xmsim_pid in result: {result!r}"
+
+
+# ---------------------------------------------------------------------------
+# F-107: _duration_to_ns + _parse_chunked_run_report
+# ---------------------------------------------------------------------------
+
+
+class TestDurationToNs:
+    def test_ns(self):
+        from xcelium_mcp.tools.sim_lifecycle import _duration_to_ns
+        assert _duration_to_ns("100ns") == 100
+
+    def test_us(self):
+        from xcelium_mcp.tools.sim_lifecycle import _duration_to_ns
+        assert _duration_to_ns("1us") == 1_000
+
+    def test_ms(self):
+        from xcelium_mcp.tools.sim_lifecycle import _duration_to_ns
+        assert _duration_to_ns("10ms") == 10_000_000
+
+    def test_s(self):
+        from xcelium_mcp.tools.sim_lifecycle import _duration_to_ns
+        assert _duration_to_ns("1s") == 1_000_000_000
+
+    def test_ps(self):
+        from xcelium_mcp.tools.sim_lifecycle import _duration_to_ns
+        assert _duration_to_ns("500ps") == 0  # 0.5ns truncated to int
+
+    def test_case_insensitive(self):
+        from xcelium_mcp.tools.sim_lifecycle import _duration_to_ns
+        assert _duration_to_ns("10MS") == 10_000_000
+
+
+class TestParseChunkedRunReport:
+    def test_completed(self):
+        from xcelium_mcp.tools.sim_lifecycle import _parse_chunked_run_report
+        raw = "CHUNKED_RUN_REPORT\nsim_time:100ns\nrequested:10000000ns\nstatus:completed\n"
+        result = _parse_chunked_run_report(raw)
+        assert "100ns" in result
+        assert "stopped" not in result
+
+    def test_stopped(self):
+        from xcelium_mcp.tools.sim_lifecycle import _parse_chunked_run_report
+        raw = "CHUNKED_RUN_REPORT\nsim_time:500us\nrequested:10000000ns\nstatus:stopped\nreason:user_stop\n"
+        result = _parse_chunked_run_report(raw)
+        assert "stopped" in result.lower()
+        assert "500us" in result
+
+    def test_error(self):
+        from xcelium_mcp.tools.sim_lifecycle import _parse_chunked_run_report
+        raw = "CHUNKED_RUN_REPORT\nsim_time:0ns\nrequested:10000000ns\nstatus:error\nerror:some error\n"
+        result = _parse_chunked_run_report(raw)
+        assert "ERROR" in result
