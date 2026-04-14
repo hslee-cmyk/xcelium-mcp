@@ -77,6 +77,28 @@ async def _auto_connect_all(bridges: BridgeManager, host: str, timeout: float) -
 _DURATION_RE = re.compile(r'^[0-9]+\s*(ns|us|ms|s|ps|fs)$', re.IGNORECASE | re.ASCII)
 _DURATION_MAX_LEN = 32
 
+
+def _parse_chunked_run_report(raw: str) -> str:
+    """Convert CHUNKED_RUN_REPORT text from Tcl into a human-readable string."""
+    fields: dict[str, str] = {}
+    for line in raw.splitlines():
+        if ":" in line and not line.startswith("CHUNKED_RUN_REPORT"):
+            key, _, val = line.partition(":")
+            fields[key.strip()] = val.strip()
+    status = fields.get("status", "completed")
+    sim_time = fields.get("sim_time", "(unknown)")
+    requested = fields.get("requested", "")
+    error = fields.get("error", "")
+    if status == "stopped":
+        return (
+            f"Simulation stopped by user. "
+            f"Current position: {sim_time} (requested: {requested})"
+        )
+    if status == "error":
+        return f"ERROR: sim_run failed: {error}\nPosition: {sim_time}"
+    return f"Simulation advanced. Current position: {sim_time}"
+
+
 # ---------------------------------------------------------------------------
 # Tool registration
 # ---------------------------------------------------------------------------
@@ -343,13 +365,20 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             return f"ERROR: Unknown action '{action}'. Use 'bridge' or 'shutdown'."
 
     @mcp.tool()
-    async def sim_run(duration: str = "", timeout: float = 600.0) -> str:
+    async def sim_run(
+        duration: str = "",
+        timeout: float = 600.0,
+        chunk: int = 100000,
+    ) -> str:
         """Run the simulation, optionally for a specified duration.
 
         Args:
             duration: Simulation time to run with explicit unit (ns/us/ms/s/ps/fs),
-                e.g. "100ns", "1us", "500ps". Empty = run until breakpoint or end.
+                e.g. "100ns", "1us", "500ms". Empty = run until breakpoint or end.
             timeout: MCP response timeout in seconds (default 600s for gate-level sim support).
+            chunk: Chunk size in ns for interruptible runs (default 100000 = 100µs).
+                Set to 0 for legacy 1-shot mode (no sim_stop support).
+                Smaller values improve stop responsiveness but add overhead.
         """
         duration = duration.strip()
         if duration and len(duration) > _DURATION_MAX_LEN:
@@ -360,17 +389,43 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
                 "Expected format like '100ns', '1us', '500ps'."
             )
         bridge = bridges.xmsim
-        # Single round-trip: run + where combined in Tcl
+        # Convert duration to ns for chunked path; empty duration uses legacy path.
+        # chunk=0 → legacy 1-shot (backward compat).
+        effective_chunk = max(0, int(chunk))
+        if not duration or effective_chunk == 0:
+            effective_chunk = 0
+        payload = f"__RUN_AND_REPORT__ {duration} {effective_chunk}"
         try:
-            where = await bridge.execute(f"__RUN_AND_REPORT__ {duration}", timeout=timeout)
+            result = await bridge.execute(payload, timeout=timeout)
         except asyncio.TimeoutError:
             return (
                 f"ERROR: sim_run exceeded {timeout}s. "
                 "Pass larger timeout= argument or split the run duration."
             )
-        if "RUN_ERROR:" in where:
-            return f"ERROR: {where}"
-        return f"Simulation advanced. Current position: {where}"
+        if result.startswith("CHUNKED_RUN_REPORT"):
+            return _parse_chunked_run_report(result)
+        if "RUN_ERROR:" in result:
+            return f"ERROR: {result}"
+        return f"Simulation advanced. Current position: {result}"
+
+    @mcp.tool()
+    async def sim_stop() -> str:
+        """Request a running sim_run (chunked mode) to stop at the next chunk boundary.
+
+        Writes a sentinel file that the Tcl bridge checks between chunks (~100µs sim time).
+        Returns immediately — check sim_run's response for actual stop confirmation.
+        Not applicable to batch mode simulations.
+        """
+        bridge = bridges.xmsim
+        port = bridge.port
+        user_tmp = await get_user_tmp_dir()
+        sentinel = f"{user_tmp}/stop_{port}"
+        await shell_run(f"touch {sentinel}")
+        return (
+            f"Stop requested (sentinel: {sentinel}). "
+            "sim_run will stop at the next chunk boundary (<= 100µs sim time). "
+            "Check sim_run response status field for confirmation."
+        )
 
     @mcp.tool()
     async def sim_restart() -> str:

@@ -295,8 +295,15 @@ proc ::mcp_bridge::dispatch {channel cmd} {
 
     if {[string match "__RUN_AND_REPORT__*" $cmd]} {
         # __RUN_AND_REPORT__ = 18 chars
-        set duration [string trim [string range $cmd 18 end]]
-        ::mcp_bridge::do_run_and_report $channel $duration
+        # payload: "{duration_ns} {chunk_ns}" or "{duration_ns}" (chunk defaults to 100000)
+        set args [string trim [string range $cmd 18 end]]
+        set parts [split $args " "]
+        set duration [lindex $parts 0]
+        set chunk 100000
+        if {[llength $parts] >= 2} {
+            set chunk [lindex $parts 1]
+        }
+        ::mcp_bridge::do_run_and_report $channel $duration $chunk
         return
     }
 
@@ -927,8 +934,19 @@ proc ::mcp_bridge::do_status {channel} {
     ::mcp_bridge::send_ok $channel "Position: $pos\nScope: $sc"
 }
 
-# __RUN_AND_REPORT__ — run + where in 1 call (was 2 round-trips)
-proc ::mcp_bridge::do_run_and_report {channel duration} {
+# __RUN_AND_REPORT__ — run + where in 1 call.
+# chunk=0 → legacy 1-shot (backward compat).  chunk>0 → chunked loop with
+# sentinel-file stop support and update after each chunk.
+proc ::mcp_bridge::do_run_and_report {channel duration {chunk 100000}} {
+    if {$chunk <= 0} {
+        ::mcp_bridge::legacy_run_and_report $channel $duration
+        return
+    }
+    ::mcp_bridge::chunked_run_and_report $channel $duration $chunk
+}
+
+# Legacy 1-shot path — preserved for chunk=0 opt-out.
+proc ::mcp_bridge::legacy_run_and_report {channel duration} {
     if {$duration ne ""} {
         if {[catch {run $duration} err]} {
             set pos "(run failed: $err)"
@@ -947,6 +965,61 @@ proc ::mcp_bridge::do_run_and_report {channel duration} {
     set pos "(unknown)"
     catch {set pos [where]}
     ::mcp_bridge::send_ok $channel $pos
+}
+
+# Return the server listen port (used for per-port sentinel path).
+proc ::mcp_bridge::get_port {} {
+    variable port
+    return $port
+}
+
+# Chunked run loop: runs duration_ns in chunk_ns steps, checking sentinel file
+# between steps.  Calls update after each chunk so fileevent/accept can fire.
+proc ::mcp_bridge::chunked_run_and_report {channel duration_ns chunk_ns} {
+    variable user_tmp
+    set sentinel "$user_tmp/stop_[::mcp_bridge::get_port]"
+
+    # Remove any leftover sentinel from a previous stop request.
+    catch {file delete -force $sentinel}
+
+    set remaining $duration_ns
+    set status "completed"
+    set reason ""
+    set err_msg ""
+
+    while {$remaining > 0} {
+        if {[file exists $sentinel]} {
+            catch {file delete -force $sentinel}
+            set status "stopped"
+            set reason "user_stop"
+            break
+        }
+        set step [expr {$remaining < $chunk_ns ? $remaining : $chunk_ns}]
+        if {[catch {run ${step}ns} err]} {
+            set status "error"
+            set err_msg $err
+            break
+        }
+        incr remaining -$step
+        update
+    }
+
+    set sim_time "(unknown)"
+    catch {set sim_time [where]}
+    ::mcp_bridge::send_ok $channel \
+        [::mcp_bridge::format_chunked_run_report \
+            $status $reason $err_msg $duration_ns $sim_time]
+}
+
+# Build JSON-style response for chunked run.
+proc ::mcp_bridge::format_chunked_run_report {status reason err_msg requested_ns sim_time} {
+    set body "CHUNKED_RUN_REPORT\n"
+    append body "sim_time:$sim_time\n"
+    append body "requested:${requested_ns}ns\n"
+    append body "status:$status\n"
+    if {$reason ne ""} { append body "reason:$reason\n" }
+    if {$err_msg ne ""} { append body "error:$err_msg\n" }
+    return $body
 }
 
 # __DEPOSIT_AND_VERIFY__ — deposit + value readback in 1 call (was 2 round-trips)
