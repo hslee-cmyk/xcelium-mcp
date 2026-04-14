@@ -1398,7 +1398,7 @@
       "id": "F-100",
       "title": "Remove sim_stop tool + expose xmsim_pid in sim_bridge_run/connect_simulator result",
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "sim_stop tool 제거 (tools/sim_lifecycle.py 함수 삭제, MCP tool 등록 해제)",
         "sim_bridge_run / connect_simulator result에 xmsim_pid: {pid} 줄 추가",
@@ -1407,13 +1407,14 @@
         "PID 조회는 port 기반 ss/netstat 사용 (pgrep 금지)",
         "pytest passes + ruff check passes"
       ],
-      "notes": "sim_stop 기능은 sim_status + ssh kill로 대체 가능. sim_stop 제거. PID는 port 기반 ss/netstat 조회."
+      "notes": "sim_stop 기능은 sim_status + ssh kill로 대체 가능. sim_stop 제거. PID는 port 기반 ss/netstat 조회.",
+      "completed_at": "2026-04-14"
     },
     {
       "id": "F-102",
       "title": "Fix debug_snapshot snapshot mode: signal names parsed incorrectly, relative path value",
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "debug_snapshot mode=snapshot: 신호 값 정상 반환",
         "신호명 파싱: line.strip().split('..')[0] 으로 변경 (점 패딩 제거)",
@@ -1421,7 +1422,8 @@
         "scope에 직접 신호 없을 때 graceful fallback: (no signals in current scope) 반환",
         "pytest passes + ruff check passes"
       ],
-      "notes": "Bug A: split()[0]이 점 패딩 포함 이름 반환. 해결: split(\"..\"[0]. Bug B: describe {scope}.* 미지원. describe *를 유지하고 상대경로 사용."
+      "notes": "Bug A: split()[0]이 점 패딩 포함 이름 반환. 해결: split(\"..\"[0]. Bug B: describe {scope}.* 미지원. describe *를 유지하고 상대경로 사용.",
+      "completed_at": "2026-04-14"
     }
   ]
 }
