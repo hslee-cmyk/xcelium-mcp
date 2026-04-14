@@ -84,10 +84,30 @@ class TclBridge:
 
         effective_timeout = timeout if timeout is not None else self.timeout
         async with self._lock:
-            return await asyncio.wait_for(
-                self._send_and_recv(command),
-                timeout=effective_timeout,
-            )
+            try:
+                return await asyncio.wait_for(
+                    self._send_and_recv(command),
+                    timeout=effective_timeout,
+                )
+            except (asyncio.TimeoutError, ConnectionError, OSError):
+                await self._force_close()
+                raise
+
+    async def _force_close(self) -> None:
+        """Close TCP without __QUIT__.
+
+        Sends FIN so xmsim's on_readable fires EOF → disconnect() runs →
+        client_channel is cleared, making the server socket available for
+        the next connect_simulator call.
+        """
+        if self._writer and not self._writer.is_closing():
+            self._writer.close()
+            try:
+                await asyncio.wait_for(self._writer.wait_closed(), timeout=2.0)
+            except Exception:
+                pass
+        self._reader = None
+        self._writer = None
 
     async def _send_and_recv(self, command: str) -> TclResponse:
         """Low-level send/receive. Must be called under self._lock."""

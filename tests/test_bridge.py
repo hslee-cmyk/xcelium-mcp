@@ -18,6 +18,9 @@ class MockTclServer:
         self._server: asyncio.Server | None = None
         self._handlers: dict[str, str] = {}
         self._error_commands: set[str] = set()
+        self._hang_commands: set[str] = set()  # commands that never respond
+        self._close_commands: set[str] = set()  # commands that close the connection immediately
+        self._stop_event: asyncio.Event | None = None
 
     def set_response(self, command: str, response: str, is_error: bool = False):
         self._handlers[command] = response
@@ -27,6 +30,7 @@ class MockTclServer:
             self._error_commands.discard(command)
 
     async def start(self):
+        self._stop_event = asyncio.Event()
         self._server = await asyncio.start_server(
             self._handle_client, self.host, self.port,
         )
@@ -35,9 +39,11 @@ class MockTclServer:
         self.port = addr[1]
 
     async def stop(self):
+        if self._stop_event:
+            self._stop_event.set()
         if self._server:
             self._server.close()
-            await self._server.wait_closed()
+            # Do not await wait_closed() — it blocks while any client is connected
 
     async def _handle_client(self, reader: asyncio.StreamReader,
                              writer: asyncio.StreamWriter):
@@ -55,6 +61,14 @@ class MockTclServer:
                     self._send(writer, "OK", "pong")
                 elif cmd == "__QUIT__":
                     self._send(writer, "OK", "bye")
+                    break
+                elif cmd in self._hang_commands:
+                    # Block until server stops — cancelled instantly on stop()
+                    if self._stop_event:
+                        await self._stop_event.wait()
+                    break
+                elif cmd in self._close_commands:
+                    # Close without responding — provokes ConnectionError on client
                     break
                 elif cmd in self._handlers:
                     status = "ERROR" if cmd in self._error_commands else "OK"
@@ -165,3 +179,48 @@ class TestConcurrency:
             bridge.execute("cmd2"),
         )
         assert {r1, r2} == {"result1", "result2"}
+
+
+class TestForceClose:
+    async def test_force_close_sets_disconnected(self, bridge: TclBridge):
+        """_force_close should null out _reader/_writer and set connected=False."""
+        assert bridge.connected
+        await bridge._force_close()
+        assert not bridge.connected
+        assert bridge._reader is None
+        assert bridge._writer is None
+
+    async def test_timeout_leaves_disconnected(self, mock_server: MockTclServer):
+        """asyncio.TimeoutError from execute_safe must leave connected=False."""
+        mock_server._hang_commands.add("hang_cmd")
+        b = TclBridge(host="127.0.0.1", port=mock_server.port, timeout=5.0)
+        await b.connect()
+        with pytest.raises(asyncio.TimeoutError):
+            await b.execute_safe("hang_cmd", timeout=0.1)
+        assert not b.connected
+        assert b._reader is None
+        assert b._writer is None
+
+    async def test_reconnect_after_timeout(self, mock_server: MockTclServer):
+        """After a timeout, connect() should succeed (server socket still listening)."""
+        mock_server._hang_commands.add("hang_cmd")
+        b = TclBridge(host="127.0.0.1", port=mock_server.port, timeout=5.0)
+        await b.connect()
+        with pytest.raises(asyncio.TimeoutError):
+            await b.execute_safe("hang_cmd", timeout=0.1)
+        assert not b.connected
+
+        # Reconnect on the same port — server must still accept
+        result = await b.connect()
+        assert result == "pong"
+        assert b.connected
+        await b.disconnect()
+
+    async def test_connection_error_leaves_disconnected(self, mock_server: MockTclServer):
+        """Server closing the connection must leave bridge connected=False."""
+        mock_server._close_commands.add("drop_cmd")
+        b = TclBridge(host="127.0.0.1", port=mock_server.port, timeout=5.0)
+        await b.connect()
+        with pytest.raises((ConnectionError, OSError)):
+            await b.execute("drop_cmd")
+        assert not b.connected
