@@ -389,8 +389,15 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
                 e.g. "100ns", "1us", "500ms". Empty = run until breakpoint or end.
             timeout: MCP response timeout in seconds (default 600s for gate-level sim support).
             chunk: Chunk size in ns for interruptible runs (default 100000 = 100µs).
-                Set to 0 for legacy 1-shot mode (no sim_stop support).
+                Set to 0 for legacy 1-shot mode.
                 Smaller values improve stop responsiveness but add overhead.
+
+        To interrupt a running sim_run, create the sentinel file from an external
+        shell or ssh session (MCP tool calls are serialized — sim_stop cannot run
+        in parallel with sim_run on the same server):
+            touch /tmp/xcelium_mcp_{uid}/stop_{port}
+        e.g. via ssh_bg_run: "touch /tmp/xcelium_mcp_1001/stop_9876"
+        sim_run will stop at the next chunk boundary and return status='stopped'.
         """
         duration = duration.strip()
         if duration and len(duration) > _DURATION_MAX_LEN:
@@ -423,25 +430,6 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         if "RUN_ERROR:" in result:
             return f"ERROR: {result}"
         return f"Simulation advanced. Current position: {result}"
-
-    @mcp.tool()
-    async def sim_stop() -> str:
-        """Request a running sim_run (chunked mode) to stop at the next chunk boundary.
-
-        Writes a sentinel file that the Tcl bridge checks between chunks (~100µs sim time).
-        Returns immediately — check sim_run's response for actual stop confirmation.
-        Not applicable to batch mode simulations.
-        """
-        bridge = bridges.xmsim
-        port = bridge.port
-        user_tmp = await get_user_tmp_dir()
-        sentinel = f"{user_tmp}/stop_{port}"
-        await shell_run(f"touch {sentinel}")
-        return (
-            f"Stop requested (sentinel: {sentinel}). "
-            "sim_run will stop at the next chunk boundary (<= 100µs sim time). "
-            "Check sim_run response status field for confirmation."
-        )
 
     @mcp.tool()
     async def sim_restart() -> str:

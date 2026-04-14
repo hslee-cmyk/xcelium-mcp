@@ -1495,6 +1495,19 @@
       ],
       "notes": "## Root Cause (검증됨 2026-04-14)\n\nF-106 구현 후 검증에서 발견. xmsim 로그:\n```\nexpected integer but got \"10ms\"\n    while executing\n\"incr remaining -$step\"\n    (procedure \"::mcp_bridge::chunked_run_and_report\" line 23)\n```\n\nPython `sim_run`이 duration을 ns 정수로 변환하지 않고 '10ms' 문자열 그대로 전달.\nTCL `chunked_run_and_report`는 `set remaining $duration_ns` 후 `incr remaining -$step`으로\ninteger 연산을 하므로 문자열이 오면 에러. 결과: send_ok 미호출 → Python 30s timeout.\n\n## Fix (sim_lifecycle.py)\n\n```python\ndef _duration_to_ns(duration: str) -> int:\n    \"\"\"Parse duration string (e.g. '10ms', '100us') to integer nanoseconds.\"\"\"\n    units = {\"fs\": 1e-6, \"ps\": 1e-3, \"ns\": 1, \"us\": 1e3, \"ms\": 1e6, \"s\": 1e9}\n    for unit in sorted(units, key=len, reverse=True):\n        if duration.endswith(unit):\n            return int(float(duration[:-len(unit)]) * units[unit])\n    raise ValueError(f\"Cannot parse duration: {duration}\")\n\n# sim_run 내부 chunked path:\nif not duration or effective_chunk == 0:\n    effective_chunk = 0\n    payload = f\"__RUN_AND_REPORT__ {duration} {effective_chunk}\"\nelse:\n    payload = f\"__RUN_AND_REPORT__ {_duration_to_ns(duration)} {effective_chunk}\"\n```\n\n- `effective_chunk`는 이미 integer ns (chunk 파라미터 타입 int) → 변환 불필요\n- empty duration은 legacy path(chunk=0)로 처리되므로 _duration_to_ns 호출 안 함\n- TCL `chunked_run_and_report`는 수정 불필요",
       "completed_at": "2026-04-14"
+    },
+    {
+      "id": "F-108",
+      "title": "Remove sim_stop MCP tool: 같은 MCP 서버에서 sim_run과 병렬 호출 불가",
+      "priority": 1,
+      "passes": true,
+      "acceptanceCriteria": [
+        "sim_stop MCP tool 제거 (server.py 등록 해제, sim_lifecycle.py 함수 삭제)",
+        "sim_run tool description에 수동 중단 방법 명시 (ssh touch sentinel 경로)",
+        "pytest regression 전체 통과"
+      ],
+      "notes": "## Root Cause (검증됨 2026-04-14)\n\n같은 xcelium-mcp MCP 서버의 두 tool을 병렬 호출하면 서버가 큐잉 처리함.\nsim_run이 블로킹 중일 때 sim_stop을 병렬 호출해도 sim_run 완료 후에야 실행됨\n→ sentinel이 run 종료 후 생성 → 중단 효과 없음.\n\n검증 결과:\n- sim_run + sim_stop 병렬 MCP 호출 → sim_run 'Simulation advanced' (정상 완료)\n- sim_run + ssh_bg_run touch sentinel → sim_run 'Simulation stopped by user' ✓\n\n## Fix\n\n### 제거 대상\n- `src/xcelium_mcp/tools/sim_lifecycle.py`: `sim_stop()` 함수 삭제\n- `src/xcelium_mcp/server.py` (또는 tool registry): `sim_stop` 등록 해제\n\n### sim_run tool description 업데이트\n```\nTo interrupt a running sim_run, create the sentinel file from an external\nshell or ssh session:\n  touch /tmp/xcelium_mcp_{uid}/stop_{port}\ne.g.: touch /tmp/xcelium_mcp_1001/stop_9876\nsim_run will stop at the next chunk boundary and return status='stopped'.\n```\n\n### 대안 워크플로우 (사용자)\nssh_bg_run으로 sentinel 생성:\n  mcp__ssh__ssh_bg_run: 'sleep N && touch /tmp/xcelium_mcp_{uid}/stop_{port}'",
+      "completed_at": "2026-04-14"
     }
   ]
 }
