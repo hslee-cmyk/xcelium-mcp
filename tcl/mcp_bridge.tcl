@@ -135,33 +135,15 @@ proc ::mcp_bridge::init {} {
 proc ::mcp_bridge::accept {channel addr port} {
     variable client_channel
 
-    # Only allow one client at a time — but clean up stale CLOSE_WAIT connections first.
-    # TCL eof is lazy: it only returns true after a read has returned EOF.
-    # -buffering none: line-buffering blocks non-blocking read on partial data
-    #   (Recv-Q=1 with no \n returns 0 bytes under -buffering line → eof stays false).
-    # non-blocking read drains Recv-Q so the FIN is exposed and eof becomes true.
-    # Channel error flag (e.g. EPIPE after SIGINT) makes fconfigure/read raise a
-    # TCL error — treat that as dead too.
+    # Single-client bridge: always close any previous connection before accepting
+    # a new one.  Attempting to detect CLOSE_WAIT via TCL eof/read proved
+    # unreliable across v1-v4: after SIGINT the channel's EPIPE error flag makes
+    # fconfigure and read unpredictable regardless of -blocking/-buffering settings.
+    # Unconditional close is safe here — only one client (Claude) ever connects.
     if {$client_channel ne ""} {
-        set is_dead 0
-        if {[catch {
-            fconfigure $client_channel -blocking 0 -buffering none
-            read $client_channel 4096
-            set is_dead [eof $client_channel]
-            if {!$is_dead} { fconfigure $client_channel -blocking 1 -buffering line }
-        } _err]} {
-            set is_dead 1
-        }
-        if {$is_dead} {
-            catch {close $client_channel}
-            set client_channel ""
-            puts "MCP Bridge: stale client_channel reclaimed"
-            # fall-through to accept the new connection below
-        } else {
-            puts $channel "ERROR 30\nAnother client is connected\n<<<END>>>"
-            close $channel
-            return
-        }
+        puts "MCP Bridge: closing previous client_channel (reconnect)"
+        catch {close $client_channel}
+        set client_channel ""
     }
 
     set client_channel $channel
