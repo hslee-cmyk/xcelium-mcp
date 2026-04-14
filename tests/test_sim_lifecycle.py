@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -222,3 +222,115 @@ async def test_sim_run_timeout_returns_actionable_error() -> None:
     result = await mock_mcp.tools["sim_run"](duration="100ns", timeout=5.0)
     assert result.startswith("ERROR"), f"Expected ERROR prefix: {result!r}"
     assert "timeout" in result.lower() or "5.0" in result
+
+
+# ---------------------------------------------------------------------------
+# F-099: sim_disconnect shutdown target=all — independent per-bridge shutdown
+# ---------------------------------------------------------------------------
+
+
+def _make_connected_bridge(port: int = 9876) -> MagicMock:
+    """Return a mock TclBridge that appears connected."""
+    bridge = MagicMock()
+    bridge.connected = True
+    bridge.port = port
+    resp = MagicMock()
+    resp.body = "ok"
+    bridge.execute_safe = AsyncMock(return_value=resp)
+    return bridge
+
+
+@pytest.mark.asyncio
+async def test_shutdown_all_only_simvision_connected() -> None:
+    """target=all, xmsim not connected, simvision connected → simvision shutdown, no error."""
+    from xcelium_mcp.tools.sim_lifecycle import register
+
+    mock_mcp = _MockMCP()
+    sv_bridge = _make_connected_bridge(port=9877)
+    mock_bridges = MagicMock()
+    mock_bridges.xmsim_raw = None          # xmsim not connected
+    mock_bridges.simvision_raw = sv_bridge
+
+    with patch("xcelium_mcp.tools.sim_lifecycle.get_user_tmp_dir",
+               new_callable=AsyncMock, return_value="/tmp/mcp_test"), \
+         patch("xcelium_mcp.tools.sim_lifecycle.shell_run",
+               new_callable=AsyncMock, return_value=""):
+        register(mock_mcp, mock_bridges)
+        result = await mock_mcp.tools["sim_disconnect"](action="shutdown", target="all")
+
+    assert "ERROR" not in result, f"Should not error when simvision is connected: {result!r}"
+    assert "simvision: shutdown ok" in result
+    assert "xmsim: not connected (skipped)" in result
+    mock_bridges.set_simvision.assert_called_once_with(None)
+    mock_bridges.set_xmsim.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_all_only_xmsim_connected() -> None:
+    """target=all, xmsim connected, simvision not connected → xmsim shutdown only."""
+    from xcelium_mcp.tools.sim_lifecycle import register
+
+    mock_mcp = _MockMCP()
+    xm_bridge = _make_connected_bridge(port=9876)
+    mock_bridges = MagicMock()
+    mock_bridges.xmsim_raw = xm_bridge
+    mock_bridges.simvision_raw = None      # simvision not connected
+
+    with patch("xcelium_mcp.tools.sim_lifecycle.get_user_tmp_dir",
+               new_callable=AsyncMock, return_value="/tmp/mcp_test"), \
+         patch("xcelium_mcp.tools.sim_lifecycle.shell_run",
+               new_callable=AsyncMock, return_value=""):
+        register(mock_mcp, mock_bridges)
+        result = await mock_mcp.tools["sim_disconnect"](action="shutdown", target="all")
+
+    assert "ERROR" not in result, f"Should not error when xmsim is connected: {result!r}"
+    assert "xmsim: shutdown ok" in result
+    assert "simvision: not connected (skipped)" in result
+    mock_bridges.set_xmsim.assert_called_once_with(None)
+    mock_bridges.set_simvision.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_all_both_disconnected_returns_error() -> None:
+    """target=all, both not connected → ERROR."""
+    from xcelium_mcp.tools.sim_lifecycle import register
+
+    mock_mcp = _MockMCP()
+    mock_bridges = MagicMock()
+    mock_bridges.xmsim_raw = None
+    mock_bridges.simvision_raw = None
+
+    with patch("xcelium_mcp.tools.sim_lifecycle.get_user_tmp_dir",
+               new_callable=AsyncMock, return_value="/tmp/mcp_test"), \
+         patch("xcelium_mcp.tools.sim_lifecycle.shell_run",
+               new_callable=AsyncMock, return_value=""):
+        register(mock_mcp, mock_bridges)
+        result = await mock_mcp.tools["sim_disconnect"](action="shutdown", target="all")
+
+    assert result.startswith("ERROR"), f"Expected ERROR when both disconnected: {result!r}"
+
+
+@pytest.mark.asyncio
+async def test_shutdown_all_both_connected() -> None:
+    """target=all, both connected → both shutdown, no error."""
+    from xcelium_mcp.tools.sim_lifecycle import register
+
+    mock_mcp = _MockMCP()
+    xm_bridge = _make_connected_bridge(port=9876)
+    sv_bridge = _make_connected_bridge(port=9877)
+    mock_bridges = MagicMock()
+    mock_bridges.xmsim_raw = xm_bridge
+    mock_bridges.simvision_raw = sv_bridge
+
+    with patch("xcelium_mcp.tools.sim_lifecycle.get_user_tmp_dir",
+               new_callable=AsyncMock, return_value="/tmp/mcp_test"), \
+         patch("xcelium_mcp.tools.sim_lifecycle.shell_run",
+               new_callable=AsyncMock, return_value=""):
+        register(mock_mcp, mock_bridges)
+        result = await mock_mcp.tools["sim_disconnect"](action="shutdown", target="all")
+
+    assert "ERROR" not in result, f"Should not error when both connected: {result!r}"
+    assert "xmsim: shutdown ok" in result
+    assert "simvision: shutdown ok" in result
+    mock_bridges.set_xmsim.assert_called_once_with(None)
+    mock_bridges.set_simvision.assert_called_once_with(None)

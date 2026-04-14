@@ -277,9 +277,35 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             return "\n".join(results) if results else f"No {target} bridge connected."
 
         elif action == "shutdown":
-            shutdown_target = target if target != "all" else "xmsim"
             user_tmp = await get_user_tmp_dir()
-            if shutdown_target == "simvision":
+
+            if target == "all":
+                # Each bridge is checked independently; only error if both disconnected.
+                results = []
+                for btype, raw, set_fn in (
+                    ("xmsim", bridges.xmsim_raw, bridges.set_xmsim),
+                    ("simvision", bridges.simvision_raw, bridges.set_simvision),
+                ):
+                    if raw is None or not raw.connected:
+                        results.append(f"{btype}: not connected (skipped)")
+                        continue
+                    port = raw.port if hasattr(raw, 'port') else 0
+                    status = f"{btype}: shutdown ok (connection closed)"
+                    try:
+                        resp = await raw.execute_safe("__SHUTDOWN__")
+                        status = f"{btype}: shutdown ok ({resp.body.strip()})"
+                    except (ConnectionError, asyncio.TimeoutError):
+                        pass
+                    finally:
+                        set_fn(None)
+                        if port:
+                            await shell_run(f"rm -f {user_tmp}/bridge_ready_{port}")
+                    results.append(status)
+                if all("(skipped)" in r for r in results):
+                    return "ERROR: No simulator connected."
+                return "\n".join(results)
+
+            elif target == "simvision":
                 bridge = bridges.simvision
                 port = bridge.port if hasattr(bridge, 'port') else 0
                 try:
@@ -291,6 +317,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
                     bridges.set_simvision(None)
                     if port:
                         await shell_run(f"rm -f {user_tmp}/bridge_ready_{port}")
+
             else:
                 bridge = bridges.xmsim
                 port = bridge.port if hasattr(bridge, 'port') else 0
