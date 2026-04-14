@@ -313,6 +313,12 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             lines = sig_list.strip().splitlines()[:50]
             if lines:
                 for line in lines:
+                    # Skip bit-select expansion lines (indented, no dot-padding) and named
+                    # event lines (value command unsupported) before any stripping.
+                    #   w_bus[4] (wire/tri) = St0  ← leading space → skip (parent already read)
+                    #   sim_run........ named event ← skip (value not supported)
+                    if not line or line[0] == ' ' or 'named event' in line:
+                        continue
                     # xmsim describe output uses dot-padding between name and type:
                     #   r_rst..........variable reg = 1'h0
                     # split('..')[0] strips the padding to get the clean signal name.

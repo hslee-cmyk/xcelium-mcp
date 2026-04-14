@@ -514,3 +514,89 @@ async def test_debug_snapshot_graceful_fallback_on_pnoobj() -> None:
     assert "no signals in current scope" in report.lower(), (
         f"Expected graceful PNOOBJ message, got: {report!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# F-103: skip bit-select expansion lines and named event lines in describe output
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_debug_snapshot_skips_bit_select_expansion_lines() -> None:
+    """Lines starting with a space (bit-select children) are skipped — parent was already read."""
+    from unittest.mock import AsyncMock, MagicMock
+    from xcelium_mcp.tools.debug import register
+
+    mock_mcp = _MockMCP()
+    mock_bridges = MagicMock()
+
+    call_log: list[str] = []
+
+    async def _fake_execute(cmd, **kwargs):
+        call_log.append(cmd)
+        if cmd == "__DEBUG_SNAPSHOT__":
+            return "POSITION:Time: 0 NS\nSCOPE:top\nSTOPS:"
+        if cmd.startswith("describe"):
+            # parent line (dot-padded) + bit-select child (leading space, no dots)
+            return (
+                "w_bus..........net logic [1:0]\n"
+                "   w_bus[1] (wire/tri) = St0\n"
+                "   w_bus[0] (wire/tri) = St0\n"
+                "r_en...........variable reg = 1'h1"
+            )
+        if cmd.startswith("value"):
+            return "1'h1"
+        raise RuntimeError(f"unexpected: {cmd}")
+
+    mock_bridges.get_bridge.return_value.execute = AsyncMock(side_effect=_fake_execute)
+    mock_bridges.get_bridge.return_value.screenshot = AsyncMock(side_effect=RuntimeError("no ss"))
+
+    register(mock_mcp, mock_bridges)
+    result = await mock_mcp.tools["debug_snapshot"](mode="snapshot", target="auto")
+
+    report = result[0] if isinstance(result, list) else result
+    # Child lines should not produce value calls and must not appear as signals
+    value_calls = [c for c in call_log if c.startswith("value")]
+    assert all("w_bus[" not in c for c in value_calls), (
+        f"bit-select child lines must not trigger value calls: {value_calls}"
+    )
+    assert "could not read" not in report, f"No 'could not read' expected: {report!r}"
+
+
+@pytest.mark.asyncio
+async def test_debug_snapshot_skips_named_event_lines() -> None:
+    """Lines containing 'named event' are skipped — value command unsupported for this type."""
+    from unittest.mock import AsyncMock, MagicMock
+    from xcelium_mcp.tools.debug import register
+
+    mock_mcp = _MockMCP()
+    mock_bridges = MagicMock()
+
+    async def _fake_execute(cmd, **kwargs):
+        if cmd == "__DEBUG_SNAPSHOT__":
+            return "POSITION:Time: 0 NS\nSCOPE:top\nSTOPS:"
+        if cmd.startswith("describe"):
+            return (
+                "sim_run........................ named event\n"
+                "vector_start................... named event\n"
+                "r_clk..................variable reg = 1'h0"
+            )
+        if cmd.startswith("value"):
+            return "1'h0"
+        raise RuntimeError(f"unexpected: {cmd}")
+
+    mock_bridges.get_bridge.return_value.execute = AsyncMock(side_effect=_fake_execute)
+    mock_bridges.get_bridge.return_value.screenshot = AsyncMock(side_effect=RuntimeError("no ss"))
+
+    register(mock_mcp, mock_bridges)
+    result = await mock_mcp.tools["debug_snapshot"](mode="snapshot", target="auto")
+
+    report = result[0] if isinstance(result, list) else result
+    # Named events must not appear as signal value entries (format: "- `name` = `val`").
+    # Note: `sim_run` also appears in the hardcoded "Suggested Next Steps" prose — use "= " to
+    # distinguish signal entries from prose references.
+    assert "- `sim_run` =" not in report, f"named event 'sim_run' must not be a signal entry: {report!r}"
+    assert "- `vector_start` =" not in report, f"named event must not be a signal entry: {report!r}"
+    assert "could not read" not in report, f"No 'could not read' expected: {report!r}"
+    # The valid signal r_clk should still appear
+    assert "r_clk" in report, f"Valid signal r_clk should appear: {report!r}"
