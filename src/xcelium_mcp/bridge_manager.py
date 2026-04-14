@@ -42,6 +42,7 @@ class BridgeManager:
     def __init__(self) -> None:
         self._xmsim: TclBridge | None = None
         self._simvision: TclBridge | None = None
+        self.xmsim_pid: int | None = None
 
     @property
     def xmsim(self) -> TclBridge:
@@ -77,6 +78,8 @@ class BridgeManager:
 
     def set_xmsim(self, bridge: TclBridge | None) -> None:
         self._xmsim = bridge
+        if bridge is None:
+            self.xmsim_pid = None
 
     def set_simvision(self, bridge: TclBridge | None) -> None:
         self._simvision = bridge

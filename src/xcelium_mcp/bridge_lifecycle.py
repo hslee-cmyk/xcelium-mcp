@@ -249,6 +249,9 @@ async def _start_bridge(
             ping = await new_bridge.connect()
             if bridges is not None:
                 bridges.set_xmsim(new_bridge)
+                pid_str = (await shell_run("pgrep -o xmsim || true", timeout=5)).strip()
+                if pid_str.isdigit():
+                    bridges.xmsim_pid = int(pid_str)
             return (
                 f"Simulation started and connected (bridge mode, {sim_mode}).\n"
                 f"  test: {test_name}\n"
@@ -273,6 +276,9 @@ async def _start_bridge(
                 ping = await new_bridge.connect()
                 if bridges is not None:
                     bridges.set_xmsim(new_bridge)
+                    pid_str = (await shell_run("pgrep -o xmsim || true", timeout=5)).strip()
+                    if pid_str.isdigit():
+                        bridges.xmsim_pid = int(pid_str)
                 return (
                     f"Simulation started and connected (bridge mode, {sim_mode}).\n"
                     f"  test: {test_name}\n"
