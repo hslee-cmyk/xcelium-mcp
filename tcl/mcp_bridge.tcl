@@ -137,16 +137,18 @@ proc ::mcp_bridge::accept {channel addr port} {
 
     # Only allow one client at a time — but clean up stale CLOSE_WAIT connections first.
     # TCL eof is lazy: it only returns true after a read has returned EOF.
+    # -buffering none: line-buffering blocks non-blocking read on partial data
+    #   (Recv-Q=1 with no \n returns 0 bytes under -buffering line → eof stays false).
     # non-blocking read drains Recv-Q so the FIN is exposed and eof becomes true.
-    # If the channel has an error flag (e.g. EPIPE after SIGINT), fconfigure/read
-    # raises a TCL error — treat that as dead too.
+    # Channel error flag (e.g. EPIPE after SIGINT) makes fconfigure/read raise a
+    # TCL error — treat that as dead too.
     if {$client_channel ne ""} {
         set is_dead 0
         if {[catch {
-            fconfigure $client_channel -blocking 0
+            fconfigure $client_channel -blocking 0 -buffering none
             read $client_channel 4096
             set is_dead [eof $client_channel]
-            if {!$is_dead} { fconfigure $client_channel -blocking 1 }
+            if {!$is_dead} { fconfigure $client_channel -blocking 1 -buffering line }
         } _err]} {
             set is_dead 1
         }
