@@ -1,7 +1,6 @@
 """Unit tests for sim_lifecycle tool behaviors — no real MCP or bridge needed."""
 from __future__ import annotations
 
-import asyncio
 import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -82,24 +81,6 @@ def test_duration_re_matches_with_leading_trailing_space() -> None:
 # ---------------------------------------------------------------------------
 # F-081: sim_stop passes timeout to bridge.execute
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_sim_stop_already_stopped_uses_status_command() -> None:
-    """sim_stop uses __STATUS__ (not bare 'stop') when sim is paused."""
-    from xcelium_mcp.tools.sim_lifecycle import register
-
-    mock_mcp = _MockMCP()
-    mock_bridges = MagicMock()
-    mock_bridges.xmsim.execute = AsyncMock(return_value="Time: 0 NS, scope: /tb")
-    mock_bridges.xmsim_pid = 1234
-
-    register(mock_mcp, mock_bridges)
-
-    result = await mock_mcp.tools["sim_stop"](timeout=99.0)
-    assert "already stopped" in result.lower()
-    # Verify __STATUS__ was called, not bare 'stop'
-    mock_bridges.xmsim.execute.assert_called_with("__STATUS__")
 
 
 # ---------------------------------------------------------------------------
@@ -341,88 +322,29 @@ async def test_shutdown_all_both_connected() -> None:
 
 
 # ---------------------------------------------------------------------------
-# F-100: sim_stop — correct command + SIGINT-based interrupt for running sim
+# F-100: connect_simulator exposes xmsim_pid in result
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_sim_stop_already_stopped_returns_position() -> None:
-    """sim_stop returns 'already stopped' when __STATUS__ responds immediately (sim paused)."""
+async def test_connect_simulator_xmsim_result_contains_pid() -> None:
+    """connect_simulator result includes xmsim_pid line when xmsim is connected."""
     from xcelium_mcp.tools.sim_lifecycle import register
 
     mock_mcp = _MockMCP()
     mock_bridges = MagicMock()
-    mock_bridges.xmsim.execute = AsyncMock(return_value="Time: 100 NS, scope: /tb/dut")
-    mock_bridges.xmsim_pid = 1234
+    mock_bridges.xmsim_pid = 12345
 
-    register(mock_mcp, mock_bridges)
-    result = await mock_mcp.tools["sim_stop"]()
+    mock_bridge_inst = MagicMock()
+    mock_bridge_inst.connect = AsyncMock(return_value="pong")
+    mock_bridge_inst.execute = AsyncMock(return_value="Time: 0 NS")
 
-    assert "already stopped" in result.lower(), f"Expected 'already stopped': {result!r}"
-    assert "Time: 100 NS" in result
-
-
-@pytest.mark.asyncio
-async def test_sim_stop_running_sends_sigint_and_returns_position() -> None:
-    """sim_stop sends SIGINT when first __STATUS__ times out, then returns position."""
-    from xcelium_mcp.tools.sim_lifecycle import register
-
-    mock_mcp = _MockMCP()
-    mock_bridges = MagicMock()
-    # First call: sim is running (TimeoutError); second call: after SIGINT (success)
-    mock_bridges.xmsim.execute = AsyncMock(
-        side_effect=[asyncio.TimeoutError(), "Time: 200 NS, scope: /tb/dut"]
-    )
-    mock_bridges.xmsim_pid = 5678
-
-    with patch("xcelium_mcp.tools.sim_lifecycle.shell_run",
-               new_callable=AsyncMock, return_value="") as mock_shell:
+    with patch("xcelium_mcp.tools.sim_lifecycle.TclBridge", return_value=mock_bridge_inst), \
+         patch("xcelium_mcp.tools.sim_lifecycle._get_pid_for_port",
+               new_callable=AsyncMock, return_value=12345):
         register(mock_mcp, mock_bridges)
-        result = await mock_mcp.tools["sim_stop"]()
+        result = await mock_mcp.tools["connect_simulator"](
+            host="localhost", port=9876, target="xmsim"
+        )
 
-    assert "ERROR" not in result, f"Should not error after successful SIGINT: {result!r}"
-    assert "stopped" in result.lower()
-    assert "200 NS" in result
-    # Verify SIGINT was sent to the correct PID
-    sigint_calls = [c for c in mock_shell.call_args_list if "kill" in str(c)]
-    assert sigint_calls, "Expected kill command for SIGINT"
-    assert "5678" in str(sigint_calls[0])
-
-
-@pytest.mark.asyncio
-async def test_sim_stop_running_no_pid_returns_error() -> None:
-    """sim_stop returns ERROR when sim is running but xmsim_pid is not known."""
-    from xcelium_mcp.tools.sim_lifecycle import register
-
-    mock_mcp = _MockMCP()
-    mock_bridges = MagicMock()
-    mock_bridges.xmsim.execute = AsyncMock(side_effect=asyncio.TimeoutError())
-    mock_bridges.xmsim_pid = None
-
-    register(mock_mcp, mock_bridges)
-    result = await mock_mcp.tools["sim_stop"]()
-
-    assert result.startswith("ERROR"), f"Expected ERROR when PID unknown: {result!r}"
-    assert "PID" in result or "pid" in result.lower()
-
-
-@pytest.mark.asyncio
-async def test_sim_stop_sigint_unresponsive_returns_error() -> None:
-    """sim_stop returns ERROR when sim remains unresponsive after SIGINT."""
-    from xcelium_mcp.tools.sim_lifecycle import register
-
-    mock_mcp = _MockMCP()
-    mock_bridges = MagicMock()
-    # Both __STATUS__ calls time out (sim never responds)
-    mock_bridges.xmsim.execute = AsyncMock(
-        side_effect=[asyncio.TimeoutError(), asyncio.TimeoutError()]
-    )
-    mock_bridges.xmsim_pid = 9999
-
-    with patch("xcelium_mcp.tools.sim_lifecycle.shell_run",
-               new_callable=AsyncMock, return_value=""):
-        register(mock_mcp, mock_bridges)
-        result = await mock_mcp.tools["sim_stop"](timeout=30.0)
-
-    assert result.startswith("ERROR"), f"Expected ERROR after SIGINT timeout: {result!r}"
-    assert "30" in result or "unresponsive" in result.lower()
+    assert "xmsim_pid: 12345" in result, f"Expected xmsim_pid in result: {result!r}"

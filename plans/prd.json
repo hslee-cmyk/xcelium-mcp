@@ -1378,6 +1378,50 @@
       ],
       "notes": "root cause: F-097 fix의 _LIST_LISTENERS = '(command -v ss >/dev/null 2>&1 && ...)'. shell_run()이 L98에서 '2>&1' 포함 명령을 하드 차단 — tcsh 호환성 규칙. 수정 방향: (A) 'command -v ss >& /dev/null'로 교체 — >& /dev/null는 shell_run() 검사를 통과하고 bash/tcsh 양쪽에서 동작. (B) 가장 단순: _LIST_LISTENERS 없애고 /proc/net/tcp 파싱 — hex(port).upper().zfill(4)로 LISTEN 상태(0A) 직접 확인, 외부 명령 의존성 0. 추천: (A)로 최소 변경. '>/dev/null 2>&1' → '>& /dev/null' 한 줄 수정으로 해결.",
       "completed_at": "2026-04-13"
+    },
+    {
+      "id": "F-099",
+      "title": "sim_disconnect shutdown target=all: xmsim 미연결 시 즉시 에러 반환",
+      "priority": 2,
+      "passes": true,
+      "acceptanceCriteria": [
+        "sim_disconnect shutdown target=all: xmsim/simvision 각각 독립 확인, 연결된 것만 shutdown",
+        "xmsim 미연결 + simvision 연결 시 target=all -> simvision만 정상 종료, 에러 없음",
+        "xmsim 연결 + simvision 미연결 시 target=all -> xmsim만 정상 종료",
+        "둘 다 미연결 시에만 에러 반환",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "root cause: shutdown target=all 구현이 xmsim 미연결이면 즉시 에러 반환. simvision 정리 안 됨. 수정: xmsim_raw/simvision_raw 각각 독립 확인.",
+      "completed_at": "2026-04-14"
+    },
+    {
+      "id": "F-100",
+      "title": "Remove sim_stop tool + expose xmsim_pid in sim_bridge_run/connect_simulator result",
+      "priority": 2,
+      "passes": false,
+      "acceptanceCriteria": [
+        "sim_stop tool 제거 (tools/sim_lifecycle.py 함수 삭제, MCP tool 등록 해제)",
+        "sim_bridge_run / connect_simulator result에 xmsim_pid: {pid} 줄 추가",
+        "BridgeManager.xmsim_pid 필드 유지, set_xmsim(None) 시 클리어",
+        "워크플로우 대체: 정지 확인 -> sim_status(), 실행 중 중단 -> ssh kill -s INT + sim_status()",
+        "PID 조회는 port 기반 ss/netstat 사용 (pgrep 금지)",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "sim_stop 기능은 sim_status + ssh kill로 대체 가능. sim_stop 제거. PID는 port 기반 ss/netstat 조회."
+    },
+    {
+      "id": "F-102",
+      "title": "Fix debug_snapshot snapshot mode: signal names parsed incorrectly, relative path value",
+      "priority": 3,
+      "passes": false,
+      "acceptanceCriteria": [
+        "debug_snapshot mode=snapshot: 신호 값 정상 반환",
+        "신호명 파싱: line.strip().split('..')[0] 으로 변경 (점 패딩 제거)",
+        "describe *는 현재 scope 유지 (상대경로), value도 상대경로 사용",
+        "scope에 직접 신호 없을 때 graceful fallback: (no signals in current scope) 반환",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "Bug A: split()[0]이 점 패딩 포함 이름 반환. 해결: split(\"..\"[0]. Bug B: describe {scope}.* 미지원. describe *를 유지하고 상대경로 사용."
     }
   ]
 }

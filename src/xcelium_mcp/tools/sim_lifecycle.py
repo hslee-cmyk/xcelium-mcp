@@ -8,7 +8,7 @@ from datetime import datetime
 
 from mcp.server.fastmcp import FastMCP
 
-from xcelium_mcp.bridge_lifecycle import start_bridge_simulation
+from xcelium_mcp.bridge_lifecycle import _get_pid_for_port, start_bridge_simulation
 from xcelium_mcp.bridge_manager import BridgeManager, scan_ready_files
 from xcelium_mcp.discovery import resolve_sim_dir, run_full_discovery
 from xcelium_mcp.registry import config_action, load_sim_config
@@ -57,9 +57,7 @@ async def _auto_connect_all(bridges: BridgeManager, host: str, timeout: float) -
                 bridges.set_simvision(bridge)
             else:
                 bridges.set_xmsim(bridge)
-                pid_str = (await shell_run("pgrep -o xmsim || true", timeout=5)).strip()
-                if pid_str.isdigit():
-                    bridges.xmsim_pid = int(pid_str)
+                bridges.xmsim_pid = await _get_pid_for_port(p)
             results.append(f"  {btype}:{p} (ping={ping})")
         except BRIDGE_ERRORS as e:
             results.append(f"  {btype}:{p} FAILED ({e})")
@@ -245,15 +243,19 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             bridges.set_simvision(bridge)
         else:
             bridges.set_xmsim(bridge)
-            pid_str = (await shell_run("pgrep -o xmsim || true", timeout=5)).strip()
-            if pid_str.isdigit():
-                bridges.xmsim_pid = int(pid_str)
+            bridges.xmsim_pid = await _get_pid_for_port(port)
 
         try:
             where = await bridge.execute("where")
         except TclError:
             where = "(unknown)"
 
+        if target != "simvision" and bridges.xmsim_pid:
+            return (
+                f"Connected to {target} at {host}:{port} (ping={ping})\n"
+                f"  xmsim_pid: {bridges.xmsim_pid}\n"
+                f"Current position: {where}"
+            )
         return f"Connected to {target} at {host}:{port} (ping={ping})\nCurrent position: {where}"
 
     @mcp.tool()
@@ -369,47 +371,6 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         if "RUN_ERROR:" in where:
             return f"ERROR: {where}"
         return f"Simulation advanced. Current position: {where}"
-
-    @mcp.tool()
-    async def sim_stop(timeout: float = 30.0) -> str:
-        """Stop a running simulation.
-
-        If the simulation is already paused, returns its current position (no-op).
-        If the simulation is actively running (bridge lock held), sends SIGINT to
-        the xmsim process to interrupt the blocking run command.
-
-        Args:
-            timeout: Seconds to wait for the simulator to stop after SIGINT (default 30s).
-        """
-        bridge = bridges.xmsim
-
-        # A: fast path — if sim is already paused the lock is free and __STATUS__
-        #    returns immediately; outer wait_for fires only when lock is held.
-        try:
-            pos = await asyncio.wait_for(bridge.execute("__STATUS__"), timeout=2.0)
-            return f"Simulation is already stopped at {pos}."
-        except asyncio.TimeoutError:
-            pass  # bridge lock held → sim is actively running
-
-        # B: sim is running — interrupt via OS signal so mcp_bridge.tcl can respond
-        pid = bridges.xmsim_pid
-        if not pid:
-            return (
-                "ERROR: Cannot stop — xmsim PID unknown. "
-                "Reconnect via connect_simulator, or kill xmsim manually."
-            )
-        await shell_run(f"kill -s INT {pid} || true", timeout=5)
-
-        # SIGINT causes xmsim to interrupt run; mcp_bridge.tcl returns the
-        # __RUN_AND_REPORT__ response → lock released → our __STATUS__ proceeds.
-        try:
-            pos = await asyncio.wait_for(bridge.execute("__STATUS__"), timeout=timeout)
-            return f"Simulation stopped. Current position: {pos}"
-        except asyncio.TimeoutError:
-            return (
-                f"ERROR: sim_stop exceeded {timeout}s after SIGINT. "
-                "Simulator may be unresponsive."
-            )
 
     @mcp.tool()
     async def sim_restart() -> str:

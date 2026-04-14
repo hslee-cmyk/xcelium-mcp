@@ -34,6 +34,27 @@ _LIST_LISTENERS = (
 )
 
 
+async def _get_pid_for_port(port: int) -> int | None:
+    """Return PID of process listening on *port* using ss/netstat (port-based, reliable).
+
+    More reliable than pgrep when multiple xmsim instances run concurrently.
+    Returns None when the port is not found or PID cannot be parsed.
+    """
+    occupant = await shell_run(
+        f"{_LIST_LISTENERS} | grep ':{port}\\b'"
+        f" | grep -oE 'pid=[0-9]+|[0-9]+/[^[:space:]]+' | head -1 || true",
+        timeout=5,
+    )
+    raw = occupant.strip()
+    if "pid=" in raw:
+        pid_str = raw.split("=")[-1]
+    elif "/" in raw:
+        pid_str = raw.split("/")[0]
+    else:
+        return None
+    return int(pid_str) if pid_str.isdigit() else None
+
+
 # ===================================================================
 # Legacy script patching
 # ===================================================================
@@ -249,14 +270,14 @@ async def _start_bridge(
             ping = await new_bridge.connect()
             if bridges is not None:
                 bridges.set_xmsim(new_bridge)
-                pid_str = (await shell_run("pgrep -o xmsim || true", timeout=5)).strip()
-                if pid_str.isdigit():
-                    bridges.xmsim_pid = int(pid_str)
+                bridges.xmsim_pid = await _get_pid_for_port(port)
+            xpid = bridges.xmsim_pid if bridges is not None else None
             return (
                 f"Simulation started and connected (bridge mode, {sim_mode}).\n"
                 f"  test: {test_name}\n"
                 f"  setup_tcl: {setup_tcl}\n"
                 f"  port: {port}\n"
+                f"  xmsim_pid: {xpid}\n"
                 f"  ping: {ping}\n"
                 f"  log: {log_file}\n\n"
                 f"Ready. sim_run, get_signal_value etc. available immediately."
@@ -276,14 +297,14 @@ async def _start_bridge(
                 ping = await new_bridge.connect()
                 if bridges is not None:
                     bridges.set_xmsim(new_bridge)
-                    pid_str = (await shell_run("pgrep -o xmsim || true", timeout=5)).strip()
-                    if pid_str.isdigit():
-                        bridges.xmsim_pid = int(pid_str)
+                    bridges.xmsim_pid = await _get_pid_for_port(actual_port)
+                xpid = bridges.xmsim_pid if bridges is not None else None
                 return (
                     f"Simulation started and connected (bridge mode, {sim_mode}).\n"
                     f"  test: {test_name}\n"
                     f"  setup_tcl: {setup_tcl}\n"
                     f"  port: {actual_port}\n"
+                    f"  xmsim_pid: {xpid}\n"
                     f"  ping: {ping}\n"
                     f"  log: {log_file}\n\n"
                     f"Ready. sim_run, get_signal_value etc. available immediately."
