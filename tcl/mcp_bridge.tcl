@@ -640,8 +640,14 @@ proc ::mcp_bridge::do_watch_clear {channel id} {
     variable watch_ids
 
     if {$id eq "all"} {
-        foreach wid $watch_ids {
-            catch {stop -delete $wid}
+        # Use stop -show parsing instead of watch_ids list (F-115):
+        # watch_ids is reset on bridge reconnect, so stops created before
+        # reconnect are invisible to the list but still live in xmsim.
+        catch {
+            foreach line [split [stop -show] "\n"] {
+                set nm [lindex $line 0]
+                if {$nm ne ""} { catch {stop -delete $nm} }
+            }
         }
         set watch_ids [list]
         ::mcp_bridge::send_ok $channel "all watchpoints cleared"
