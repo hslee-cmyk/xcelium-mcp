@@ -442,33 +442,22 @@ proc ::mcp_bridge::on_init {} {
 proc ::mcp_bridge::do_restart {channel} {
     variable _init_snapshot_dir
 
-    # Method 1: run -clean (full restart, cleanest)
-    set err_a ""
-    if {![catch {run -clean} err_a]} {
-        ::mcp_bridge::send_ok $channel "restarted:run-clean|time:0"
-        return
-    }
-
-    # Method 2: restore init snapshot (saved at bridge startup)
-    set err_b "(no init snapshot)"
+    # Snapshot restore is the only correct restart method.
+    # run -clean was removed (F-112): it runs the TB to natural completion
+    # instead of stopping at time 0, then reports time:0 incorrectly.
     if {[info exists _init_snapshot_dir] && $_init_snapshot_dir ne "" \
             && [file exists $_init_snapshot_dir]} {
-        if {![catch {restart worklib.mcp_init:module -path $_init_snapshot_dir} err_b]} {
+        if {![catch {restart worklib.mcp_init:module -path $_init_snapshot_dir} err]} {
             catch {stop -delete -all}
             ::mcp_bridge::send_ok $channel "restarted:snapshot|time:0"
             return
         }
-    }
-
-    # Method 3: plain restart (SimVision built-in)
-    set err_c ""
-    if {![catch {restart} err_c]} {
-        ::mcp_bridge::send_ok $channel "restarted:plain|time:0"
+        ::mcp_bridge::send_error $channel "restart failed: snapshot restore error: $err"
         return
     }
 
     ::mcp_bridge::send_error $channel \
-        "restart failed: run-clean='$err_a' snapshot='$err_b' plain='$err_c'"
+        "restart failed: init snapshot unavailable. Re-run sim_bridge_run to create one."
 }
 
 # ---------------------------------------------------------------------------
@@ -827,6 +816,7 @@ proc ::mcp_bridge::do_bisect {channel args_str} {
     set max_iter 20
     set iteration 0
     set log_lines [list]
+    set bisect_stop_names [list]
 
     lappend log_lines "bisect_start|range:${start_ns}-${end_ns}ns|precision:${precision}ns"
 
@@ -865,12 +855,13 @@ proc ::mcp_bridge::do_bisect {channel args_str} {
         #   checkpoint restore is unreliable (save/restore instability, F-109);
         #   using start_snapshot can land before start_ns and catch spurious changes.
         # other ops: use start checkpoint (faster; -condition naturally skips pre-start).
+        set stop_name "mcp_bisect_${iteration}"
         if {$op eq "change"} {
             catch {restart $t0_snapshot -path $chk_dir}
             if {$start_ns > 0} {
                 catch {run ${start_ns}ns}
             }
-            if {[catch {set stop_id [stop -create -object $signal -silent]} err]} {
+            if {[catch {set stop_id [stop -create -object $signal -silent -name $stop_name]} err]} {
                 ::mcp_bridge::send_error $channel "bisect: watch failed iter $iteration: $err"
                 return
             }
@@ -880,11 +871,12 @@ proc ::mcp_bridge::do_bisect {channel args_str} {
                 return
             }
             set condition "\{\[value $signal\] $op \"$value\"\}"
-            if {[catch {set stop_id [eval stop -create -condition $condition -silent]} err]} {
+            if {[catch {set stop_id [eval stop -create -condition $condition -silent -name $stop_name]} err]} {
                 ::mcp_bridge::send_error $channel "bisect: watch failed iter $iteration: $err"
                 return
             }
         }
+        lappend bisect_stop_names $stop_name
 
         # Run from start_ns toward mid_ns
         set run_dur [expr {$mid_ns - $start_ns}]
@@ -906,7 +898,7 @@ proc ::mcp_bridge::do_bisect {channel args_str} {
             }
         }
 
-        catch {stop -delete $stop_id}
+        catch {stop -delete $stop_name}
 
         if {$hit} {
             # Bug in [start, cur_ns] — narrow end
@@ -926,6 +918,11 @@ proc ::mcp_bridge::do_bisect {channel args_str} {
 
             lappend log_lines "iter:$iteration|mid:${mid_ns}|miss:${cur_ns}ns|range:${start_ns}-${end_ns}|start_chk:updated"
         }
+    }
+
+    # Final cleanup: delete any bisect stops that may not have been removed in the loop
+    foreach s $bisect_stop_names {
+        catch {stop -delete $s}
     }
 
     # Final: restore and run to the bug time for inspection

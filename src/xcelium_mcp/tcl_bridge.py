@@ -64,11 +64,14 @@ class TclBridge:
                 await self.execute_safe("__QUIT__")
             except BRIDGE_ERRORS:
                 pass
-            self._writer.close()
-            try:
-                await self._writer.wait_closed()
-            except BRIDGE_ERRORS:
-                pass
+            # Guard: execute_safe may call _force_close() on timeout,
+            # which sets _writer = None before we reach here (F-113).
+            if self._writer:
+                self._writer.close()
+                try:
+                    await self._writer.wait_closed()
+                except BRIDGE_ERRORS:
+                    pass
         self._reader = None
         self._writer = None
 
