@@ -1508,6 +1508,34 @@
       ],
       "notes": "## Root Cause (검증됨 2026-04-14)\n\n같은 xcelium-mcp MCP 서버의 두 tool을 병렬 호출하면 서버가 큐잉 처리함.\nsim_run이 블로킹 중일 때 sim_stop을 병렬 호출해도 sim_run 완료 후에야 실행됨\n→ sentinel이 run 종료 후 생성 → 중단 효과 없음.\n\n검증 결과:\n- sim_run + sim_stop 병렬 MCP 호출 → sim_run 'Simulation advanced' (정상 완료)\n- sim_run + ssh_bg_run touch sentinel → sim_run 'Simulation stopped by user' ✓\n\n## Fix\n\n### 제거 대상\n- `src/xcelium_mcp/tools/sim_lifecycle.py`: `sim_stop()` 함수 삭제\n- `src/xcelium_mcp/server.py` (또는 tool registry): `sim_stop` 등록 해제\n\n### sim_run tool description 업데이트\n```\nTo interrupt a running sim_run, create the sentinel file from an external\nshell or ssh session:\n  touch /tmp/xcelium_mcp_{uid}/stop_{port}\ne.g.: touch /tmp/xcelium_mcp_1001/stop_9876\nsim_run will stop at the next chunk boundary and return status='stopped'.\n```\n\n### 대안 워크플로우 (사용자)\nssh_bg_run으로 sentinel 생성:\n  mcp__ssh__ssh_bg_run: 'sleep N && touch /tmp/xcelium_mcp_{uid}/stop_{port}'",
       "completed_at": "2026-04-14"
+    },
+    {
+      "id": "F-109",
+      "title": "Fix bisect_signal bridge mode: 'change' operator TCL 표현식 변환 오류",
+      "priority": 2,
+      "passes": true,
+      "acceptanceCriteria": [
+        "bisect_signal(op='change') bridge mode에서 신호 첫 번째 변화 시점 정상 반환",
+        "에러 'missing operator at _@_' 미발생",
+        "bisect_signal op='eq'/'ne'/'gt'/'lt' 기존 동작 회귀 없음",
+        "SHM mode(Mode A, shm_path 지정) 동작 영향 없음"
+      ],
+      "notes": "## Root Cause (검증됨 2026-04-15, 전수검증)\n\n### 재현\n```\nbisect_signal(signal='top.hw.w_pcm_clk', op='change', value='0', start_ns=0, end_ns=500000)\n→ Error: bisect: watch failed iter 1: missing operator at _@_\n   in expression \"...lue top.hw.w_pcm_clk] _@_ change \\\"0\\\"\"\n```\n\n### 원인\nbridge mode의 `__BISECT__` 프로토콜은 TCL `stop -create -condition` 표현식을 생성함.\nPython `op='change'`를 그대로 TCL 조건 연산자로 삽입하면 `_@_change`가 됨.\n`change`는 TCL 비교 연산자가 아님 — `stop -create`의 `-condition` 옵션은 `==`, `!=`, `>`, `<`, `>=`, `<=`만 지원.\n\n## TCL 검증 결과 (2026-04-15, execute_tcl)\n\n[검증됨 ✗] `stop -create -change top.hw.w_pcm_clk`\n  → xmsim: *E,UNKOPT: unrecognized option for the stop [-create] command (-change)\n  → `-change` 옵션 자체가 xmsim stop 명령에 없음\n\n[검증됨 ✓] `stop -create -object top.hw.w_pcm_clk -silent -name chg_test`\n  → \"Created stop chg_test\" — 신호 변화 감지 stop 생성 성공\n  → run 10ms → TIME: 0 FS + 1 에서 정지 (첫 번째 변화, 초기화 단계)\n\n[검증됨 ✓] `stop -create -object top.hw.w_pcm_clk -silent -name chg_test2 -skip 1`\n  → run 10ms → TIME: 540 NS + 1 에서 정지 (두 번째 변화, 정상 클럭 첫 토글)\n  → `-skip N` 옵션으로 초기화 단계 변화 건너뛰기 가능\n\n`-object` 옵션 설명 (stop -help):\n  > Stop when the given object changes value (wires and signals)\n  > or is written to (registers, memories and variables)\n→ `change` op 감지에 완전히 적합\n\n## Fix (방안 A 확정)\n\nPython `op == 'change'`일 때 `__BISECT__` TCL payload를 `-object` 구문으로 전환.\n`-condition` 대신 `-object`를 사용하므로 `value` 인자 불필요 (무시).\n\n### 변경 위치: `__BISECT__` 핸들러 (mcp_bridge.tcl)\n\n기존 (모든 op를 -condition으로 처리):\n```tcl\nstop -create -condition {[value $signal] $op $val} -silent -name bisect_stop\n```\n\n변경 (change op 분기):\n```tcl\nif {$op eq \"change\"} {\n    stop -create -object $signal -silent -name bisect_stop\n} else {\n    stop -create -condition {[value $signal] $op $val} -silent -name bisect_stop\n}\n```\n\n또는 Python 쪽에서 payload 분기:\n```python\nif op == 'change':\n    tcl_watch = f\"stop -create -object {signal} -silent -name bisect_stop\"\nelse:\n    tcl_watch = f\"stop -create -condition {{[value {signal}] {tcl_op} {val}}} -silent -name bisect_stop\"\n```\n\n## 수정 대상 파일\n- `tcl/mcp_bridge.tcl`: `__BISECT__` 핸들러 — op='change' 분기 추가\n- (선택) `src/xcelium_mcp/tools/bisect.py`: Python 쪽 payload 생성 분기",
+      "completed_at": "2026-04-15"
+    },
+    {
+      "id": "F-110",
+      "title": "Fix compare_waveforms simvision mode: display 기본값 ':1' 하드코딩 → 활성 VNC 자동 감지",
+      "priority": 2,
+      "passes": true,
+      "acceptanceCriteria": [
+        "compare_waveforms(output_mode='simvision') 호출 시 display 파라미터 생략해도 활성 VNC display 자동 감지",
+        "VNC display :1~:9 범위에서 활성 세션 탐색, 첫 번째 활성 display 사용",
+        "display 파라미터 명시 시 자동 감지 생략 (기존 동작)",
+        "활성 VNC 없을 때 명확한 에러 메시지: 'No active VNC display found (:1~:9)'"
+      ],
+      "notes": "## Root Cause (검증됨 2026-04-15, 전수검증)\n\n### 재현\n```python\ncompare_waveforms(\n    shm_before='...TOP000.shm',\n    shm_after='...TOP002.shm',\n    signals=[...],\n    output_mode='simvision'  # display 미지정\n)\n→ ERROR: VNC display :1 is not active.\n   Start a VNC session first (e.g. vncserver :1), then retry.\n```\n\n```python\n# display=':3' 명시 시\ncompare_waveforms(..., output_mode='simvision', display=':3')\n→ 정상 동작 (SimVision launched on :3)\n```\n\n### 원인\n`compare_waveforms` simvision mode의 display 기본값이 `:1` 하드코딩.\ncloud0 서버의 활성 VNC는 `:3`이지만 도구가 `:1`만 체크하고 실패.\n\n동일 이슈가 `simvision_connect(action='start')`에는 없음 — 해당 함수는 활성 VNC를 auto-detect함.\n\n## Fix\n\n### 활성 VNC display 감지 헬퍼 (ssh_run 활용)\n```python\nasync def _find_active_display(self) -> str | None:\n    \"\"\"Find first active VNC display (:1~:9) via xdpyinfo.\"\"\"\n    for n in range(1, 10):\n        display = f\":{n}\"\n        result = await ssh_run(f\"DISPLAY={display} xdpyinfo 2>/dev/null | head -1\")\n        if result and 'name of display' in result:\n            return display\n    return None\n```\n\n### compare_waveforms simvision mode 수정\n```python\nif output_mode == 'simvision':\n    active_display = display or await _find_active_display()\n    if not active_display:\n        return {\"error\": \"No active VNC display found (:1~:9). Start vncserver first.\"}\n    # 기존 로직에 active_display 사용\n```\n\n### 영향 범위\n`simvision_connect(action='start')`의 display auto-detect 로직을 공통 헬퍼로 추출해 재사용 가능.\n\n## 수정 대상 파일\n- `src/xcelium_mcp/tools/simvision.py` (또는 `compare_waveforms.py`): `_find_active_display` 헬퍼 + simvision mode display 처리\n- `simvision_connect` display auto-detect 로직 → 공통 헬퍼로 추출 (선택)",
+      "completed_at": "2026-04-15"
     }
   ]
 }

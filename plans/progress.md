@@ -1,32 +1,25 @@
-# Ralph Progress Log
 
 ---
 
-### Task: Ralph loop — F-078 through F-083 (sim_run hardening)
+### Task: F-109 + F-110 (TCL bisect + compare_waveforms display)
 
-**Completed (6 tasks):**
+**Date:** 2026-04-15
 
-1. **F-078** — Surface RUN_ERROR from `__RUN_AND_REPORT__` as ERROR: added `'RUN_ERROR:' in where` check in `sim_run`
-2. **F-079** — `_DURATION_RE` moved to module scope; `duration.strip()` before fullmatch; Tcl gets stripped value
-3. **F-080** — `_DURATION_MAX_LEN = 32` length cap + `re.ASCII` flag to block Unicode digits
-4. **F-081** — `sim_stop` now accepts `timeout: float = 30.0` parameter passed to `bridge.execute`
-5. **F-082** — `asyncio.TimeoutError` caught in `sim_run` with actionable guidance message
-6. **F-083** — Unit mandatory in duration regex (removed `?`); bare `'100'` now rejected
+**What was implemented:**
 
-**Key patterns:**
-- `_MockMCP` test harness captures `@mcp.tool()` closures for unit testing without MCP bootstrap
-- All tests in `tests/test_sim_lifecycle.py` (new file, 11 tests)
-- 170 → 185 tests total
+F-109 — bisect_signal bridge mode op='change' fix:
+- `tcl/mcp_bridge.tcl` `do_bisect`: op='change' now uses `stop -create -object $signal -silent` instead of the invalid `-condition {[value $sig] change "val"}` form
+- Hit verification: for change op, `$cur_ns < $mid_ns` is sufficient — no value equality check
+- Other ops (eq/ne/gt/lt) unchanged
 
+F-110 — compare_waveforms simvision mode display auto-detect:
+- `src/xcelium_mcp/tools/simvision.py`: `compare_waveforms` default changed from `":1"` to `""`
+- `src/xcelium_mcp/simvision_ops.py` `compare_simvision()`: when display is empty, calls `detect_vnc_display()` (same helper used by `start_simvision`)
+- Explicit display= still takes precedence; no VNC found returns clear error
 
-
-Started: 2026-04-10
-Project: xcelium-mcp — MCP server for Cadence Xcelium/SimVision simulator control
-
-## Codebase Patterns
-
-- Python 3.10+ package, hatchling build backend
-- Entry point: `src/xcelium_mcp/server.py::main`
+**Learnings:**
+- TCL `stop -create` supports `-object <sig>` (change on any value) vs `-condition <expr>` (comparison). These are mutually exclusive forms.
+- `detect_vnc_display()` already existed in sim_env_detection.py — just needed to be called in compare_simvision (was only wired in start_simvision)
 - MCP tool modules under `src/xcelium_mcp/tools/`
 - BridgeManager DI, 7 tool modules (since v4.2)
 - Dev deps: pytest, pytest-asyncio, ruff
