@@ -144,7 +144,7 @@ def register(
         signals: list[str],
         time_range_ns: list[int] | None = None,
         output_mode: str = "csv_diff",
-        display: str = ":1",
+        display: str = "",
     ) -> str:
         """Compare two SHM waveform dumps and report signal differences.
 
@@ -167,7 +167,7 @@ def register(
             signals:       Signal paths to compare.
             time_range_ns: [start_ns, end_ns] to limit range. Empty = full range.
             output_mode:   "csv_diff" (text diff) or "simvision" (GUI side-by-side).
-            display:       VNC DISPLAY for simvision mode (default ":1").
+            display:       VNC DISPLAY for simvision mode. Empty = auto-detect active VNC session.
         """
         if time_range_ns is None:
             time_range_ns = []

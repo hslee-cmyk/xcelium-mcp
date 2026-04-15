@@ -471,7 +471,15 @@ async def compare_simvision(
     display: str,
 ) -> str:
     """Open both SHMs in SimVision for side-by-side view."""
-    # 0. Validate display parameter
+    # 0. Auto-detect display when not specified; validate format
+    if not display:
+        display = await detect_vnc_display()
+    if not display:
+        return (
+            "ERROR: No active VNC display found (:1~:9).\n"
+            "Start a VNC session first (e.g. vncserver), or specify display=':N'.\n"
+            "Fallback: use output_mode='csv_diff' for text-based comparison."
+        )
     if not _DISPLAY_RE.match(display):
         return (
             f"ERROR: Invalid display value {display!r}. "
