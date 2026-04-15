@@ -448,7 +448,14 @@ proc ::mcp_bridge::do_restart {channel} {
     if {[info exists _init_snapshot_dir] && $_init_snapshot_dir ne "" \
             && [file exists $_init_snapshot_dir]} {
         if {![catch {restart worklib.mcp_init:module -path $_init_snapshot_dir} err]} {
-            catch {stop -delete -all}
+            # xmsim does not support 'stop -delete -all' (-all is unrecognized).
+            # Parse stop -show output and delete each stop by name/id (F-114).
+            catch {
+                foreach line [split [stop -show] "\n"] {
+                    set nm [lindex $line 0]
+                    if {$nm ne ""} { catch {stop -delete $nm} }
+                }
+            }
             ::mcp_bridge::send_ok $channel "restarted:snapshot|time:0"
             return
         }
@@ -760,7 +767,13 @@ proc ::mcp_bridge::do_restore {channel name {dir ""}} {
     }
 
     # 2. Clear stale breakpoints to prevent spurious $finish (P4-9)
-    catch {stop -delete -all}
+    # xmsim does not support 'stop -delete -all'; parse stop -show and delete individually (F-114).
+    catch {
+        foreach line [split [stop -show] "\n"] {
+            set nm [lindex $line 0]
+            if {$nm ne ""} { catch {stop -delete $nm} }
+        }
+    }
 
     set _checkpoint_dir $dir
     set _checkpoint_name $name
