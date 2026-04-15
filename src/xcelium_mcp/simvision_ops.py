@@ -498,14 +498,34 @@ async def compare_simvision(
             "Fallback: use output_mode='csv_diff' for text-based comparison."
         )
 
-    # 2. Launch SimVision with shm_before as primary database (detached)
+    # 2. Resolve runner config for EDA PATH, then launch SimVision (same pattern as start_simvision)
+    try:
+        resolved_dir = await resolve_sim_dir("")
+    except ValueError:
+        resolved_dir = ""
+    config = await load_sim_config(resolved_dir) if resolved_dir else None
+    runner = config.get("runner", {}) if config else {}
+
+    login_shell = runner.get("login_shell", "/bin/sh")
+    env_files = runner.get("env_files", [])
+    env_shell = runner.get("env_shell", runner.get("login_shell", "/bin/csh"))
+
+    inner_parts = [f"setenv DISPLAY {shell_quote(display)}"]
+    if runner.get("source_separately") and env_files:
+        for ef in env_files:
+            inner_parts.append(f"source {shell_quote(ef)}")
+    inner_parts.append(f"simvision {shell_quote(shm_before)}")
+    inner_cmd = "; ".join(inner_parts)
+
+    if runner.get("source_separately") and env_files:
+        shell_cmd = f"{env_shell} -c '{inner_cmd}'"
+    else:
+        shell_cmd = login_shell_cmd(login_shell, inner_cmd)
+
     user_tmp = await get_user_tmp_dir()
     log_file = f"{user_tmp}/simvision_compare.log"
-    await shell_run(
-        f"(nohup env DISPLAY={shell_quote(display)} simvision {shell_quote(shm_before)} "
-        f"{build_redirect(log_file)} < /dev/null &)",
-        timeout=5.0,
-    )
+    cmd = f"(nohup {shell_cmd} {build_redirect(log_file)} < /dev/null &)"
+    await shell_run(cmd, timeout=5.0)
 
     # 3. Wait for SimVision bridge ready file (30s)
     bridge_ready = False
