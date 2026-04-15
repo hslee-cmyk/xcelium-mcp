@@ -1579,11 +1579,23 @@
       "title": "Fix sim_restart: stop -delete -all이 xmsim에서 무효 옵션 — restart 후 stop 미정리",
       "priority": 2,
       "passes": true,
+      "completed_at": "2026-04-15",
       "acceptanceCriteria": [
         "sim_restart 후 stop -show 결과가 'No stops set' 반환",
         "restart 전 설정된 모든 stop이 restart 후 제거됨"
       ],
-      "notes": "## Root Cause (검증됨 2026-04-15, 전수검사 중 발견)\n\n### 현상\nsim_restart 후 stop -show에 이전 stop이 잔존.\n\n### 원인\n`tcl/mcp_bridge.tcl` `do_restart` 내:\n```tcl\ncatch {stop -delete -all}\n```\n`-all` 은 xmsim에서 인식되지 않는 옵션:\n```\nxmsim: *E,RNOPC: unrecognized option -all\n```\n`catch`로 에러가 흡수되어 silently fail → stop 미삭제.\n\n### 검증된 대안 분석 (2026-04-15, execute_tcl 직접 검증)\n\n1. `stop -delete *` [검증됨 ✗]\n   - 삭제는 되나 \"Stop name X already in use\" 오류 출력 발생\n   - 오류 메시지로 인해 bridge protocol desync → 다음 명령 오동작\n   - 사용 불가\n\n2. `stop -show -list` [검증됨 ✗]\n   - \"unrecognized option for the stop -show command (-list)\"\n   - 지원 안 됨\n\n3. `foreach line [split [stop -show] \"\\n\"] { set nm [lindex $line 0]; if {$nm ne \"\"} { catch {stop -delete $nm} } }` [검증됨 ✓]\n   - stop -show 출력 파싱 → 첫 필드(이름/ID) 추출 → 개별 삭제\n   - 이름 있는 stop (test_a, test_b) + 번호 stop (1) 혼합 3개 → 전부 삭제 성공\n   - desync 없음, stop -show → \"No stops set\" 반환 확인\n   - 재현성 확인 (2회 연속 테스트)\n\n### Fix (검증됨 ✓)\n`do_restart`의 `catch {stop -delete -all}` 을 아래로 교체:\n```tcl\ncatch {\n    foreach line [split [stop -show] \"\\n\"] {\n        set nm [lindex $line 0]\n        if {$nm ne \"\"} { catch {stop -delete $nm} }\n    }\n}\n```\n\n## 수정 대상 파일\n- `tcl/mcp_bridge.tcl`: `do_restart` 내 `catch {stop -delete -all}` 교체\n",
+      "notes": "## Root Cause (검증됨 2026-04-15, 전수검사 중 발견)\n\n### 현상\nsim_restart 후 stop -show에 이전 stop이 잔존.\n\n### 원인\n`tcl/mcp_bridge.tcl` `do_restart` 내:\n```tcl\ncatch {stop -delete -all}\n```\n`-all` 은 xmsim에서 인식되지 않는 옵션:\n```\nxmsim: *E,RNOPC: unrecognized option -all\n```\n`catch`로 에러가 흡수되어 silently fail → stop 미삭제.\n\n### 검증된 대안 분석 (2026-04-15, execute_tcl 직접 검증)\n\n1. `stop -delete *` [검증됨 ✗]\n   - 삭제는 되나 \"Stop name X already in use\" 오류 출력 발생\n   - 오류 메시지로 인해 bridge protocol desync → 다음 명령 오동작\n   - 사용 불가\n\n2. `stop -show -list` [검증됨 ✗]\n   - \"unrecognized option for the stop -show command (-list)\"\n   - 지원 안 됨\n\n3. `foreach line [split [stop -show] \"\\n\"] { set nm [lindex $line 0]; if {$nm ne \"\"} { catch {stop -delete $nm} } }` [검증됨 ✓]\n   - stop -show 출력 파싱 → 첫 필드(이름/ID) 추출 → 개별 삭제\n   - 이름 있는 stop (test_a, test_b) + 번호 stop (1) 혼합 3개 → 전부 삭제 성공\n   - desync 없음, stop -show → \"No stops set\" 반환 확인\n   - 재현성 확인 (2회 연속 테스트)\n\n### Fix (검증됨 ✓)\n`do_restart`의 `catch {stop -delete -all}` 을 아래로 교체:\n```tcl\ncatch {\n    foreach line [split [stop -show] \"\\n\"] {\n        set nm [lindex $line 0]\n        if {$nm ne \"\"} { catch {stop -delete $nm} }\n    }\n}\n```\n\n## 수정 대상 파일\n- `tcl/mcp_bridge.tcl`: `do_restart` 내 `catch {stop -delete -all}` 교체\n"
+    },
+    {
+      "id": "F-115",
+      "title": "Fix watch clear all: bridge 재연결 후 watch_ids 초기화로 stop 미삭제",
+      "priority": 2,
+      "passes": true,
+      "acceptanceCriteria": [
+        "watch clear all 호출 후 stop -show가 'No stops set' 반환",
+        "bridge reconnect 이후에도 watch clear all이 모든 stop 삭제"
+      ],
+      "notes": "## Root Cause (검증됨 2026-04-15, 전수검사 중 발견)\n\n### 현상\n```\nwatch set w_pcm_clk == 1'b1  → Created stop 1\nwatch set w_dck != 1'b0     → Created stop 2\nwatch set w_ask == 1'b0 (breakpoint) → Created stop 3\n\nsim_disconnect(bridge) → connect_simulator (재연결)\n\nwatch clear all → \"all watchpoints cleared\"\nstop -show → 1, 2, 3 모두 잔존 ← BUG\n```\n\n### 원인\n`tcl/mcp_bridge.tcl` `do_watch_clear` (L639):\n```tcl\nif {$id eq \"all\"} {\n    foreach wid $watch_ids {   ← 세션 내 watch_ids 리스트만 순회\n        catch {stop -delete $wid}\n    }\n    set watch_ids [list]\n    ...\n}\n```\n- `watch_ids`는 TCL proc-level 변수 — bridge 재연결 시 새 accept 콜백으로 리셋\n- 재연결 후 watch set 이전에 clear all을 호출하면 `watch_ids`가 비어 있어 아무것도 삭제 안 됨\n- reconnect 전에 watch set한 stop들은 xmsim에 살아있지만 `watch_ids`에 없음\n\n### 재현 조건 (검증됨 2026-04-15)\n1. watch set × N → stop 생성\n2. sim_disconnect(bridge) + connect_simulator\n3. watch clear all → \"cleared\" 반환하지만 stop -show에 여전히 잔존\n\n### 검증된 Fix 패턴 (검증됨 ✓)\nF-114와 동일한 stop -show 파싱 방식:\n```tcl\n# 기존:\nforeach wid $watch_ids {\n    catch {stop -delete $wid}\n}\nset watch_ids [list]\n\n# 수정:\nforeach line [split [stop -show] \"\\n\"] {\n    set nm [lindex $line 0]\n    if {$nm ne \"\"} { catch {stop -delete $nm} }\n}\nset watch_ids [list]\n```\n- watch set(type=watch) + breakpoint 혼합 3개, reconnect 후 clear all → No stops set ✓\n- reconnect 없는 일반 케이스도 동일하게 동작 ✓\n- desync 없음 ✓\n\n## 수정 대상 파일\n- `tcl/mcp_bridge.tcl`: `do_watch_clear` L642-649 — `foreach wid $watch_ids` 를 stop -show 파싱으로 교체\n",
       "completed_at": "2026-04-15"
     }
   ]
