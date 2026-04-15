@@ -13,8 +13,8 @@ from xcelium_mcp.bridge_manager import BridgeManager
 from xcelium_mcp.discovery import resolve_sim_dir, run_full_discovery
 from xcelium_mcp.registry import load_sim_config
 from xcelium_mcp.shell_utils import (
-    _parse_tcl_db_open_path,
     build_redirect,
+    find_shm,
     get_user_tmp_dir,
     login_shell_cmd,
     shell_quote,
@@ -228,6 +228,14 @@ async def _start_bridge(
         f"setenv MCP_INPUT_TCL {bridge_tcl}",
         f"setenv MCP_SETUP_TCL {filtered_tcl}",
     ]
+
+    # F-116: inject MCP_SHM_PATH BEFORE inner_cmd join so TCL bridge can
+    # backup + re-init the SHM on sim_restart.  find_shm uses *test_name* glob
+    # (no project-specific prefix hardcoding) with newest-file fallback.
+    _shm_for_env = await find_shm(sim_dir, test_name)
+    if _shm_for_env:
+        inner_parts.append(f"setenv MCP_SHM_PATH {shell_quote(_shm_for_env)}")
+
     script_abs = shell_quote(f"{sim_dir}/{script}")
     if runner.get("source_separately") and env_files:
         for ef in env_files:
@@ -245,17 +253,6 @@ async def _start_bridge(
         cwd = sim_dir
     else:
         cwd = f"{sim_dir}/{run_dir}"
-
-    # F-116: parse SHM path from filtered setup TCL and expose as MCP_SHM_PATH
-    # so the TCL bridge can backup + re-init the SHM on sim_restart.
-    try:
-        tcl_content = await shell_run(f"cat {filtered_tcl}", timeout=5)
-        shm_rel = _parse_tcl_db_open_path(tcl_content)
-        if shm_rel:
-            shm_abs = shm_rel if shm_rel.startswith("/") else f"{cwd}/{shm_rel}"
-            inner_parts.insert(1, f"setenv MCP_SHM_PATH {shell_quote(shm_abs)}")
-    except Exception:
-        pass  # MCP_SHM_PATH absent — do_restart will skip backup
 
     cmd = (
         f"cd {shell_quote(cwd)} && "

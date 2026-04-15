@@ -302,6 +302,30 @@ def _parse_shm_path(db_list_output: str) -> str:
     return ""
 
 
+async def find_shm(sim_dir: str, test_name: str = "") -> str:
+    """Find the most recently modified SHM file in {sim_dir}/dump/.
+
+    Priority:
+    1. test_name present → dump/*{test_name}*.shm (most recently modified)
+    2. fallback          → dump/*.shm (most recently modified)
+    3. not found         → ""
+
+    Using *{test_name}* glob avoids hardcoding project-specific prefixes
+    (e.g. 'ci_top') and works across projects.
+    """
+    dump_dir = f"{sim_dir}/dump"
+    if test_name:
+        r = await shell_run(
+            f"(ls -td {dump_dir}/*{test_name}*.shm 2>/dev/null || true) | head -1"
+        )
+        if r.strip():
+            return r.strip()
+    r = await shell_run(
+        f"(ls -td {dump_dir}/*.shm 2>/dev/null || true) | head -1"
+    )
+    return r.strip()
+
+
 def _parse_tcl_db_open_path(tcl_content: str) -> str:
     """Extract SHM path from 'database -open <path>' in setup TCL content.
 

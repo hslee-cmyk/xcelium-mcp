@@ -15,6 +15,7 @@ from xcelium_mcp.shell_utils import (
     _parse_shm_path,
     _parse_tcl_db_open_path,
     _parse_time_ns,
+    find_shm,
     get_ssh_cmd_timeout,
     is_safe_tcl_string,
     sanitize_signal_name,
@@ -132,6 +133,46 @@ class TestParseTclDbOpenPath:
     def test_non_shm_extension_ignored(self):
         content = "database -open dump.vcd\ndatabase -open waves.shm\n"
         assert _parse_tcl_db_open_path(content) == "waves.shm"
+
+
+# ---------------------------------------------------------------------------
+# find_shm
+# ---------------------------------------------------------------------------
+
+class TestFindShm:
+    @pytest.mark.asyncio
+    async def test_with_test_name_found(self):
+        """Returns matching shm when test_name glob succeeds."""
+        with patch("xcelium_mcp.shell_utils.shell_run", new_callable=AsyncMock) as mock:
+            mock.return_value = "/sim/run/dump/ci_top_TOP015.shm\n"
+            result = await find_shm("/sim/run", "TOP015")
+            assert result == "/sim/run/dump/ci_top_TOP015.shm"
+            assert "TOP015" in mock.call_args_list[0][0][0]
+
+    @pytest.mark.asyncio
+    async def test_with_test_name_falls_back_to_any_shm(self):
+        """Falls back to *.shm when test_name glob returns nothing."""
+        with patch("xcelium_mcp.shell_utils.shell_run", new_callable=AsyncMock) as mock:
+            mock.side_effect = ["", "/sim/run/dump/waves.shm\n"]
+            result = await find_shm("/sim/run", "NOTFOUND")
+            assert result == "/sim/run/dump/waves.shm"
+
+    @pytest.mark.asyncio
+    async def test_no_test_name_uses_wildcard(self):
+        """Without test_name, returns newest *.shm directly."""
+        with patch("xcelium_mcp.shell_utils.shell_run", new_callable=AsyncMock) as mock:
+            mock.return_value = "/sim/run/dump/latest.shm\n"
+            result = await find_shm("/sim/run")
+            assert result == "/sim/run/dump/latest.shm"
+            assert mock.call_count == 1  # only the fallback glob
+
+    @pytest.mark.asyncio
+    async def test_no_shm_returns_empty(self):
+        """Returns empty string when no SHM files exist."""
+        with patch("xcelium_mcp.shell_utils.shell_run", new_callable=AsyncMock) as mock:
+            mock.return_value = ""
+            result = await find_shm("/sim/run")
+            assert result == ""
 
 
 # ---------------------------------------------------------------------------

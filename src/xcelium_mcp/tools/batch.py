@@ -12,7 +12,7 @@ from xcelium_mcp.bridge_manager import BridgeManager
 from xcelium_mcp.discovery import resolve_sim_dir
 from xcelium_mcp.registry import load_sim_config
 from xcelium_mcp.runner_detection import load_or_detect_runner
-from xcelium_mcp.shell_utils import UserInputRequired, validate_path
+from xcelium_mcp.shell_utils import UserInputRequired, find_shm, validate_path
 from xcelium_mcp.tcl_bridge import TclError
 from xcelium_mcp.test_resolution import resolve_test_name
 
@@ -170,11 +170,12 @@ def register(
         _csv_cache.clear_cache()
 
         # Resolve SHM path for downstream tools (bisect_signal, extract_csv)
-        shm_path = f"{resolved_sim_dir}/dump/ci_top_{test_name}.shm"
+        # find_shm: *test_name* glob removes project-specific prefix (ci_top) hardcoding
+        shm_path = await find_shm(resolved_sim_dir, test_name)
 
         return (
             f"sim_batch_run {test_name} completed.\n\n"
-            f"shm_path: {shm_path}\n\n"
+            f"shm_path: {shm_path or '(not found in dump/)'}\n\n"
             f"{log}"
         )
 

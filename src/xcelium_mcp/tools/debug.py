@@ -14,7 +14,7 @@ from xcelium_mcp.bridge_manager import BridgeManager
 from xcelium_mcp.discovery import resolve_sim_dir
 from xcelium_mcp.registry import load_sim_config
 from xcelium_mcp.screenshot import ps_to_png
-from xcelium_mcp.shell_utils import sanitize_signal_name, validate_path
+from xcelium_mcp.shell_utils import find_shm, sanitize_signal_name, validate_path
 from xcelium_mcp.tcl_bridge import TclError
 
 # ---------------------------------------------------------------------------
@@ -183,6 +183,14 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
                 context_signals = [sanitize_signal_name(s) for s in context_signals]
         except ValueError as e:
             return f"ERROR: {e}"
+
+        if not shm_path:
+            # Auto-detect latest SHM for Mode A when user omits shm_path
+            try:
+                resolved_dir = await resolve_sim_dir()
+                shm_path = await find_shm(resolved_dir)
+            except (ValueError, Exception):
+                shm_path = ""
 
         if shm_path:
             err = validate_path(shm_path, "shm_path")

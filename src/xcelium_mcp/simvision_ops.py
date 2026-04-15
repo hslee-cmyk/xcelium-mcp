@@ -19,6 +19,7 @@ from xcelium_mcp.shell_utils import (
     _parse_shm_path,
     _parse_time_ns,
     build_redirect,
+    find_shm,
     get_user_tmp_dir,
     login_shell_cmd,
     shell_quote,
@@ -101,18 +102,11 @@ async def start_simvision(
     config = await load_sim_config(resolved_dir)
     runner = config.get("runner", {}) if config else {}
 
-    # 3. Resolve SHM (glob)
+    # 3. Resolve SHM (find_shm: *test_name* glob → newest fallback)
     if not shm_path:
         if test_name:
             test_name = await resolve_test_name(test_name, resolved_dir)
-        dump_dir = f"{resolved_dir}/dump"
-        if test_name:
-            r2 = await shell_run(f"(ls -td {dump_dir}/*{test_name}*.shm 2>/dev/null || true) | head -1")
-            if not r2.strip():
-                r2 = await shell_run(f"(ls -td {dump_dir}/*.shm 2>/dev/null || true) | head -1")
-        else:
-            r2 = await shell_run(f"(ls -td {dump_dir}/*.shm 2>/dev/null || true) | head -1")
-        shm_path = r2.strip() if r2.strip() else ""
+        shm_path = await find_shm(resolved_dir, test_name)
 
     # 4. Display — validate format before use in shell commands
     if not display:

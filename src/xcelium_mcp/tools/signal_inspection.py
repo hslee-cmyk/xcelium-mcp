@@ -6,7 +6,7 @@ import re
 from mcp.server.fastmcp import FastMCP
 
 from xcelium_mcp.bridge_manager import BridgeManager
-from xcelium_mcp.shell_utils import sanitize_signal_name
+from xcelium_mcp.shell_utils import find_shm, sanitize_signal_name
 from xcelium_mcp.tcl_bridge import TclError
 
 # Verilog/SystemVerilog value literals: 1'b0, 8'hFF, 32'd100, 16'bxxxx, plain digits
@@ -106,9 +106,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
                     resolved_dir = await resolve_sim_dir()
                 except ValueError as e:
                     return f"ERROR: {e}"
-                dump_dir = f"{resolved_dir}/dump"
-                r = await shell_run(f"(ls -td {dump_dir}/*.shm || true) | head -1")
-                shm_path = r.strip()
+                shm_path = await find_shm(resolved_dir)
                 if not shm_path:
                     return "ERROR: No SHM found in dump directory"
 
