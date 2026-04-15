@@ -867,10 +867,18 @@ proc ::mcp_bridge::do_bisect {channel args_str} {
         }
 
         # Set watchpoint at start_ns
-        set condition "\{\[value $signal\] $op \"$value\"\}"
-        if {[catch {set stop_id [eval stop -create -condition $condition -silent]} err]} {
-            ::mcp_bridge::send_error $channel "bisect: watch failed iter $iteration: $err"
-            return
+        # 'change' op uses -object (any value change); other ops use -condition
+        if {$op eq "change"} {
+            if {[catch {set stop_id [stop -create -object $signal -silent]} err]} {
+                ::mcp_bridge::send_error $channel "bisect: watch failed iter $iteration: $err"
+                return
+            }
+        } else {
+            set condition "\{\[value $signal\] $op \"$value\"\}"
+            if {[catch {set stop_id [eval stop -create -condition $condition -silent]} err]} {
+                ::mcp_bridge::send_error $channel "bisect: watch failed iter $iteration: $err"
+                return
+            }
         }
 
         # Run from start_ns toward mid_ns
@@ -879,12 +887,17 @@ proc ::mcp_bridge::do_bisect {channel args_str} {
 
         set cur_ns [::mcp_bridge::_get_sim_time_ns]
 
-        # Verify: stopped before mid AND signal matches
+        # Verify: stopped before mid AND signal matches condition
         set hit 0
         if {$cur_ns < $mid_ns} {
-            if {[catch {set v [value $signal]} err]} { set v "?" }
-            if {$v eq $value} {
+            if {$op eq "change"} {
+                # Stopped before mid_ns means the signal changed in [start, mid)
                 set hit 1
+            } else {
+                if {[catch {set v [value $signal]} err]} { set v "?" }
+                if {$v eq $value} {
+                    set hit 1
+                }
             }
         }
 
