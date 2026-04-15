@@ -302,6 +302,25 @@ def _parse_shm_path(db_list_output: str) -> str:
     return ""
 
 
+def _parse_tcl_db_open_path(tcl_content: str) -> str:
+    """Extract SHM path from 'database -open <path>' in setup TCL content.
+
+    Matches: database -open <path>.shm [opts...]
+    Ignores comment lines (starting with #).
+    Returns the raw token — caller resolves relative paths if needed.
+    """
+    for line in tcl_content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        tokens = stripped.split()
+        if len(tokens) >= 3 and tokens[0] == "database" and tokens[1] == "-open":
+            path = tokens[2]
+            if path.endswith(".shm"):
+                return path
+    return ""
+
+
 def _parse_time_ns(where_output: str) -> int:
     """Parse simulation time from xmsim 'where' output into nanoseconds."""
     m = re.search(r'(\d+)\s+MS\s*\+\s*(\d+)', where_output, re.IGNORECASE)

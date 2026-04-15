@@ -42,6 +42,7 @@ namespace eval ::mcp_bridge {
     variable _checkpoint_dir ""
     variable _checkpoint_name ""
     variable _init_snapshot_dir ""
+    variable _shm_path [expr {[info exists ::env(MCP_SHM_PATH)] ? $::env(MCP_SHM_PATH) : ""}]
     variable _shutdown_flag 0
 
     # Per-user temp directory (matches Python side: /tmp/xcelium_mcp_{uid}/)
@@ -441,6 +442,7 @@ proc ::mcp_bridge::on_init {} {
 
 proc ::mcp_bridge::do_restart {channel} {
     variable _init_snapshot_dir
+    variable _shm_path
 
     # Snapshot restore is the only correct restart method.
     # run -clean was removed (F-112): it runs the TB to natural completion
@@ -456,7 +458,40 @@ proc ::mcp_bridge::do_restart {channel} {
                     if {$nm ne ""} { catch {stop -delete $nm} }
                 }
             }
-            ::mcp_bridge::send_ok $channel "restarted:snapshot|time:0"
+
+            # F-116: backup current SHM + re-init for Mode A bisect from time 0.
+            # Without this, sim data from the previous run remains in the SHM and
+            # bisect's CSV extraction would see stale waveforms mixed with new ones.
+            set backup_shm ""
+            if {[info exists _shm_path] && $_shm_path ne "" \
+                    && [file exists $_shm_path]} {
+                set ts [clock format [clock seconds] -format "%Y%m%d_%H%M%S"]
+                set shm_dir [file dirname $_shm_path]
+                set backup_shm "${shm_dir}/waves_backup_${ts}.shm"
+                # Close all open databases to flush data before rename
+                catch {
+                    set dbs [database -list]
+                    foreach db $dbs { catch {database -close $db} }
+                }
+                # Rename old SHM to backup (SHM is a directory in Xcelium)
+                if {[catch {file rename $_shm_path $backup_shm} ren_err]} {
+                    set backup_shm ""
+                } else {
+                    # Re-source setup TCL to open fresh SHM + recreate probe
+                    if {[info exists ::env(MCP_SETUP_TCL)] && \
+                            $::env(MCP_SETUP_TCL) ne "" && \
+                            [file exists $::env(MCP_SETUP_TCL)]} {
+                        catch {source $::env(MCP_SETUP_TCL)}
+                    }
+                }
+            }
+
+            if {$backup_shm ne ""} {
+                ::mcp_bridge::send_ok $channel \
+                    "restarted:snapshot|time:0|backup_shm:$backup_shm"
+            } else {
+                ::mcp_bridge::send_ok $channel "restarted:snapshot|time:0"
+            }
             return
         }
         ::mcp_bridge::send_error $channel "restart failed: snapshot restore error: $err"

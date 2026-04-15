@@ -13,6 +13,7 @@ from xcelium_mcp.discovery import (
 )
 from xcelium_mcp.shell_utils import (
     _parse_shm_path,
+    _parse_tcl_db_open_path,
     _parse_time_ns,
     get_ssh_cmd_timeout,
     is_safe_tcl_string,
@@ -101,6 +102,36 @@ class TestParseShm:
     def test_multiline(self):
         output = "database1\n/run/dump/top.shm\nother"
         assert _parse_shm_path(output) == "/run/dump/top.shm"
+
+
+# ---------------------------------------------------------------------------
+# _parse_tcl_db_open_path
+# ---------------------------------------------------------------------------
+
+class TestParseTclDbOpenPath:
+    def test_simple_shm(self):
+        content = "database -open dump.shm -shm\nprobe -create top\n"
+        assert _parse_tcl_db_open_path(content) == "dump.shm"
+
+    def test_relative_path(self):
+        content = "database -open ../dump/ci_top.shm -shm\n"
+        assert _parse_tcl_db_open_path(content) == "../dump/ci_top.shm"
+
+    def test_absolute_path(self):
+        content = "database -open /sim/run/waves.shm -shm -into /sim\n"
+        assert _parse_tcl_db_open_path(content) == "/sim/run/waves.shm"
+
+    def test_comment_ignored(self):
+        content = "# database -open commented.shm\ndatabase -open real.shm -shm\n"
+        assert _parse_tcl_db_open_path(content) == "real.shm"
+
+    def test_no_database_open(self):
+        content = "probe -create top -depth all\nrun\n"
+        assert _parse_tcl_db_open_path(content) == ""
+
+    def test_non_shm_extension_ignored(self):
+        content = "database -open dump.vcd\ndatabase -open waves.shm\n"
+        assert _parse_tcl_db_open_path(content) == "waves.shm"
 
 
 # ---------------------------------------------------------------------------

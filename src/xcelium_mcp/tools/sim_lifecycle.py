@@ -435,11 +435,26 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
     async def sim_restart() -> str:
         """Restart the simulation from time 0.
 
-        Tries run -clean first, then snapshot restore, then plain restart.
-        Returns method used: run-clean | snapshot | plain.
+        Restores the init snapshot (saved at sim_bridge_run time).
+        If an SHM database is open, backs it up to waves_backup_{timestamp}.shm
+        and re-initializes a fresh SHM so Mode A bisect works from time 0.
+
+        Returns method used and backup_shm path when available.
         """
         bridge = bridges.xmsim
         result = await bridge.execute("__RESTART__")
+        # F-116: parse backup_shm path from result
+        backup_shm = ""
+        for part in result.split("|"):
+            if part.startswith("backup_shm:"):
+                backup_shm = part[len("backup_shm:"):]
+                break
+        if backup_shm:
+            return (
+                f"Simulation restarted to time 0. ({result})\n"
+                f"Previous SHM backed up to: {backup_shm}\n"
+                f"Use bisect_signal(shm_path='{backup_shm}') or compare_waveforms to analyse the previous run."
+            )
         return f"Simulation restarted to time 0. ({result})"
 
     @mcp.tool()
