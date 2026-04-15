@@ -860,20 +860,25 @@ proc ::mcp_bridge::do_bisect {channel args_str} {
         incr iteration
         set mid_ns [expr {($start_ns + $end_ns) / 2}]
 
-        # Restore to start checkpoint (skip re-running known-good region)
-        if {[catch {restart $start_snapshot -path $chk_dir} err]} {
-            ::mcp_bridge::send_error $channel "bisect: restore failed iter $iteration: $err"
-            return
-        }
-
-        # Set watchpoint at start_ns
-        # 'change' op uses -object (any value change); other ops use -condition
+        # Restore simulation state and set watchpoint.
+        # change op: always restore t0 then run to start_ns explicitly —
+        #   checkpoint restore is unreliable (save/restore instability, F-109);
+        #   using start_snapshot can land before start_ns and catch spurious changes.
+        # other ops: use start checkpoint (faster; -condition naturally skips pre-start).
         if {$op eq "change"} {
+            catch {restart $t0_snapshot -path $chk_dir}
+            if {$start_ns > 0} {
+                catch {run ${start_ns}ns}
+            }
             if {[catch {set stop_id [stop -create -object $signal -silent]} err]} {
                 ::mcp_bridge::send_error $channel "bisect: watch failed iter $iteration: $err"
                 return
             }
         } else {
+            if {[catch {restart $start_snapshot -path $chk_dir} err]} {
+                ::mcp_bridge::send_error $channel "bisect: restore failed iter $iteration: $err"
+                return
+            }
             set condition "\{\[value $signal\] $op \"$value\"\}"
             if {[catch {set stop_id [eval stop -create -condition $condition -silent]} err]} {
                 ::mcp_bridge::send_error $channel "bisect: watch failed iter $iteration: $err"
