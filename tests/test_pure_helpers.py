@@ -655,3 +655,84 @@ async def test_debug_snapshot_skips_named_event_lines() -> None:
     assert "could not read" not in report, f"No 'could not read' expected: {report!r}"
     # The valid signal r_clk should still appear
     assert "r_clk" in report, f"Valid signal r_clk should appear: {report!r}"
+
+
+# ---------------------------------------------------------------------------
+# F-128: checkpoint restore — non-existent name error propagation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_restore_checkpoint_nonexistent_name_returns_error() -> None:
+    """restore_checkpoint_impl returns ERROR when name not in manifest (F-128)."""
+    import json
+    import os
+    import tempfile
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from xcelium_mcp.tools.checkpoint import restore_checkpoint_impl
+
+    with tempfile.TemporaryDirectory() as tmp:
+        chk_dir = os.path.join(tmp, "checkpoints")
+        os.makedirs(chk_dir)
+        manifest = {
+            "checkpoints": {
+                "L1_TOP015": {
+                    "saved_at": "2026-01-01", "saved_time_ns": 0,
+                    "compile_hash": "abc", "origin": "bridge",
+                    "test_name": "", "path": f"{chk_dir}/L1_TOP015",
+                },
+            }
+        }
+        with open(os.path.join(chk_dir, "manifest.json"), "w") as f:
+            json.dump(manifest, f)
+
+        bridges = MagicMock()
+        bridges.xmsim.execute = AsyncMock(return_value="restored:ok")
+
+        with patch("xcelium_mcp.tools.checkpoint.resolve_sim_dir", AsyncMock(return_value=tmp)):
+            result = await restore_checkpoint_impl(bridges, "nonexistent_ckpt", tmp)
+
+    assert result.startswith("ERROR:"), f"Expected ERROR, got: {result!r}"
+    assert "nonexistent_ckpt" in result
+    assert "not found" in result.lower()
+    # Tcl bridge must NOT have been called
+    bridges.xmsim.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_restore_checkpoint_valid_name_proceeds() -> None:
+    """restore_checkpoint_impl calls Tcl bridge when name exists in manifest (F-128)."""
+    import json
+    import os
+    import tempfile
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from xcelium_mcp.tools.checkpoint import restore_checkpoint_impl
+
+    with tempfile.TemporaryDirectory() as tmp:
+        chk_dir = os.path.join(tmp, "checkpoints")
+        os.makedirs(chk_dir)
+        manifest = {
+            "checkpoints": {
+                "L1_TOP015": {
+                    "saved_at": "2026-01-01", "saved_time_ns": 0,
+                    "compile_hash": "abc", "origin": "bridge",
+                    "test_name": "", "path": f"{chk_dir}/L1_TOP015",
+                },
+            }
+        }
+        with open(os.path.join(chk_dir, "manifest.json"), "w") as f:
+            json.dump(manifest, f)
+
+        bridges = MagicMock()
+        bridges.xmsim.execute = AsyncMock(
+            return_value="restored:worklib.L1_TOP015:module|position:0 NS"
+        )
+
+        with patch("xcelium_mcp.tools.checkpoint.resolve_sim_dir", AsyncMock(return_value=tmp)):
+            result = await restore_checkpoint_impl(bridges, "L1_TOP015", tmp)
+
+    # Tcl bridge was called and no error returned
+    bridges.xmsim.execute.assert_called_once()
+    assert "ERROR" not in result

@@ -1745,6 +1745,20 @@
       ],
       "notes": "## 코드 리뷰 결과 PY-M1 (2026-04-16)\n\n### 위치\n`src/xcelium_mcp/shell_utils.py:206` — `_SIGNAL_NAME_RE`\n\n### 문제\n`_SIGNAL_NAME_RE = re.compile(...)` 정의되어 있으나\n코드베이스 어디서도 참조되지 않는 dead code.\nリファクタリング 과정에서 누락된 잔재.\n\n### Fix (즉시/1줄)\n`_SIGNAL_NAME_RE` 정의 줄 삭제.\n사용처가 있다면 해당 사용처도 함께 제거 또는 대체.\n\n## 수정 대상 파일\n- `src/xcelium_mcp/shell_utils.py`: L206 `_SIGNAL_NAME_RE` 정의 삭제",
       "completed_at": "2026-04-16"
+    },
+    {
+      "id": "F-128",
+      "title": "checkpoint restore — 존재하지 않는 이름 에러 전파 누락",
+      "priority": 3,
+      "passes": true,
+      "acceptanceCriteria": [
+        "존재하지 않는 checkpoint 이름으로 restore 시 'ERROR: Checkpoint not found' 반환",
+        "Python 매니페스트에서 사전 확인 후 미존재 시 즉시 에러 반환",
+        "TCL bridge 호출 없이 Python 수준에서 차단",
+        "pytest passes"
+      ],
+      "notes": "## 전수검사 발견 (2026-04-16)\n\n### 현상\n`checkpoint restore nonexistent_ckpt` 호출 시 에러 없이 현재 sim position 반환.\n예상: `ERROR: Checkpoint 'nonexistent_ckpt' not found.`\n\n### 원인\n`restore_checkpoint_impl(bridges, name, sim_dir)` 이 매니페스트를 확인하지 않고\n바로 `__RESTORE__ {name} {chk_base}` TCL 명령을 전송 (checkpoint.py L33).\nxmsim TCL `do_restore`에서 `catch {restart $snapshot -path $dir}` 실패 시\n`send_error` 호출되지만, Python `bridge.execute()`가 이를 올바르게 전파하지 않는 케이스가 있음.\n(F-104 유사 desync 또는 TclError가 checkpoint tool의 except 절에 포함 안 됨)\n\n### Fix (2단계)\n1. `restore_checkpoint_impl` 시작부에 매니페스트 조회 추가:\n   `if name not in manifest: return f\"ERROR: Checkpoint '{name}' not found.\"`\n2. checkpoint tool except 절에 TclError 추가:\n   `except (ValueError, RuntimeError, TclError) as e:`\n\n## 수정 대상 파일\n- `src/xcelium_mcp/tools/checkpoint.py`: `restore_checkpoint_impl` + tool except 절",
+      "completed_at": "2026-04-16"
     }
   ]
 }

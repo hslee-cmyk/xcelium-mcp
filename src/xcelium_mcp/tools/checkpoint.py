@@ -12,6 +12,7 @@ import xcelium_mcp.checkpoint_manager as checkpoint_manager
 from xcelium_mcp.bridge_manager import BridgeManager
 from xcelium_mcp.discovery import resolve_sim_dir
 from xcelium_mcp.shell_utils import get_user_tmp_dir, shell_quote, shell_run
+from xcelium_mcp.tcl_bridge import TclError
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,14 @@ async def restore_checkpoint_impl(bridges: BridgeManager, name: str, sim_dir: st
     except ValueError:
         resolved_dir = ""
     chk_base = os.path.join(resolved_dir, "checkpoints") if resolved_dir else f"{await get_user_tmp_dir()}/checkpoints"
+
+    # Pre-check manifest: reject non-existent names before sending to Tcl bridge.
+    # This prevents silent failures where xmsim returns current position instead of error.
+    if name and resolved_dir:
+        manifest = await asyncio.to_thread(checkpoint_manager._read_manifest, resolved_dir)
+        known = manifest.get("checkpoints", {})
+        if known and name not in known:
+            return f"ERROR: Checkpoint '{name}' not found. Available: {', '.join(sorted(known))}"
 
     bridge = bridges.xmsim
     cmd = f"__RESTORE__ {name} {chk_base}" if name else f"__RESTORE__  {chk_base}"
@@ -80,7 +89,10 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
         if action == "save":
             return await _save_impl(bridges, name, resolved_dir, saved_time_ns)
         elif action == "restore":
-            return await restore_checkpoint_impl(bridges, name, resolved_dir or "")
+            try:
+                return await restore_checkpoint_impl(bridges, name, resolved_dir or "")
+            except (TclError, ConnectionError, RuntimeError, ValueError) as e:
+                return f"ERROR: restore failed: {e}"
         elif action == "list":
             return await _cleanup_impl(
                 resolved_dir, mode="list", filter_value="", dry_run=True, invert=False,
