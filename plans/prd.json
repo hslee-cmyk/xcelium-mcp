@@ -1759,6 +1759,19 @@
       ],
       "notes": "## 전수검사 발견 (2026-04-16)\n\n### 현상\n`checkpoint restore nonexistent_ckpt` 호출 시 에러 없이 현재 sim position 반환.\n예상: `ERROR: Checkpoint 'nonexistent_ckpt' not found.`\n\n### 원인\n`restore_checkpoint_impl(bridges, name, sim_dir)` 이 매니페스트를 확인하지 않고\n바로 `__RESTORE__ {name} {chk_base}` TCL 명령을 전송 (checkpoint.py L33).\nxmsim TCL `do_restore`에서 `catch {restart $snapshot -path $dir}` 실패 시\n`send_error` 호출되지만, Python `bridge.execute()`가 이를 올바르게 전파하지 않는 케이스가 있음.\n(F-104 유사 desync 또는 TclError가 checkpoint tool의 except 절에 포함 안 됨)\n\n### Fix (2단계)\n1. `restore_checkpoint_impl` 시작부에 매니페스트 조회 추가:\n   `if name not in manifest: return f\"ERROR: Checkpoint '{name}' not found.\"`\n2. checkpoint tool except 절에 TclError 추가:\n   `except (ValueError, RuntimeError, TclError) as e:`\n\n## 수정 대상 파일\n- `src/xcelium_mcp/tools/checkpoint.py`: `restore_checkpoint_impl` + tool except 절",
       "completed_at": "2026-04-16"
+    },
+    {
+      "id": "F-129",
+      "title": "checkpoint restore — 매니페스트 비어있을 때 에러 메시지 'restore failed:' 중첩",
+      "priority": 5,
+      "passes": true,
+      "completed_at": "2026-04-16",
+      "acceptanceCriteria": [
+        "매니페스트 비어있는 상태에서 nonexistent name restore 시 에러 메시지에 'restore failed:' 1회만 포함",
+        "예: \"ERROR: restore failed: xmsim: *E,RSNFND: ...\" (중첩 없음)",
+        "pytest passes"
+      ],
+      "notes": "## F-128 검증 중 발견 (2026-04-16)\n\n### 현상\n`checkpoint cleanup mode=all` 후 매니페스트가 비어있는 상태에서\n`checkpoint restore nonexistent_ckpt` 호출 시:\n```\nERROR: restore failed: restore failed: xmsim: *E,RSNFND: Snapshot not found: worklib.nonexistent_ckpt:module.\n```\n'restore failed:'가 2회 중첩됨.\n\n### 원인\n`restore_checkpoint_impl`이 TclError를 raise하면, TclError 메시지 자체가\n`\"restore failed: xmsim: *E,RSNFND: ...\"` (TCL bridge의 send_error 포맷).\n`checkpoint` tool except 절에서 `f\"ERROR: restore failed: {e}\"` 로 감싸므로\n'restore failed:' 가 이중으로 붙음:\n- TclError msg: `\"restore failed: xmsim: ...\"`\n- tool except: `f\"ERROR: restore failed: {e}\"` → `\"ERROR: restore failed: restore failed: xmsim: ...\"`\n\n### Fix\n`restore_checkpoint_impl`에서 TclError를 직접 re-raise하지 않고\n메시지를 정리하여 반환하거나,\nexcept 절의 prefix를 제거:\n```python\nexcept (TclError, ConnectionError, RuntimeError, ValueError) as e:\n    msg = str(e)\n    if not msg.startswith(\"ERROR:\"):\n        msg = f\"ERROR: {msg}\"\n    return msg\n```\n\n## 수정 대상 파일\n- `src/xcelium_mcp/tools/checkpoint.py`: restore action except 절 메시지 포맷"
     }
   ]
 }

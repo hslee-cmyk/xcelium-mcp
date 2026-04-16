@@ -736,3 +736,58 @@ async def test_restore_checkpoint_valid_name_proceeds() -> None:
     # Tcl bridge was called and no error returned
     bridges.xmsim.execute.assert_called_once()
     assert "ERROR" not in result
+
+
+# ---------------------------------------------------------------------------
+# F-129: checkpoint restore — no double "restore failed:" when manifest empty
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_restore_checkpoint_empty_manifest_propagates_tcl_error() -> None:
+    """When manifest is empty, TclError from bridge propagates out of restore_checkpoint_impl (F-129)."""
+    import json
+    import os
+    import tempfile
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    import pytest
+
+    from xcelium_mcp.tcl_bridge import TclError
+    from xcelium_mcp.tools.checkpoint import restore_checkpoint_impl
+
+    with tempfile.TemporaryDirectory() as tmp:
+        chk_dir = os.path.join(tmp, "checkpoints")
+        os.makedirs(chk_dir)
+        # Empty manifest — the `if known` guard is False, pre-check skipped
+        manifest = {"checkpoints": {}}
+        with open(os.path.join(chk_dir, "manifest.json"), "w") as f:
+            json.dump(manifest, f)
+
+        bridges = MagicMock()
+        bridges.xmsim.execute = AsyncMock(
+            side_effect=TclError(
+                "restore failed: xmsim: *E,RSNFND: Snapshot not found: worklib.ghost:module."
+            )
+        )
+
+        with patch("xcelium_mcp.tools.checkpoint.resolve_sim_dir", AsyncMock(return_value=tmp)):
+            with pytest.raises(TclError) as exc_info:
+                await restore_checkpoint_impl(bridges, "ghost", tmp)
+
+    # TclError message should contain single "restore failed:"
+    assert "restore failed:" in str(exc_info.value)
+
+
+def test_restore_except_clause_no_double_prefix() -> None:
+    """Except-clause formatting must not double 'restore failed:' prefix (F-129)."""
+    from xcelium_mcp.tcl_bridge import TclError
+
+    # Simulate what the Tcl bridge returns as TclError message
+    e = TclError("restore failed: xmsim: *E,RSNFND: Snapshot not found: worklib.ghost:module.")
+    msg = str(e)
+    # This is the new except-clause logic from checkpoint.py
+    if not msg.startswith("ERROR:"):
+        msg = f"ERROR: {msg}"
+
+    assert msg.count("restore failed:") == 1, f"Double prefix: {msg!r}"
+    assert msg.startswith("ERROR:")

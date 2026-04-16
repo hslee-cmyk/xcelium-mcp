@@ -92,7 +92,10 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             try:
                 return await restore_checkpoint_impl(bridges, name, resolved_dir or "")
             except (TclError, ConnectionError, RuntimeError, ValueError) as e:
-                return f"ERROR: restore failed: {e}"
+                msg = str(e)
+                if not msg.startswith("ERROR:"):
+                    msg = f"ERROR: {msg}"
+                return msg
         elif action == "list":
             return await _cleanup_impl(
                 resolved_dir, mode="list", filter_value="", dry_run=True, invert=False,
