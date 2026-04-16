@@ -134,7 +134,7 @@ async def extract(
 
     for sig in signals:
         sanitize_signal_name(sig)  # defense-in-depth: reject Tcl injection chars
-        parts += ["-sig", sig]
+        parts += ["-sig", shell_quote(sig)]
 
     svdb_cmd = " ".join(parts)
 

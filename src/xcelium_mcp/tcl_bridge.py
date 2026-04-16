@@ -49,11 +49,19 @@ class TclBridge:
         return self._writer is not None and not self._writer.is_closing()
 
     async def connect(self) -> str:
-        """Open TCP connection and send a PING to verify."""
+        """Open TCP connection, authenticate if token configured, then PING."""
+        import os
+
         self._reader, self._writer = await asyncio.wait_for(
             asyncio.open_connection(self.host, self.port),
             timeout=self.timeout,
         )
+        # Token auth: if MCP_BRIDGE_TOKEN is set on the Python side, send it first.
+        # The Tcl bridge requires __AUTH__ <token> as the first command when it has
+        # MCP_BRIDGE_TOKEN configured.  When no token is set, this is skipped.
+        token = os.environ.get("MCP_BRIDGE_TOKEN", "")
+        if token:
+            await self.execute(f"__AUTH__ {token}")
         resp = await self.execute("__PING__")
         return resp
 

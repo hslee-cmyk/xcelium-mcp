@@ -295,17 +295,25 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
         bridge = bridges.get_bridge(target)
         sections: list[str] = []
 
-        # 1. Simulation state + breakpoints (single round-trip)
+        # 1. Simulation state + breakpoints + all signal values — single round-trip (F-125)
+        # __DEBUG_SNAPSHOT_BULK__ replaces: __DEBUG_SNAPSHOT__ + describe* + N×value
+        pos = scope_val = stops = ""
+        sig_entries: list[tuple[str, str]] = []
         try:
-            snapshot = await bridge.execute("__DEBUG_SNAPSHOT__")
-            pos = scope_val = stops = ""
-            for line in snapshot.splitlines():
+            bulk = await bridge.execute("__DEBUG_SNAPSHOT_BULK__")
+            for line in bulk.splitlines():
                 if line.startswith("POSITION:"):
                     pos = line[9:]
                 elif line.startswith("SCOPE:"):
                     scope_val = line[6:]
                 elif line.startswith("STOPS:"):
                     stops = line[6:]
+                elif line.startswith("SIGNAL:"):
+                    # Format: SIGNAL:<name>=<value>
+                    payload = line[7:]
+                    eq = payload.find("=")
+                    if eq >= 0:
+                        sig_entries.append((payload[:eq], payload[eq + 1:]))
         except (TclError, ConnectionError) as e:
             pos = scope_val = f"(error: {e})"
             stops = "(unavailable)"
@@ -314,32 +322,12 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
         sections.append(f"- **Position**: `{pos}`")
         sections.append(f"- **Scope**: `{scope_val}`")
 
-        # 2. Signal values in current scope (up to 50)
+        # 2. Signal values (parsed from bulk response)
         sections.append("\n## Signal Values (current scope)")
-        try:
-            sig_list = await bridge.execute("describe *")
-            lines = sig_list.strip().splitlines()[:50]
-            if lines:
-                for line in lines:
-                    # Skip bit-select expansion lines (indented, no dot-padding) and named
-                    # event lines (value command unsupported) before any stripping.
-                    #   w_bus[4] (wire/tri) = St0  ← leading space → skip (parent already read)
-                    #   sim_run........ named event ← skip (value not supported)
-                    if not line or line[0] == ' ' or 'named event' in line:
-                        continue
-                    # xmsim describe output uses dot-padding between name and type:
-                    #   r_rst..........variable reg = 1'h0
-                    # split('..')[0] strips the padding to get the clean signal name.
-                    sig_name = line.strip().split('..')[0] if line.strip() else ""
-                    if sig_name:
-                        try:
-                            val = await bridge.execute(f"value {sig_name}")
-                            sections.append(f"- `{sig_name}` = `{val}`")
-                        except TclError:
-                            sections.append(f"- `{sig_name}` = (could not read)")
-            else:
-                sections.append("(no signals in current scope)")
-        except TclError:
+        if sig_entries:
+            for name, val in sig_entries:
+                sections.append(f"- `{name}` = `{val}`")
+        else:
             sections.append("(no signals in current scope)")
 
         # 3. Active breakpoints

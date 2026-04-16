@@ -44,6 +44,9 @@ namespace eval ::mcp_bridge {
     variable _init_snapshot_dir ""
     variable _shm_path [expr {[info exists ::env(MCP_SHM_PATH)] ? $::env(MCP_SHM_PATH) : ""}]
     variable _shutdown_flag 0
+    # Token auth: optional. Set MCP_BRIDGE_TOKEN env var to enable.
+    variable auth_token [expr {[info exists ::env(MCP_BRIDGE_TOKEN)] ? $::env(MCP_BRIDGE_TOKEN) : ""}]
+    variable auth_done 0
 
     # Per-user temp directory (matches Python side: /tmp/xcelium_mcp_{uid}/)
     variable uid [exec id -u]
@@ -80,13 +83,14 @@ proc ::mcp_bridge::init {} {
     }
 
     # P1-2: Auto port — try port_range ports starting from base
+    # Bind to 127.0.0.1 only (localhost-only) to prevent external connections.
     set found 0
     for {set p $port} {$p < $port + $port_range} {incr p} {
-        if {![catch {socket -server ::mcp_bridge::accept $p} sock]} {
+        if {![catch {socket -server ::mcp_bridge::accept -myaddr 127.0.0.1 $p} sock]} {
             set server_socket $sock
             set port $p
             set found 1
-            puts "MCP Bridge: listening on port $p"
+            puts "MCP Bridge: listening on 127.0.0.1:$p"
             break
         }
         puts "MCP Bridge: port $p busy, trying next..."
@@ -135,6 +139,7 @@ proc ::mcp_bridge::init {} {
 # ---------------------------------------------------------------------------
 proc ::mcp_bridge::accept {channel addr port} {
     variable client_channel
+    variable auth_done
 
     # Single-client bridge: always close any previous connection before accepting
     # a new one.  Attempting to detect CLOSE_WAIT via TCL eof/read proved
@@ -148,6 +153,7 @@ proc ::mcp_bridge::accept {channel addr port} {
     }
 
     set client_channel $channel
+    set auth_done 0
     fconfigure $channel -buffering line -translation lf -encoding utf-8
     fileevent $channel readable [list ::mcp_bridge::on_readable $channel]
     puts "MCP Bridge: client connected from $addr:$port"
@@ -192,8 +198,30 @@ proc ::mcp_bridge::disconnect {channel} {
 # Command dispatch
 # ---------------------------------------------------------------------------
 proc ::mcp_bridge::dispatch {channel cmd} {
+    variable auth_token
+    variable auth_done
+
     set cmd [string trim $cmd]
     if {$cmd eq ""} return
+
+    # Token auth: if MCP_BRIDGE_TOKEN is configured, require __AUTH__ <token> first.
+    # When no token is set (default), auth is skipped for backward compatibility.
+    if {$auth_token ne "" && !$auth_done} {
+        if {[string match "__AUTH__*" $cmd]} {
+            set provided [string trim [string range $cmd 8 end]]
+            if {$provided eq $auth_token} {
+                set auth_done 1
+                ::mcp_bridge::send_ok $channel "auth:ok"
+            } else {
+                ::mcp_bridge::send_error $channel "auth:failed (token mismatch)"
+                ::mcp_bridge::disconnect $channel
+            }
+        } else {
+            ::mcp_bridge::send_error $channel "auth:required — send __AUTH__ <token> first"
+            ::mcp_bridge::disconnect $channel
+        }
+        return
+    }
 
     # Meta commands
     if {$cmd eq "__PING__"} {
@@ -327,6 +355,11 @@ proc ::mcp_bridge::dispatch {channel cmd} {
 
     if {$cmd eq "__DEBUG_SNAPSHOT__"} {
         ::mcp_bridge::do_debug_snapshot $channel
+        return
+    }
+
+    if {$cmd eq "__DEBUG_SNAPSHOT_BULK__"} {
+        ::mcp_bridge::do_debug_snapshot_bulk $channel
         return
     }
 
@@ -1116,6 +1149,51 @@ proc ::mcp_bridge::do_debug_snapshot {channel} {
     catch {set sc [scope]}
     catch {set stops [stop -show]}
     ::mcp_bridge::send_ok $channel "POSITION:$pos\nSCOPE:$sc\nSTOPS:$stops"
+}
+
+# __DEBUG_SNAPSHOT_BULK__ — where + scope + stops + all signal values in 1 call (F-125)
+# Replaces N+2 roundtrips (1 __DEBUG_SNAPSHOT__ + 1 describe* + N value calls) with 1.
+# Response format:
+#   POSITION:<pos>
+#   SCOPE:<scope>
+#   STOPS:<stops>
+#   SIGNALS_COUNT:<n>
+#   SIGNAL:<name>=<value>
+#   ...
+proc ::mcp_bridge::do_debug_snapshot_bulk {channel} {
+    set pos "(unknown)"
+    set sc "(unknown)"
+    set stops "(none)"
+    catch {set pos [where]}
+    catch {set sc [scope]}
+    catch {set stops [stop -show]}
+
+    set sig_lines {}
+    set count 0
+    if {![catch {set raw [describe *]} err]} {
+        foreach line [split $raw "\n"] {
+            # Skip empty lines, indented bit-select expansions, and named events
+            if {$line eq "" || [string index $line 0] eq " " || \
+                [string match "*named event*" $line]} {
+                continue
+            }
+            # xmsim describe output: "r_rst..........variable reg = 1'h0"
+            # split on ".." to extract clean signal name
+            set sig_name [lindex [split [string trim $line] ".."] 0]
+            if {$sig_name ne "" && $count < 50} {
+                set val "(error)"
+                catch {set val [value $sig_name]}
+                lappend sig_lines "SIGNAL:$sig_name=$val"
+                incr count
+            }
+        }
+    }
+
+    set body "POSITION:$pos\nSCOPE:$sc\nSTOPS:$stops\nSIGNALS_COUNT:$count"
+    if {[llength $sig_lines] > 0} {
+        append body "\n[join $sig_lines "\n"]"
+    }
+    ::mcp_bridge::send_ok $channel $body
 }
 
 # ---------------------------------------------------------------------------

@@ -474,29 +474,27 @@ class _MockMCP:
 
 @pytest.mark.asyncio
 async def test_debug_snapshot_uses_absolute_describe_path() -> None:
-    """describe command uses scope absolute path, not bare 'describe *'."""
+    """__DEBUG_SNAPSHOT_BULK__ is used; signal names appear clean in the report (F-125)."""
     from unittest.mock import AsyncMock, MagicMock
     from xcelium_mcp.tools.debug import register
 
     mock_mcp = _MockMCP()
     mock_bridges = MagicMock()
 
-    describe_calls: list[str] = []
-    value_calls: list[str] = []
+    call_log: list[str] = []
 
     async def _fake_execute(cmd, **kwargs):
-        if cmd == "__DEBUG_SNAPSHOT__":
-            return "POSITION:Time: 100 NS\nSCOPE:/tb/dut\nSTOPS:"
-        if cmd.startswith("describe"):
-            describe_calls.append(cmd)
-            # dot-padded relative names as xmsim returns for 'describe *'
-            return "r_rst..........variable reg = 1'h0\nclk............variable reg = 1'h1"
-        if cmd.startswith("value"):
-            value_calls.append(cmd)
-            return "1'h0"
+        call_log.append(cmd)
+        if cmd == "__DEBUG_SNAPSHOT_BULK__":
+            return (
+                "POSITION:Time: 100 NS\nSCOPE:/tb/dut\nSTOPS:\n"
+                "SIGNALS_COUNT:2\n"
+                "SIGNAL:r_rst=1'h0\n"
+                "SIGNAL:clk=1'h1"
+            )
         if cmd == "__SCREENSHOT__":
             raise Exception("no screenshot")
-        return ""
+        raise RuntimeError(f"unexpected: {cmd}")
 
     mock_bridges.get_bridge.return_value.execute = AsyncMock(side_effect=_fake_execute)
     mock_bridges.get_bridge.return_value.screenshot = AsyncMock(side_effect=RuntimeError("no ss"))
@@ -504,45 +502,42 @@ async def test_debug_snapshot_uses_absolute_describe_path() -> None:
     register(mock_mcp, mock_bridges)
     result = await mock_mcp.tools["debug_snapshot"](mode="snapshot", target="auto")
 
-    # Verify absolute-path describe was used
-    assert describe_calls, "No describe command was issued"
-    assert describe_calls[0] == "describe *", (
-        f"Expected 'describe *', got: {describe_calls[0]!r}"
+    report = result[0] if isinstance(result, list) else result
+    # __DEBUG_SNAPSHOT_BULK__ should be the only Tcl call (no separate describe/value)
+    assert any(c == "__DEBUG_SNAPSHOT_BULK__" for c in call_log), (
+        f"Expected __DEBUG_SNAPSHOT_BULK__ call, got: {call_log}"
     )
-
-    # Verify parsed signal names are clean (no dot-padding)
-    assert any("r_rst" in c for c in value_calls), f"value calls: {value_calls}"
-    for c in value_calls:
-        assert ".." not in c, f"Dot-padding leaked into value call: {c!r}"
+    assert not any(c.startswith("describe") for c in call_log), (
+        f"describe must not be called separately with bulk protocol: {call_log}"
+    )
+    assert not any(c.startswith("value") for c in call_log), (
+        f"value must not be called separately with bulk protocol: {call_log}"
+    )
+    assert "r_rst" in report, f"Signal r_rst should appear in report: {report!r}"
+    assert ".." not in report.split("Signal Values")[1] if "Signal Values" in report else True
 
 
 @pytest.mark.asyncio
 async def test_debug_snapshot_strips_dot_padding_from_signal_names() -> None:
-    """Signal names are parsed by split('..')[0], stripping xmsim dot-padding."""
+    """Signal names from __DEBUG_SNAPSHOT_BULK__ appear clean (no dot-padding) in report (F-125)."""
     from unittest.mock import AsyncMock, MagicMock
     from xcelium_mcp.tools.debug import register
 
     mock_mcp = _MockMCP()
     mock_bridges = MagicMock()
 
-    value_calls: list[str] = []
-
     async def _fake_execute(cmd, **kwargs):
-        if cmd == "__DEBUG_SNAPSHOT__":
-            return "POSITION:Time: 200 NS\nSCOPE:/tb\nSTOPS:"
-        if cmd.startswith("describe"):
-            # dot-padded relative names as returned by real xmsim 'describe *'
+        if cmd == "__DEBUG_SNAPSHOT_BULK__":
+            # Tcl bridge strips dot-padding before returning SIGNAL: lines
             return (
-                "data_out[7:0]..variable reg = 8'h00\n"
-                "  data_out[7]....bit      = 1'h0\n"
-                "r_rst..........variable reg = 1'h0"
+                "POSITION:Time: 200 NS\nSCOPE:/tb\nSTOPS:\n"
+                "SIGNALS_COUNT:2\n"
+                "SIGNAL:data_out[7:0]=8'h00\n"
+                "SIGNAL:r_rst=1'h0"
             )
-        if cmd.startswith("value"):
-            value_calls.append(cmd)
-            return "0"
         if cmd == "__SCREENSHOT__":
             raise RuntimeError("no screenshot")
-        return ""
+        raise RuntimeError(f"unexpected: {cmd}")
 
     mock_bridges.get_bridge.return_value.execute = AsyncMock(side_effect=_fake_execute)
     mock_bridges.get_bridge.return_value.screenshot = AsyncMock(side_effect=RuntimeError("no ss"))
@@ -550,31 +545,29 @@ async def test_debug_snapshot_strips_dot_padding_from_signal_names() -> None:
     register(mock_mcp, mock_bridges)
     result = await mock_mcp.tools["debug_snapshot"](mode="snapshot", target="auto")
 
-    for c in value_calls:
-        assert ".." not in c, f"Dot-padding must be stripped from value command: {c!r}"
-
-    assert any("data_out[7:0]" in c for c in value_calls)
-    assert any("r_rst" in c for c in value_calls)
+    report = result[0] if isinstance(result, list) else result
+    assert "data_out[7:0]" in report, f"Signal data_out[7:0] should appear: {report!r}"
+    assert "r_rst" in report, f"Signal r_rst should appear: {report!r}"
+    # Dot-padding must not leak into the output
+    assert "data_out[7:0].." not in report, f"Dot-padding must not appear in report: {report!r}"
 
 
 @pytest.mark.asyncio
 async def test_debug_snapshot_graceful_fallback_on_pnoobj() -> None:
-    """TclError from describe * (e.g. PNOOBJ for empty scope) shows graceful message."""
+    """When __DEBUG_SNAPSHOT_BULK__ returns SIGNALS_COUNT:0, report shows graceful message (F-125)."""
     from unittest.mock import AsyncMock, MagicMock
-    from xcelium_mcp.tcl_bridge import TclError
     from xcelium_mcp.tools.debug import register
 
     mock_mcp = _MockMCP()
     mock_bridges = MagicMock()
 
     async def _fake_execute(cmd, **kwargs):
-        if cmd == "__DEBUG_SNAPSHOT__":
-            return "POSITION:Time: 0 NS\nSCOPE:top\nSTOPS:"
-        if cmd.startswith("describe"):
-            raise TclError("PNOOBJ: No such object")
+        if cmd == "__DEBUG_SNAPSHOT_BULK__":
+            # Tcl bridge returns count:0 when describe fails (e.g. PNOOBJ)
+            return "POSITION:Time: 0 NS\nSCOPE:top\nSTOPS:\nSIGNALS_COUNT:0"
         if cmd == "__SCREENSHOT__":
             raise RuntimeError("no screenshot")
-        return ""
+        raise RuntimeError(f"unexpected: {cmd}")
 
     mock_bridges.get_bridge.return_value.execute = AsyncMock(side_effect=_fake_execute)
     mock_bridges.get_bridge.return_value.screenshot = AsyncMock(side_effect=RuntimeError("no ss"))
@@ -595,29 +588,24 @@ async def test_debug_snapshot_graceful_fallback_on_pnoobj() -> None:
 
 @pytest.mark.asyncio
 async def test_debug_snapshot_skips_bit_select_expansion_lines() -> None:
-    """Lines starting with a space (bit-select children) are skipped — parent was already read."""
+    """Bit-select child signals are filtered by Tcl bridge; only parents appear in report (F-125)."""
     from unittest.mock import AsyncMock, MagicMock
     from xcelium_mcp.tools.debug import register
 
     mock_mcp = _MockMCP()
     mock_bridges = MagicMock()
 
-    call_log: list[str] = []
-
     async def _fake_execute(cmd, **kwargs):
-        call_log.append(cmd)
-        if cmd == "__DEBUG_SNAPSHOT__":
-            return "POSITION:Time: 0 NS\nSCOPE:top\nSTOPS:"
-        if cmd.startswith("describe"):
-            # parent line (dot-padded) + bit-select child (leading space, no dots)
+        if cmd == "__DEBUG_SNAPSHOT_BULK__":
+            # Tcl do_debug_snapshot_bulk skips indented child lines — only parents returned
             return (
-                "w_bus..........net logic [1:0]\n"
-                "   w_bus[1] (wire/tri) = St0\n"
-                "   w_bus[0] (wire/tri) = St0\n"
-                "r_en...........variable reg = 1'h1"
+                "POSITION:Time: 0 NS\nSCOPE:top\nSTOPS:\n"
+                "SIGNALS_COUNT:2\n"
+                "SIGNAL:w_bus=1'h1\n"
+                "SIGNAL:r_en=1'h1"
             )
-        if cmd.startswith("value"):
-            return "1'h1"
+        if cmd == "__SCREENSHOT__":
+            raise RuntimeError("no screenshot")
         raise RuntimeError(f"unexpected: {cmd}")
 
     mock_bridges.get_bridge.return_value.execute = AsyncMock(side_effect=_fake_execute)
@@ -627,17 +615,15 @@ async def test_debug_snapshot_skips_bit_select_expansion_lines() -> None:
     result = await mock_mcp.tools["debug_snapshot"](mode="snapshot", target="auto")
 
     report = result[0] if isinstance(result, list) else result
-    # Child lines should not produce value calls and must not appear as signals
-    value_calls = [c for c in call_log if c.startswith("value")]
-    assert all("w_bus[" not in c for c in value_calls), (
-        f"bit-select child lines must not trigger value calls: {value_calls}"
-    )
+    # Bit-select children (w_bus[1], w_bus[0]) must not appear — only parent w_bus
+    assert "- `w_bus[1]`" not in report, f"bit-select child must not appear: {report!r}"
+    assert "- `w_bus[0]`" not in report, f"bit-select child must not appear: {report!r}"
     assert "could not read" not in report, f"No 'could not read' expected: {report!r}"
 
 
 @pytest.mark.asyncio
 async def test_debug_snapshot_skips_named_event_lines() -> None:
-    """Lines containing 'named event' are skipped — value command unsupported for this type."""
+    """Named event signals are filtered by Tcl bridge; only valid signals appear in report (F-125)."""
     from unittest.mock import AsyncMock, MagicMock
     from xcelium_mcp.tools.debug import register
 
@@ -645,16 +631,15 @@ async def test_debug_snapshot_skips_named_event_lines() -> None:
     mock_bridges = MagicMock()
 
     async def _fake_execute(cmd, **kwargs):
-        if cmd == "__DEBUG_SNAPSHOT__":
-            return "POSITION:Time: 0 NS\nSCOPE:top\nSTOPS:"
-        if cmd.startswith("describe"):
+        if cmd == "__DEBUG_SNAPSHOT_BULK__":
+            # Tcl do_debug_snapshot_bulk skips named event lines — only r_clk returned
             return (
-                "sim_run........................ named event\n"
-                "vector_start................... named event\n"
-                "r_clk..................variable reg = 1'h0"
+                "POSITION:Time: 0 NS\nSCOPE:top\nSTOPS:\n"
+                "SIGNALS_COUNT:1\n"
+                "SIGNAL:r_clk=1'h0"
             )
-        if cmd.startswith("value"):
-            return "1'h0"
+        if cmd == "__SCREENSHOT__":
+            raise RuntimeError("no screenshot")
         raise RuntimeError(f"unexpected: {cmd}")
 
     mock_bridges.get_bridge.return_value.execute = AsyncMock(side_effect=_fake_execute)
@@ -664,9 +649,7 @@ async def test_debug_snapshot_skips_named_event_lines() -> None:
     result = await mock_mcp.tools["debug_snapshot"](mode="snapshot", target="auto")
 
     report = result[0] if isinstance(result, list) else result
-    # Named events must not appear as signal value entries (format: "- `name` = `val`").
-    # Note: `sim_run` also appears in the hardcoded "Suggested Next Steps" prose — use "= " to
-    # distinguish signal entries from prose references.
+    # Named events must not appear as signal value entries
     assert "- `sim_run` =" not in report, f"named event 'sim_run' must not be a signal entry: {report!r}"
     assert "- `vector_start` =" not in report, f"named event must not be a signal entry: {report!r}"
     assert "could not read" not in report, f"No 'could not read' expected: {report!r}"

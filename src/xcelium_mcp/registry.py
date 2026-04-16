@@ -14,6 +14,7 @@ _MISSING = object()
 
 _PROTECTED_KEYS = {
     "runner.script", "runner.login_shell", "runner.env_shell",
+    "runner.exec_cmd_override", "runner.regression_exec_cmd_override",
     "eda_tools.simvisdbutil", "eda_tools.xmsim", "eda_tools.xrun",
     "external_tools.gs", "external_tools.convert", "external_tools.magick",
     "test_discovery.command",

@@ -1,6 +1,7 @@
 """Batch simulation tools."""
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Coroutine
 from typing import Any
 
@@ -246,9 +247,11 @@ def register(
                     "Provide test_list explicitly."
                 )
 
-        # v4.1: resolve short test names → full names
+        # v4.1: resolve short test names → full names (parallel resolution)
         try:
-            test_list = [await resolve_test_name(t, resolved_sim_dir) for t in test_list]
+            test_list = list(await asyncio.gather(
+                *(resolve_test_name(t, resolved_sim_dir) for t in test_list)
+            ))
         except ValueError as e:
             return f"ERROR: {e}"
 

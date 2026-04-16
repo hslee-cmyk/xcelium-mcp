@@ -194,16 +194,37 @@ def build_eda_command(runner: dict, inner_cmd: str) -> str:
 # ===================================================================
 
 
-def validate_path(path: str, label: str = "path") -> str | None:
-    """Reject paths with traversal components or null bytes. Returns error string or None if OK."""
+def validate_path(
+    path: str,
+    label: str = "path",
+    allowed_prefix: str | None = None,
+) -> str | None:
+    """Reject paths with traversal components, null bytes, symlink escapes, or disallowed prefix.
+
+    Args:
+        path: The filesystem path to validate.
+        label: Human-readable name for error messages (e.g. "shm_path", "output_path").
+        allowed_prefix: If given, the resolved (realpath) path must start with this prefix.
+                        Use this to ensure the path stays within a project or tmp directory.
+                        When None, only null-byte and '..' checks are performed.
+
+    Returns:
+        Error string if the path is invalid, or None if it is safe.
+    """
+    import os
+
     if "\x00" in path:
         return f"ERROR: {label} must not contain null bytes: {path!r}"
     if ".." in path.split("/"):
         return f"ERROR: {label} must not contain '..' (path traversal rejected): {path}"
+    if allowed_prefix is not None:
+        real = os.path.realpath(path)
+        if not real.startswith(allowed_prefix):
+            return (
+                f"ERROR: {label} resolves to {real!r}, "
+                f"which is outside the allowed prefix {allowed_prefix!r}"
+            )
     return None
-
-
-_SIGNAL_NAME_RE = re.compile(r'^[A-Za-z0-9_.\[\]:*\\\/ ]+$')
 
 
 def sanitize_signal_name(name: str) -> str:
@@ -316,12 +337,12 @@ async def find_shm(sim_dir: str, test_name: str = "") -> str:
     dump_dir = f"{sim_dir}/dump"
     if test_name:
         r = await shell_run(
-            f"(ls -td {dump_dir}/*{test_name}*.shm 2>/dev/null || true) | head -1"
+            f"(ls -td -- {dump_dir}/*{test_name}*.shm 2>/dev/null || true) | head -1"
         )
         if r.strip():
             return r.strip()
     r = await shell_run(
-        f"(ls -td {dump_dir}/*.shm 2>/dev/null || true) | head -1"
+        f"(ls -td -- {dump_dir}/*.shm 2>/dev/null || true) | head -1"
     )
     return r.strip()
 

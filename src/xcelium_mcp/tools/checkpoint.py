@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 
 from mcp.server.fastmcp import FastMCP
 
@@ -69,6 +70,12 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             resolved_dir = await resolve_sim_dir(sim_dir)
         except ValueError as e:
             return f"ERROR: {e}"
+
+        if name and not re.match(r'^[a-zA-Z0-9_-]+$', name):
+            return (
+                f"ERROR: Checkpoint name must contain only alphanumeric characters, "
+                f"underscores, or hyphens. Got: {name!r}"
+            )
 
         if action == "save":
             return await _save_impl(bridges, name, resolved_dir, saved_time_ns)
