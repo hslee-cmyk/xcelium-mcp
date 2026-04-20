@@ -1,20 +1,22 @@
 
 ---
 
-### Task: F-109 + F-110 (TCL bisect + compare_waveforms display)
+## 2026-04-20 - Bug Pattern Collection (guardrails update)
 
-**Date:** 2026-04-15
+**Task:** Collect recurring bug-causing patterns from F-107~F-129 and encode as SIGN-009~SIGN-016 in guardrails.md.
 
-**What was implemented:**
+**Patterns documented:**
+- SIGN-009: Double error prefix in except clauses (F-129)
+- SIGN-010: Blind forwarding to Tcl bridge without pre-validation (F-128)
+- SIGN-011: List mutation AFTER join() is already called (F-116 v1)
+- SIGN-012: Hardcoded project-specific file path patterns (F-116)
+- SIGN-013: Bulk Tcl delete commands vs per-item loops (F-114)
+- SIGN-014: EDA tool invocations without login_shell_cmd (F-110)
+- SIGN-015: Wrong Tcl flag for operation variant (F-109)
+- SIGN-016: Using stale ID lists instead of fresh parse (F-115)
 
-F-109 — bisect_signal bridge mode op='change' fix:
-- `tcl/mcp_bridge.tcl` `do_bisect`: op='change' now uses `stop -create -object $signal -silent` instead of the invalid `-condition {[value $sig] change "val"}` form
-- Hit verification: for change op, `$cur_ns < $mid_ns` is sufficient — no value equality check
-- Other ops (eq/ne/gt/lt) unchanged
+**All tasks:** 125/125 passes=true. 258 pytest, ruff clean.
 
-F-110 — compare_waveforms simvision mode display auto-detect:
-- `src/xcelium_mcp/tools/simvision.py`: `compare_waveforms` default changed from `":1"` to `""`
-- `src/xcelium_mcp/simvision_ops.py` `compare_simvision()`: when display is empty, calls `detect_vnc_display()` (same helper used by `start_simvision`)
 - Explicit display= still takes precedence; no VNC found returns clear error
 
 **Learnings:**

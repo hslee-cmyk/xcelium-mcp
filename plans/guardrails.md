@@ -60,10 +60,50 @@ Learned constraints that prevent repeated failures. Each "sign" is a rule discov
 **Instruction:** Use `python -m ruff check src/` (not `ruff .`) — only lint the source package, not tests/docs/tcl.
 **Reason:** Tests and TCL scripts have different conventions; lint scope should match the deliverable
 
-<!-- Add project-specific signs below as failures teach them
-### SIGN-XXX: [Descriptive Name]
-**Trigger:** [When this sign applies]
-**Instruction:** [What to do instead]
-**Reason:** [Why this matters]
-**Added after:** [Iteration N / date when learned]
--->
+### SIGN-009: No Double Error Prefix in Except Clauses
+**Trigger:** Writing `except ... as e: return f"ERROR: {prefix}: {e}"` where `e` may already carry the same prefix
+**Instruction:** Always check `if not msg.startswith("ERROR:")` before prepending. Pattern: `msg = str(e); msg = f"ERROR: {msg}" if not msg.startswith("ERROR:") else msg`
+**Reason:** F-129 — TclError from xmsim already contained "restore failed:", so the except clause produced "ERROR: restore failed: restore failed: xmsim: ..."
+**Added after:** F-129 (2026-04-16)
+
+### SIGN-010: Pre-Validate Before Forwarding to Tcl Bridge
+**Trigger:** About to pass a name/path/key to the Tcl bridge (save, restore, probe, bisect)
+**Instruction:** Read the manifest/registry first and return an early ERROR if the name doesn't exist. Never rely on xmsim error messages to surface bad inputs — xmsim may silently succeed with wrong results.
+**Reason:** F-128 — restoring unknown checkpoint name returned current sim state instead of error
+**Added after:** F-128 (2026-04-16)
+
+### SIGN-011: Modify Lists BEFORE join(), Not After
+**Trigger:** Building a shell command via `"; ".join(parts)` or similar, then wanting to inject an extra item
+**Instruction:** Always append/insert into the parts list BEFORE calling join. Inserting into `inner_parts` after the joined string is already assigned is a no-op for the output.
+**Reason:** F-116 — `inner_parts.append(f"setenv MCP_SHM_PATH ...")` was called after `inner_cmd = "; ".join(inner_parts)`, so the env var never appeared in the launched command
+**Added after:** F-116 v1→v2 (2026-04-15)
+
+### SIGN-012: Never Hardcode Project-Specific File Patterns
+**Trigger:** Constructing a SHM/dump/log file path by name (e.g. `ci_top_{test_name}.shm`)
+**Instruction:** Use `find_shm(sim_dir, test_name)` from `shell_utils`. It globs `*{test_name}*.shm` with newest-file selection and falls back to `*.shm` — no project prefix assumptions.
+**Reason:** F-116 — `ci_top_{test_name}.shm` only worked for the ci_top project; broke for any other testbench prefix
+**Added after:** F-116 (2026-04-15)
+
+### SIGN-013: Per-Item Delete Loops Over Bulk Tcl Commands
+**Trigger:** Clearing/deleting a set of Tcl simulator objects (breakpoints, watchpoints, stops)
+**Instruction:** Iterate collected IDs and delete each with an explicit `stop -delete {id}` (or equivalent) rather than `stop -delete -all`. Bulk commands may silently no-op or delete unintended objects.
+**Reason:** F-114 — `stop -delete -all` did not reliably remove stops in some SimVision versions; per-ID loop is deterministic
+**Added after:** F-114 (2026-04-15)
+
+### SIGN-014: Always Use login_shell_cmd for EDA Tool Invocations
+**Trigger:** Launching xrun, SimVision, ncsim, or any EDA binary via shell_run/nohup
+**Instruction:** Wrap the command with `login_shell_cmd(cmd)` from `shell_utils`. EDA tools require PATH/LD_LIBRARY_PATH from sourced shell profiles; a plain subprocess won't find them.
+**Reason:** F-110 — compare_waveforms launched SimVision without login shell; binary not found on PATH
+**Added after:** F-110 (2026-04-14)
+
+### SIGN-015: Match Tcl Command Flags to the Operation Variant
+**Trigger:** Calling a Tcl command with variant-specific flags (bisect, probe, stop, watch)
+**Instruction:** Verify the exact flag name in SimVision's Tcl reference for the specific operation variant. `-condition` and `-object` are NOT interchangeable even if they look similar. Write a targeted test that exercises the exact flag path.
+**Reason:** F-109 — bisect `change` op used `-condition` (edge trigger) instead of `-object` (value change), causing immediate false positives
+**Added after:** F-109 (2026-04-14)
+
+### SIGN-016: Parse Output Before Relying On It
+**Trigger:** Using `stop -show` or similar Tcl listing commands to enumerate IDs for subsequent operations
+**Instruction:** Parse the listing output line-by-line to extract IDs before building delete/modify commands. Do NOT assume a fixed output format — run the listing, capture output, then parse.
+**Reason:** F-115 — watch clear-all used a stale `watch_ids` list instead of fresh `stop -show` parse, leaving ghost watchpoints
+**Added after:** F-115 (2026-04-15)
