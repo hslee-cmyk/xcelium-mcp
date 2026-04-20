@@ -914,3 +914,88 @@ async def test_start_simvision_removes_stale_ready_file_on_connection_failure() 
         await start_simvision(bridges, "", "", "", "")
 
     assert any("bridge_ready_9877" in r for r in removed), f"stale simvision file not removed: {removed}"
+
+
+# ---------------------------------------------------------------------------
+# F-131: inspect_signal list — recursive=True uses ... wildcard
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_inspect_signal_list_nonrecursive_uses_dot() -> None:
+    """list action with recursive=False (default) sends describe scope.pattern."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    executed: list[str] = []
+
+    class _FakeBridge:
+        async def execute(self, cmd: str, timeout: float = 30) -> str:
+            executed.append(cmd)
+            return "top.hw.sda wire"
+
+    fake_bridges = MagicMock()
+    fake_bridges.get_bridge.return_value = _FakeBridge()
+
+    with patch("xcelium_mcp.tools.signal_inspection.sanitize_signal_name", side_effect=lambda s: s):
+        from xcelium_mcp.tools.signal_inspection import register
+        from mcp.server.fastmcp import FastMCP
+        mcp = FastMCP("test")
+        register(mcp, fake_bridges)
+        tool = mcp._tool_manager._tools["inspect_signal"]
+        result = await tool.fn(action="list", scope="top.hw", pattern="*sda*", recursive=False)
+
+    assert executed and "top.hw.*sda*" in executed[0], f"Expected dot-sep: {executed}"
+    assert "..." not in executed[0]
+
+
+@pytest.mark.asyncio
+async def test_inspect_signal_list_recursive_uses_ellipsis() -> None:
+    """list action with recursive=True sends describe scope...pattern."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    executed: list[str] = []
+
+    class _FakeBridge:
+        async def execute(self, cmd: str, timeout: float = 30) -> str:
+            executed.append(cmd)
+            return "top.hw.deep.sub.sda wire"
+
+    fake_bridges = MagicMock()
+    fake_bridges.get_bridge.return_value = _FakeBridge()
+
+    with patch("xcelium_mcp.tools.signal_inspection.sanitize_signal_name", side_effect=lambda s: s):
+        from xcelium_mcp.tools.signal_inspection import register
+        from mcp.server.fastmcp import FastMCP
+        mcp = FastMCP("test")
+        register(mcp, fake_bridges)
+        tool = mcp._tool_manager._tools["inspect_signal"]
+        result = await tool.fn(action="list", scope="top.hw", pattern="*sda*", recursive=True)
+
+    assert executed and "top.hw...*sda*" in executed[0], f"Expected ellipsis: {executed}"
+
+
+@pytest.mark.asyncio
+async def test_inspect_signal_list_recursive_default_is_false() -> None:
+    """recursive=False is the default — existing callers unaffected."""
+    from unittest.mock import MagicMock, patch
+
+    executed: list[str] = []
+
+    class _FakeBridge:
+        async def execute(self, cmd: str, timeout: float = 30) -> str:
+            executed.append(cmd)
+            return ""
+
+    fake_bridges = MagicMock()
+    fake_bridges.get_bridge.return_value = _FakeBridge()
+
+    with patch("xcelium_mcp.tools.signal_inspection.sanitize_signal_name", side_effect=lambda s: s):
+        from xcelium_mcp.tools.signal_inspection import register
+        from mcp.server.fastmcp import FastMCP
+        mcp = FastMCP("test")
+        register(mcp, fake_bridges)
+        tool = mcp._tool_manager._tools["inspect_signal"]
+        # No recursive param → default False
+        await tool.fn(action="list", scope="top.hw", pattern="*")
+
+    assert executed and "top.hw.*" == executed[0].split("describe ", 1)[1].strip(), f"Unexpected: {executed}"

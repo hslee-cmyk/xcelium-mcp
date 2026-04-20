@@ -25,6 +25,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
         pattern: str = "*",
         target: str = "auto",
         shm_path: str = "",
+        recursive: bool = False,
     ) -> str:
         """Read signal values, describe metadata, list signals, find drivers, or check SHM dump.
 
@@ -40,6 +41,8 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             pattern: Glob pattern for "list" action (default "*").
             target:  "xmsim" | "simvision" | "auto" (default: auto). Used by "list".
             shm_path: SHM dump path for "check_dump". Empty = auto-detect latest.
+            recursive: If True, "list" searches the entire sub-hierarchy under scope
+                       (uses ncsim ... recursive-descent wildcard). Default False.
         """
         # S-1 fix: sanitize all signal/scope inputs to prevent Tcl injection
         try:
@@ -78,7 +81,8 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             if not scope:
                 return "ERROR: 'scope' is required for action='list'."
             bridge = bridges.get_bridge(target)
-            return await bridge.execute(f"describe {scope}.{pattern}")
+            sep = "..." if recursive else "."
+            return await bridge.execute(f"describe {scope}{sep}{pattern}")
 
         elif action == "drivers":
             if not signal:

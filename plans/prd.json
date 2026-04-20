@@ -1792,14 +1792,15 @@
       "id": "F-131",
       "title": "inspect_signal list — recursive=True 옵션 추가 (계층 전체 신호 탐색)",
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "inspect_signal(action='list', scope='top.hw', pattern='*sda*', recursive=True) 호출 시 전체 계층에서 패턴 매칭 신호 반환",
         "scope를 모를 때 root scope('top.hw')만으로 깊은 계층 신호 탐색 가능",
         "recursive=False(default) 시 기존 동작 유지 (하위 호환)",
         "pytest passes"
       ],
-      "notes": "## 검증 (2026-04-20)\n\n### 배경\nSimVision TCL에 재귀 신호 탐색 전용 명령 없음.\n`scope show {scope}`는 해당 레벨의 하위 모듈+신호를 flat하게 반환하지만 재귀 아님.\n`signal find`, `scope find`, `netlist find`, `scope show -hier` 등 존재하지 않음.\n\n### 실증\ncloud0에서 Python 소켓 클라이언트로 직접 검증 완료 (2026-04-20):\n- `scope show {ci_top_VENEZIA_TOP012_i2c_address_mode_test::top.hw}` → 각 항목 반환\n- `u_*` 접두사 항목만 재귀하여 6레벨 탐색\n- `*sda*` 패턴으로 14개 신호 발견 (약 5초 소요)\n- 발견 신호 예: `u_ext_i2cSerialInterface.i_sdaIn`, `u_ext_i2cSlave.io_sda` 등\n\n### 구현 방안\nPython-side 구현 (TCL 수정 불필요):\n\n```python\ndef _find_signals_recursive(bridge, scope, pattern, depth=0, max_depth=5):\n    results = []\n    for item in _scope_show(bridge, scope):\n        tail = item.split('.')[-1].split('[')[0]\n        if fnmatch.fnmatch(tail, pattern):\n            results.append(item)\n        if tail.startswith('u_'):  # module instance → recurse\n            results.extend(_find_signals_recursive(bridge, item, pattern, depth+1, max_depth))\n    return results\n```\n\n핵심: `u_*` 접두사 항목만 재귀하여 `scope show` 호출 횟수 최소화.\n\n### 수정 대상 파일\n- `src/xcelium_mcp/tools/inspect.py`: `inspect_signal` list action에 `recursive` 파라미터 추가\n- `src/xcelium_mcp/tools/inspect.py`: `_find_signals_recursive` helper 추가"
+      "notes": "## 검증 (2026-04-20)\n\n### 배경\nSimVision TCL에 재귀 신호 탐색 전용 명령 없음.\n`scope show {scope}`는 해당 레벨의 하위 모듈+신호를 flat하게 반환하지만 재귀 아님.\n`signal find`, `scope find`, `netlist find`, `scope show -hier` 등 존재하지 않음.\n\n### 실증\ncloud0에서 Python 소켓 클라이언트로 직접 검증 완료 (2026-04-20):\n- `scope show {ci_top_VENEZIA_TOP012_i2c_address_mode_test::top.hw}` → 각 항목 반환\n- `u_*` 접두사 항목만 재귀하여 6레벨 탐색\n- `*sda*` 패턴으로 14개 신호 발견 (약 5초 소요)\n- 발견 신호 예: `u_ext_i2cSerialInterface.i_sdaIn`, `u_ext_i2cSlave.io_sda` 등\n\n### 구현 방안\nPython-side 구현 (TCL 수정 불필요):\n\n```python\ndef _find_signals_recursive(bridge, scope, pattern, depth=0, max_depth=5):\n    results = []\n    for item in _scope_show(bridge, scope):\n        tail = item.split('.')[-1].split('[')[0]\n        if fnmatch.fnmatch(tail, pattern):\n            results.append(item)\n        if tail.startswith('u_'):  # module instance → recurse\n            results.extend(_find_signals_recursive(bridge, item, pattern, depth+1, max_depth))\n    return results\n```\n\n핵심: `u_*` 접두사 항목만 재귀하여 `scope show` 호출 횟수 최소화.\n\n### 수정 대상 파일\n- `src/xcelium_mcp/tools/inspect.py`: `inspect_signal` list action에 `recursive` 파라미터 추가\n- `src/xcelium_mcp/tools/inspect.py`: `_find_signals_recursive` helper 추가",
+      "completed_at": "2026-04-20"
     }
   ]
 }
