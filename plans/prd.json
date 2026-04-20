@@ -1772,6 +1772,34 @@
         "pytest passes"
       ],
       "notes": "## F-128 검증 중 발견 (2026-04-16)\n\n### 현상\n`checkpoint cleanup mode=all` 후 매니페스트가 비어있는 상태에서\n`checkpoint restore nonexistent_ckpt` 호출 시:\n```\nERROR: restore failed: restore failed: xmsim: *E,RSNFND: Snapshot not found: worklib.nonexistent_ckpt:module.\n```\n'restore failed:'가 2회 중첩됨.\n\n### 원인\n`restore_checkpoint_impl`이 TclError를 raise하면, TclError 메시지 자체가\n`\"restore failed: xmsim: *E,RSNFND: ...\"` (TCL bridge의 send_error 포맷).\n`checkpoint` tool except 절에서 `f\"ERROR: restore failed: {e}\"` 로 감싸므로\n'restore failed:' 가 이중으로 붙음:\n- TclError msg: `\"restore failed: xmsim: ...\"`\n- tool except: `f\"ERROR: restore failed: {e}\"` → `\"ERROR: restore failed: restore failed: xmsim: ...\"`\n\n### Fix\n`restore_checkpoint_impl`에서 TclError를 직접 re-raise하지 않고\n메시지를 정리하여 반환하거나,\nexcept 절의 prefix를 제거:\n```python\nexcept (TclError, ConnectionError, RuntimeError, ValueError) as e:\n    msg = str(e)\n    if not msg.startswith(\"ERROR:\"):\n        msg = f\"ERROR: {msg}\"\n    return msg\n```\n\n## 수정 대상 파일\n- `src/xcelium_mcp/tools/checkpoint.py`: restore action except 절 메시지 포맷"
+    },
+    {
+      "id": "F-130",
+      "title": "bridge_ready_* 정리 로직 — 프로세스 존재 여부 기반으로 타입별 삭제",
+      "priority": 3,
+      "passes": true,
+      "acceptanceCriteria": [
+        "_start_bridge: xmsim 없음 확인 후 xmsim 타입 ready file만 삭제 (simvision 파일 보존)",
+        "start_simvision: simvision 없음 확인 후 simvision 타입 ready file만 삭제",
+        "xmsim + SimVision 동시 실행 시 서로의 ready file 건드리지 않음",
+        "pkill 후 stale 파일 남아도 다음 시작 시 자동 정리됨",
+        "bridge_ready_* 파일 없을 때도 에러 없이 통과"
+      ],
+      "notes": "## 분석 일자: 2026-04-20\n\n### 현재 버그 (bridge_lifecycle.py L199)\n현재 코드:\nawait shell_run(f\"rm -f {user_tmp}/bridge_ready_*\")\n\nxmsim _start_bridge 진입 시 모든 bridge_ready 파일 삭제.\nSimVision ready file까지 지워지므로 SimVision이 실행 중임에도\nsimvision_connect start가 새 SimVision을 중복 런칭함.\n\n### Fix A: _start_bridge (bridge_lifecycle.py L199)\nxmsim 없음이 이미 확인된 상태이므로 xmsim 타입 파일만 삭제:\n  grep -rl \\ xmsim \\  {user_tmp}/bridge_ready_* 2>/dev/null | xargs rm -f || true\n\n### Fix B: start_simvision (simvision_ops.py)\nStep 1 scan 전에 SimVision 프로세스 존재 여부 확인:\n  sv_ps = await shell_run(\"pgrep -la simvision || true\")\n  if not sv_ps.strip():\n      # SimVision 없음 -> simvision 타입 파일 전부 stale\n      grep -rl \\ simvision \\  {user_tmp}/bridge_ready_* 2>/dev/null | xargs rm -f || true\n\n### 검증 완료 (2026-04-20)\n- xmsim 패턴: 9876 xmsim ... 매칭, 9877 simvision ... 미매칭 확인\n- simvision 패턴: 9877 simvision ... 매칭, 9876 xmsim ... 미매칭 확인\n- xmsim 타입 삭제 시 simvision 파일 보존 확인\n- 파일 없을 때 에러 없이 통과 확인\n\n### 수정 대상 파일\n- src/xcelium_mcp/bridge_lifecycle.py: _start_bridge L199\n- src/xcelium_mcp/simvision_ops.py: start_simvision Step 1 앞",
+      "completed_at": "2026-04-20"
+    },
+    {
+      "id": "F-131",
+      "title": "inspect_signal list — recursive=True 옵션 추가 (계층 전체 신호 탐색)",
+      "priority": 3,
+      "passes": false,
+      "acceptanceCriteria": [
+        "inspect_signal(action='list', scope='top.hw', pattern='*sda*', recursive=True) 호출 시 전체 계층에서 패턴 매칭 신호 반환",
+        "scope를 모를 때 root scope('top.hw')만으로 깊은 계층 신호 탐색 가능",
+        "recursive=False(default) 시 기존 동작 유지 (하위 호환)",
+        "pytest passes"
+      ],
+      "notes": "## 검증 (2026-04-20)\n\n### 배경\nSimVision TCL에 재귀 신호 탐색 전용 명령 없음.\n`scope show {scope}`는 해당 레벨의 하위 모듈+신호를 flat하게 반환하지만 재귀 아님.\n`signal find`, `scope find`, `netlist find`, `scope show -hier` 등 존재하지 않음.\n\n### 실증\ncloud0에서 Python 소켓 클라이언트로 직접 검증 완료 (2026-04-20):\n- `scope show {ci_top_VENEZIA_TOP012_i2c_address_mode_test::top.hw}` → 각 항목 반환\n- `u_*` 접두사 항목만 재귀하여 6레벨 탐색\n- `*sda*` 패턴으로 14개 신호 발견 (약 5초 소요)\n- 발견 신호 예: `u_ext_i2cSerialInterface.i_sdaIn`, `u_ext_i2cSlave.io_sda` 등\n\n### 구현 방안\nPython-side 구현 (TCL 수정 불필요):\n\n```python\ndef _find_signals_recursive(bridge, scope, pattern, depth=0, max_depth=5):\n    results = []\n    for item in _scope_show(bridge, scope):\n        tail = item.split('.')[-1].split('[')[0]\n        if fnmatch.fnmatch(tail, pattern):\n            results.append(item)\n        if tail.startswith('u_'):  # module instance → recurse\n            results.extend(_find_signals_recursive(bridge, item, pattern, depth+1, max_depth))\n    return results\n```\n\n핵심: `u_*` 접두사 항목만 재귀하여 `scope show` 호출 횟수 최소화.\n\n### 수정 대상 파일\n- `src/xcelium_mcp/tools/inspect.py`: `inspect_signal` list action에 `recursive` 파라미터 추가\n- `src/xcelium_mcp/tools/inspect.py`: `_find_signals_recursive` helper 추가"
     }
   ]
 }

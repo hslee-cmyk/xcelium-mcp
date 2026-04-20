@@ -102,6 +102,12 @@ Learned constraints that prevent repeated failures. Each "sign" is a rule discov
 **Reason:** F-109 — bisect `change` op used `-condition` (edge trigger) instead of `-object` (value change), causing immediate false positives
 **Added after:** F-109 (2026-04-14)
 
+### SIGN-017: Lazy Import Inside Function Blocks Module-Level Name
+**Trigger:** Adding a use of `name` earlier in a function where a `from module import name` already exists later in the same function body
+**Instruction:** If `name` is already imported at module level, remove the lazy (inline) `from ... import name` from the function body. Otherwise move the lazy import to BEFORE the first use, or extract a helper. NEVER have both a module-level import and a function-level import of the same name.
+**Reason:** F-130 — `scan_ready_files` was used at line 200 (P4 cleanup) but also had a lazy `from bridge_manager import scan_ready_files` at line 301; Python compiled it as a local variable and raised `UnboundLocalError` at line 200
+**Added after:** F-130 (2026-04-20)
+
 ### SIGN-016: Parse Output Before Relying On It
 **Trigger:** Using `stop -show` or similar Tcl listing commands to enumerate IDs for subsequent operations
 **Instruction:** Parse the listing output line-by-line to extract IDs before building delete/modify commands. Do NOT assume a fixed output format — run the listing, capture output, then parse.

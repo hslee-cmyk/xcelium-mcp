@@ -9,7 +9,7 @@ import asyncio
 import logging
 
 from xcelium_mcp.batch_runner import validate_extra_args
-from xcelium_mcp.bridge_manager import BridgeManager
+from xcelium_mcp.bridge_manager import BridgeManager, scan_ready_files
 from xcelium_mcp.discovery import resolve_sim_dir, run_full_discovery
 from xcelium_mcp.registry import load_sim_config
 from xcelium_mcp.shell_utils import (
@@ -194,9 +194,11 @@ async def _start_bridge(
                 f"Shut down that process first, or reconfigure bridge.port."
             )
 
-    # P4: per-user temp directory
+    # P4: per-user temp directory — clear stale xmsim ready files only
+    # (simvision ready files are left intact so a co-running SimVision is unaffected)
     user_tmp = await get_user_tmp_dir()
-    await shell_run(f"rm -f {user_tmp}/bridge_ready_*", timeout=5)
+    for _stale_port, _ in await scan_ready_files(target="xmsim"):
+        await shell_run(f"rm -f {user_tmp}/bridge_ready_{_stale_port}", timeout=5)
 
     script_shell = runner.get("script_shell", runner.get("env_shell", "/bin/sh"))
     params = resolve_sim_params(runner, sim_mode, extra_args=extra_args, timeout=timeout,
@@ -296,8 +298,6 @@ async def _start_bridge(
             logger.debug("TCP connect attempt %d failed: %s", i, e)
 
     # Fallback: scan ready files (handles port mismatch / dynamic port)
-    from xcelium_mcp.bridge_manager import scan_ready_files
-
     for i in range(tcp_deadline // 2):
         await asyncio.sleep(2)
         for actual_port, _btype in await scan_ready_files(target="xmsim"):

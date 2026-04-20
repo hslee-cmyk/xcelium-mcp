@@ -84,7 +84,8 @@ async def start_simvision(
         await bridges.simvision_raw.disconnect()
         bridges.set_simvision(None)
 
-    # 1. Check existing SimVision bridge -> auto-connect
+    # 1. Check existing SimVision bridge -> auto-connect; remove stale ready files
+    _sv_user_tmp = await get_user_tmp_dir()
     for port, _btype in await scan_ready_files(target="simvision"):
         bridge = TclBridge(host="localhost", port=port)
         try:
@@ -92,7 +93,7 @@ async def start_simvision(
             bridges.set_simvision(bridge)
             return f"SimVision already running — connected to port {port} (ping={ping})"
         except BRIDGE_ERRORS:
-            pass
+            await shell_run(f"rm -f {_sv_user_tmp}/bridge_ready_{port}", timeout=5)
 
     # 2. Resolve sim_dir + config
     try:

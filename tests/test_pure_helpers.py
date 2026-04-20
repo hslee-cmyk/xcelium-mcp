@@ -791,3 +791,126 @@ def test_restore_except_clause_no_double_prefix() -> None:
 
     assert msg.count("restore failed:") == 1, f"Double prefix: {msg!r}"
     assert msg.startswith("ERROR:")
+
+
+# ---------------------------------------------------------------------------
+# F-130: bridge_ready_* cleanup — type-scoped, process-presence-based
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_start_bridge_removes_only_xmsim_ready_files() -> None:
+    """_start_bridge clears xmsim-type ready files but preserves simvision-type ones."""
+    from unittest.mock import AsyncMock, patch
+
+    removed: list[str] = []
+
+    async def fake_shell_run(cmd: str, timeout: float = 30) -> str:
+        if cmd.startswith("rm -f") and "bridge_ready_" in cmd:
+            removed.append(cmd)
+        return ""  # pgrep/ss/ps all return empty → no xmsim running, port free
+
+    async def fake_scan(target: str | None = None) -> list[tuple[int, str]]:
+        entries = [(9876, "xmsim"), (9877, "simvision")]
+        if target is None:
+            return entries
+        return [(p, t) for p, t in entries if t == target]
+
+    config = {
+        "runner": {"script": "run.sh", "run_dir": "run"},
+        "bridge": {"port": 9876, "tcl_path": "/sim/bridge.tcl"},
+    }
+
+    with (
+        patch("xcelium_mcp.bridge_lifecycle.scan_ready_files", fake_scan),
+        patch("xcelium_mcp.bridge_lifecycle.get_user_tmp_dir", AsyncMock(return_value="/tmp/mcp")),
+        patch("xcelium_mcp.bridge_lifecycle.shell_run", fake_shell_run),
+        patch("xcelium_mcp.bridge_lifecycle.find_shm", AsyncMock(return_value="")),
+    ):
+        from xcelium_mcp.bridge_lifecycle import _start_bridge
+        from xcelium_mcp.bridge_manager import BridgeManager
+
+        bridges = BridgeManager()
+        try:
+            await _start_bridge("/sim", config, "t1", "/sim/setup.tcl", "normal", 60, bridges=bridges)
+        except Exception:
+            pass  # only care about which rm -f calls were made before launch
+
+    assert any("bridge_ready_9876" in r for r in removed), f"xmsim file not removed: {removed}"
+    assert not any("bridge_ready_9877" in r for r in removed), f"simvision file wrongly removed: {removed}"
+
+
+@pytest.mark.asyncio
+async def test_start_bridge_no_ready_files_is_noop() -> None:
+    """_start_bridge handles absent bridge_ready files without error."""
+    removed: list[str] = []
+
+    async def fake_shell_run(cmd: str, timeout: float = 30) -> str:
+        if "bridge_ready_" in cmd and cmd.startswith("rm"):
+            removed.append(cmd)
+        return ""
+
+    async def fake_scan(target: str | None = None) -> list[tuple[int, str]]:
+        return []
+
+    config = {
+        "runner": {"script": "run.sh", "run_dir": "run"},
+        "bridge": {"port": 9876, "tcl_path": "/sim/bridge.tcl"},
+    }
+
+    with (
+        patch("xcelium_mcp.bridge_lifecycle.scan_ready_files", fake_scan),
+        patch("xcelium_mcp.bridge_lifecycle.get_user_tmp_dir", AsyncMock(return_value="/tmp/mcp")),
+        patch("xcelium_mcp.bridge_lifecycle.shell_run", fake_shell_run),
+        patch("xcelium_mcp.bridge_lifecycle.find_shm", AsyncMock(return_value="")),
+    ):
+        from xcelium_mcp.bridge_lifecycle import _start_bridge
+        from xcelium_mcp.bridge_manager import BridgeManager
+
+        bridges = BridgeManager()
+        try:
+            await _start_bridge("/sim", config, "t1", "/sim/setup.tcl", "normal", 60, bridges=bridges)
+        except Exception:
+            pass
+
+    assert removed == [], f"Unexpected rm calls with no ready files: {removed}"
+
+
+@pytest.mark.asyncio
+async def test_start_simvision_removes_stale_ready_file_on_connection_failure() -> None:
+    """start_simvision removes simvision ready files whose port is not connectable."""
+    from unittest.mock import AsyncMock, patch
+
+    removed: list[str] = []
+
+    async def fake_shell_run(cmd: str, timeout: float = 30) -> str:
+        if "bridge_ready_" in cmd and cmd.startswith("rm"):
+            removed.append(cmd)
+        return ""
+
+    async def fake_scan(target: str | None = None) -> list[tuple[int, str]]:
+        if target == "simvision" or target is None:
+            return [(9877, "simvision")]
+        return []
+
+    class _FailBridge:
+        async def connect(self) -> str:
+            raise ConnectionRefusedError("no server")
+
+    with (
+        patch("xcelium_mcp.simvision_ops.scan_ready_files", fake_scan),
+        patch("xcelium_mcp.simvision_ops.get_user_tmp_dir", AsyncMock(return_value="/tmp/mcp")),
+        patch("xcelium_mcp.simvision_ops.shell_run", fake_shell_run),
+        patch("xcelium_mcp.simvision_ops.TclBridge", lambda **_kw: _FailBridge()),
+        patch("xcelium_mcp.simvision_ops.resolve_sim_dir", AsyncMock(return_value="/sim")),
+        patch("xcelium_mcp.simvision_ops.load_sim_config", AsyncMock(return_value=None)),
+        patch("xcelium_mcp.simvision_ops.find_shm", AsyncMock(return_value="")),
+        patch("xcelium_mcp.simvision_ops.detect_vnc_display", AsyncMock(return_value="")),
+    ):
+        from xcelium_mcp.bridge_manager import BridgeManager
+        from xcelium_mcp.simvision_ops import start_simvision
+
+        bridges = BridgeManager()
+        await start_simvision(bridges, "", "", "", "")
+
+    assert any("bridge_ready_9877" in r for r in removed), f"stale simvision file not removed: {removed}"
