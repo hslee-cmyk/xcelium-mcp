@@ -119,3 +119,9 @@ Learned constraints that prevent repeated failures. Each "sign" is a rule discov
 **Instruction:** Use Python-side recursion via `scope show {scope}` instead. Call `scope show` for each scope level, collect matching leaf names with `fnmatch`, and recurse into `u_*`-prefixed children. Never embed `...` in a Tcl hierarchy path.
 **Reason:** F-131 — `describe top.hw...*sda*` was tried on both xmsim (error: "Invalid first character in HDL identifier: ..*sda*") and SimVision (error: "invalid command name 'describe'"). Neither tool recognises `...` as a recursive wildcard.
 **Added after:** F-131 (2026-04-20)
+
+### SIGN-019: Bridge-Specific Tcl Commands Must Be Routed to the Correct Bridge
+**Trigger:** Sending a Tcl command that is only supported by one bridge type (xmsim vs SimVision) via `bridges.get_bridge(target)` which may return the wrong type
+**Instruction:** Before executing bridge-specific commands, check `bridge is bridges.xmsim_raw` and route to the correct bridge. If `scope show` is needed → must use SimVision bridge. If `describe` / `value` / `drivers` → must use xmsim. Add an explicit error or auto-fallback rather than letting the helper silently return empty results.
+**Reason:** F-132 — `scope show` is SimVision-only; when `target="auto"` returned xmsim, `_list_signals_recursive` caught `TclError` silently and returned `[]`, causing "No signals found" instead of a meaningful error.
+**Added after:** F-132 (2026-04-20)

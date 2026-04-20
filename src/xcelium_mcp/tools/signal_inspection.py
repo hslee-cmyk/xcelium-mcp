@@ -111,6 +111,15 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
                 return "ERROR: 'scope' is required for action='list'."
             bridge = bridges.get_bridge(target)
             if recursive:
+                # scope show is a SimVision-only Tcl command; auto-switch if needed
+                if bridge is bridges.xmsim_raw:
+                    if bridges.simvision_raw and bridges.simvision_raw.connected:
+                        bridge = bridges.simvision_raw
+                    else:
+                        return (
+                            "ERROR: recursive list requires SimVision (scope show is unavailable "
+                            "in xmsim). Start SimVision first."
+                        )
                 hits = await _list_signals_recursive(bridge, scope, pattern)
                 if not hits:
                     return f"No signals matching {pattern!r} found under {scope} (recursive search)"

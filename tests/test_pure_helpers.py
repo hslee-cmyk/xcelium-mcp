@@ -1050,3 +1050,99 @@ async def test_inspect_signal_list_recursive_default_false_backward_compat() -> 
         await tool.fn(action="list", scope="top.hw", pattern="*")
 
     assert executed == ["describe top.hw.*"], f"Unexpected: {executed}"
+
+
+# ---------------------------------------------------------------------------
+# F-132: inspect_signal list recursive — xmsim silent fail → SimVision fallback
+# ---------------------------------------------------------------------------
+
+
+def _make_inspect_tool(fake_bridges):
+    """Register inspect_signal and return the tool fn."""
+    from unittest.mock import patch
+    from mcp.server.fastmcp import FastMCP
+    from xcelium_mcp.tools.signal_inspection import register
+
+    with patch("xcelium_mcp.tools.signal_inspection.sanitize_signal_name", side_effect=lambda s: s):
+        mcp = FastMCP("test_f132")
+        register(mcp, fake_bridges)
+        return mcp._tool_manager._tools["inspect_signal"].fn
+
+
+@pytest.mark.asyncio
+async def test_recursive_list_xmsim_autofallback_to_simvision() -> None:
+    """recursive=True + target=xmsim → auto-switch to SimVision bridge."""
+    from unittest.mock import MagicMock
+
+    xmsim_bridge = MagicMock()
+    xmsim_bridge.connected = True
+
+    sv_executed: list[str] = []
+
+    class _SVBridge:
+        connected = True
+        async def execute(self, cmd: str, timeout: float = 30) -> str:
+            sv_executed.append(cmd)
+            return "{top.hw.sda_out}"
+
+    sv_bridge = _SVBridge()
+
+    fake_bridges = MagicMock()
+    fake_bridges.get_bridge.return_value = xmsim_bridge   # returns xmsim
+    fake_bridges.xmsim_raw = xmsim_bridge                  # bridge is xmsim_raw → triggers fallback
+    fake_bridges.simvision_raw = sv_bridge                 # SimVision available
+
+    tool_fn = _make_inspect_tool(fake_bridges)
+    result = await tool_fn(action="list", scope="top.hw", pattern="*sda*", recursive=True)
+
+    # SimVision bridge was used (scope show called on sv_bridge)
+    assert any("scope show" in c for c in sv_executed), f"scope show not called on SimVision: {sv_executed}"
+    assert "ERROR" not in result
+
+
+@pytest.mark.asyncio
+async def test_recursive_list_xmsim_no_simvision_returns_error() -> None:
+    """recursive=True + target=xmsim + no SimVision → clear error message."""
+    from unittest.mock import MagicMock
+
+    xmsim_bridge = MagicMock()
+    xmsim_bridge.connected = True
+
+    fake_bridges = MagicMock()
+    fake_bridges.get_bridge.return_value = xmsim_bridge
+    fake_bridges.xmsim_raw = xmsim_bridge
+    fake_bridges.simvision_raw = None                      # no SimVision
+
+    tool_fn = _make_inspect_tool(fake_bridges)
+    result = await tool_fn(action="list", scope="top.hw", pattern="*sda*", recursive=True)
+
+    assert "ERROR" in result
+    assert "SimVision" in result
+
+
+@pytest.mark.asyncio
+async def test_recursive_list_simvision_target_unchanged() -> None:
+    """recursive=True + target=simvision uses SimVision directly (no xmsim check)."""
+    from unittest.mock import MagicMock
+
+    sv_executed: list[str] = []
+
+    class _SVBridge:
+        connected = True
+        async def execute(self, cmd: str, timeout: float = 30) -> str:
+            sv_executed.append(cmd)
+            return "{top.hw.sda_out}"
+
+    sv_bridge = _SVBridge()
+
+    fake_bridges = MagicMock()
+    fake_bridges.get_bridge.return_value = sv_bridge       # target=simvision returns sv_bridge
+    fake_bridges.xmsim_raw = MagicMock()                   # different object → no fallback triggered
+    fake_bridges.simvision_raw = sv_bridge
+
+    tool_fn = _make_inspect_tool(fake_bridges)
+    result = await tool_fn(action="list", scope="top.hw", pattern="*sda*",
+                           target="simvision", recursive=True)
+
+    assert any("scope show" in c for c in sv_executed)
+    assert "ERROR" not in result

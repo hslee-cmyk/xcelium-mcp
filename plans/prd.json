@@ -1801,6 +1801,20 @@
         "pytest passes"
       ],
       "notes": "## 검증 (2026-04-20)\n\n### 현재 구현 문제\n`signal_inspection.py` L84-85:\n```python\nsep = \"...\" if recursive else \".\"\nreturn await bridge.execute(f\"describe {scope}{sep}{pattern}\")\n```\n`describe top.hw...*sda*` 를 xmsim/SimVision 모두에 전송 → 양쪽 모두 실패.\n- xmsim: `*E,PVHSAL: Invalid first character in HDL identifier: ..*sda*`\n- SimVision: `invalid command name \"describe\"`\n\n### 올바른 구현 (Python-side 재귀)\n`scope show {scope}` 로 각 레벨 children 조회 후 Python에서 재귀 탐색:\n\n```python\nasync def _list_signals_recursive(bridge, scope, pattern, depth=0, max_depth=5):\n    import fnmatch\n    raw = await bridge.execute(f\"scope show {{{scope}}}\")\n    results = []\n    for item in raw.split():\n        clean = item.strip(\"{}\")\n        tail = clean.split(\".\")[-1].split(\"[\")[0]\n        if fnmatch.fnmatch(tail, pattern):\n            results.append(clean)\n        if tail.startswith(\"u_\") and depth < max_depth:\n            sub = await _list_signals_recursive(bridge, clean, pattern, depth+1, max_depth)\n            if sub:\n                results.extend(sub)\n    return results\n```\n\n핵심: `u_*` 접두사 항목만 재귀 → `scope show` 호출 횟수 최소화.\n\n### 실증 (2026-04-20, cloud0 Python 소켓 직접 검증)\n- `scope show` 재귀로 `*sda*` 패턴 14개 신호 발견 (~5초)\n- 발견 신호 예: `u_ext_i2cSerialInterface.i_sdaIn`, `u_ext_i2cSlave.io_sda`\n\n### 수정 대상 파일\n- `src/xcelium_mcp/tools/signal_inspection.py`: list action에서 `recursive=True` 시 `_list_signals_recursive` 호출\n- `src/xcelium_mcp/tools/signal_inspection.py`: `_list_signals_recursive` async helper 추가\n- `import fnmatch` 추가"
+    },
+    {
+      "id": "F-132",
+      "title": "inspect_signal list recursive=True — xmsim silent fail 개선 (SimVision auto-fallback)",
+      "priority": 3,
+      "passes": true,
+      "acceptanceCriteria": [
+        "recursive=True + target=xmsim 시 SimVision 연결 있으면 자동 전환 후 결과 반환",
+        "recursive=True + target=xmsim + SimVision 없으면 명확한 에러 메시지 반환",
+        "recursive=True + target=simvision 기존 동작 유지 (하위 호환)",
+        "pytest passes"
+      ],
+      "notes": "## 발견 (2026-04-20)\n\n### 현상\n`inspect_signal(action='list', scope='top.hw', pattern='*sda*', recursive=True)` — target 미지정(auto=xmsim) 시:\n`\"No signals matching '*sda*' found under top.hw (recursive search)\"` 반환.\n\nxmsim bridge는 `scope show` TCL 명령을 지원하지 않아 `_list_signals_recursive`의 `bridge.execute(f'scope show {{{scope}}}')` 호출이 TclError를 raise → except 절에서 `[]` 반환 → 0건으로 silent fail.\n\n### Fix\n`signal_inspection.py` list action 내 recursive 분기 앞에 bridge 교체 로직 추가:\n\n```python\nif recursive:\n    if bridge is bridges.xmsim:\n        if bridges.simvision:\n            bridge = bridges.simvision  # scope show는 SimVision TCL 전용\n        else:\n            return \"ERROR: recursive list requires SimVision (scope show unavailable in xmsim). Start SimVision first.\"\n    hits = await _list_signals_recursive(bridge, scope, pattern)\n    ...\n```\n\n### 수정 대상 파일\n- `src/xcelium_mcp/tools/signal_inspection.py`: list action recursive 분기 앞에 SimVision auto-fallback 추가",
+      "completed_at": "2026-04-20"
     }
   ]
 }
