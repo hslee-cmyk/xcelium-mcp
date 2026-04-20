@@ -1792,9 +1792,10 @@
       "id": "F-131",
       "title": "inspect_signal list — recursive=True 옵션 추가 (계층 전체 신호 탐색)",
       "priority": 3,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-04-20",
       "acceptanceCriteria": [
-        "inspect_signal(action='list', scope='top.hw', pattern='*sda*', recursive=True) 호출 시 전체 계층에서 패턴 매칭 신호 반환",
+        "inspect_signal(action='list', scope='top.hw', pattern='*sda*', recursive=True, target='simvision') 호출 시 전체 계층에서 패턴 매칭 신호 반환",
         "scope를 모를 때 root scope('top.hw')만으로 깊은 계층 신호 탐색 가능",
         "recursive=False(default) 시 기존 동작 유지 (하위 호환)",
         "pytest passes"
