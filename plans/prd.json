@@ -1815,6 +1815,21 @@
       ],
       "notes": "## 발견 (2026-04-20)\n\n### 현상\n`inspect_signal(action='list', scope='top.hw', pattern='*sda*', recursive=True)` — target 미지정(auto=xmsim) 시:\n`\"No signals matching '*sda*' found under top.hw (recursive search)\"` 반환.\n\nxmsim bridge는 `scope show` TCL 명령을 지원하지 않아 `_list_signals_recursive`의 `bridge.execute(f'scope show {{{scope}}}')` 호출이 TclError를 raise → except 절에서 `[]` 반환 → 0건으로 silent fail.\n\n### Fix\n`signal_inspection.py` list action 내 recursive 분기 앞에 bridge 교체 로직 추가:\n\n```python\nif recursive:\n    if bridge is bridges.xmsim:\n        if bridges.simvision:\n            bridge = bridges.simvision  # scope show는 SimVision TCL 전용\n        else:\n            return \"ERROR: recursive list requires SimVision (scope show unavailable in xmsim). Start SimVision first.\"\n    hits = await _list_signals_recursive(bridge, scope, pattern)\n    ...\n```\n\n### 수정 대상 파일\n- `src/xcelium_mcp/tools/signal_inspection.py`: list action recursive 분기 앞에 SimVision auto-fallback 추가",
       "completed_at": "2026-04-20"
+    },
+    {
+      "id": "F-133",
+      "title": "inspect_signal list recursive — scope_prefixes 파라미터 추가 (u_* 하드코딩 제거)",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-20",
+      "acceptanceCriteria": [
+        "inspect_signal list recursive=True 시 scope_prefixes 파라미터 수용",
+        "scope_prefixes=['u_'] (기본값): 기존 u_* 동작 유지 (하위 호환)",
+        "scope_prefixes=[] (빈 리스트): 모든 항목에 scope show 시도 → naming convention 무관 (general mode)",
+        "scope_prefixes=['inst_', 'u_'] 등 커스텀 prefix 목록 지원",
+        "pytest passes"
+      ],
+      "notes": "## 배경 (2026-04-20)\n\n### 현재 문제\n`_list_signals_recursive`의 L39:\n```python\nif tail.startswith('u_') and depth < max_depth:\n```\n`u_`는 venezia-fpga 프로젝트의 module instance 명명 규칙. 다른 프로젝트에서는 동작하지 않음.\n\n### 근거 (실증)\nSimVision TCL 조사 결과 (2026-04-20):\n- `scope show {signal_path}` → `\"\"` (빈 문자열)\n- `scope show {sub_scope_path}` → 자식 목록 반환 (non-empty)\n- `scope set {signal}; scope get` → scope 변경 없음 (silent fail)\n- sub-scope/signal 판별 전용 명령(`scope children`, `netlist`, `describe` 등) 없음\n\n따라서 `u_*` 체크는 **정확성이 아닌 성능 최적화** 목적임.\n`scope show {item}` 반환값이 비어있으면 signal, 비어있지 않으면 sub-scope로 판별 가능.\n\n### 구현 방안\n`_list_signals_recursive` 시그니처 변경:\n```python\nasync def _list_signals_recursive(\n    bridge, scope, pattern,\n    scope_prefixes: list[str] = [\"u_\"],  # [] = 전체 시도 (general mode)\n    depth=0, max_depth=5\n) -> list[str]:\n    ...\n    for item in raw.split():\n        clean = item.strip(\"{}\")\n        tail = clean.split(\".\")[-1].split(\"[\")[0]\n        if fnmatch.fnmatch(tail, pattern):\n            results.append(clean)\n        should_recurse = (\n            not scope_prefixes  # [] = general mode: try all\n            or any(tail.startswith(p) for p in scope_prefixes)\n        )\n        if should_recurse and depth < max_depth:\n            sub = await _list_signals_recursive(\n                bridge, clean, pattern, scope_prefixes, depth+1, max_depth\n            )\n            results.extend(sub)\n    return results\n```\n\n`inspect_signal` tool signature 에 `scope_prefixes: list[str] | None = None` 파라미터 추가.\n- `None` → 기본값 `[\"u_\"]` 적용 (하위 호환)\n- `[]` → general mode\n\n### 수정 대상 파일\n- `src/xcelium_mcp/tools/signal_inspection.py`: `_list_signals_recursive` + `inspect_signal` 파라미터 추가"
     }
   ]
 }

@@ -17,13 +17,22 @@ _DEPOSIT_VALUE_RE = re.compile(r"^[\d'bhBHdDoOxXzZ_]+$")
 
 
 async def _list_signals_recursive(
-    bridge: Any, scope: str, pattern: str, depth: int = 0, max_depth: int = 5
+    bridge: Any,
+    scope: str,
+    pattern: str,
+    scope_prefixes: list[str] | None = None,
+    depth: int = 0,
+    max_depth: int = 5,
 ) -> list[str]:
     """Walk scope hierarchy via 'scope show' and collect signal names matching pattern.
 
-    Recurses into child scopes whose last component starts with 'u_' (module instances).
+    scope_prefixes controls which items are recursed into:
+      None / ["u_"] — only items whose last component starts with a prefix (fast, project-specific)
+      []            — try scope show on every item; non-empty result means it is a sub-scope (general)
     Stops at max_depth to bound the number of bridge round-trips.
     """
+    if scope_prefixes is None:
+        scope_prefixes = ["u_"]
     try:
         raw = await bridge.execute(f"scope show {{{scope}}}")
     except (TclError, ConnectionError, asyncio.TimeoutError, OSError):
@@ -36,8 +45,14 @@ async def _list_signals_recursive(
         tail = clean.split(".")[-1].split("[")[0]
         if fnmatch.fnmatch(tail, pattern):
             results.append(clean)
-        if tail.startswith("u_") and depth < max_depth:
-            sub = await _list_signals_recursive(bridge, clean, pattern, depth + 1, max_depth)
+        should_recurse = (
+            not scope_prefixes  # [] = general: try all (scope show on signal returns "" → safe)
+            or any(tail.startswith(p) for p in scope_prefixes)
+        )
+        if should_recurse and depth < max_depth:
+            sub = await _list_signals_recursive(
+                bridge, clean, pattern, scope_prefixes, depth + 1, max_depth
+            )
             results.extend(sub)
     return results
 
@@ -55,6 +70,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
         target: str = "auto",
         shm_path: str = "",
         recursive: bool = False,
+        scope_prefixes: list[str] | None = None,
     ) -> str:
         """Read signal values, describe metadata, list signals, find drivers, or check SHM dump.
 
@@ -70,8 +86,10 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             pattern: Glob pattern for "list" action (default "*").
             target:  "xmsim" | "simvision" | "auto" (default: auto). Used by "list".
             shm_path: SHM dump path for "check_dump". Empty = auto-detect latest.
-            recursive: If True, "list" searches the entire sub-hierarchy under scope
-                       (uses ncsim ... recursive-descent wildcard). Default False.
+            recursive: If True, "list" walks the sub-hierarchy via scope show. Default False.
+            scope_prefixes: Controls which items are recursed into during recursive list.
+                     None / ["u_"] — only recurse into items with a matching prefix (fast).
+                     []            — try scope show on every item (general, works with any naming).
         """
         # S-1 fix: sanitize all signal/scope inputs to prevent Tcl injection
         try:
@@ -120,7 +138,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
                             "ERROR: recursive list requires SimVision (scope show is unavailable "
                             "in xmsim). Start SimVision first."
                         )
-                hits = await _list_signals_recursive(bridge, scope, pattern)
+                hits = await _list_signals_recursive(bridge, scope, pattern, scope_prefixes)
                 if not hits:
                     return f"No signals matching {pattern!r} found under {scope} (recursive search)"
                 return "\n".join(hits)

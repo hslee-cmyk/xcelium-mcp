@@ -1146,3 +1146,125 @@ async def test_recursive_list_simvision_target_unchanged() -> None:
 
     assert any("scope show" in c for c in sv_executed)
     assert "ERROR" not in result
+
+
+# ---------------------------------------------------------------------------
+# F-133: _list_signals_recursive — scope_prefixes parameter replaces u_* hardcode
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_recursive_default_prefix_only_recurses_u_() -> None:
+    """Default scope_prefixes=None (→ ['u_']) recurses only into u_* items."""
+    from xcelium_mcp.tools.signal_inspection import _list_signals_recursive
+
+    calls: list[str] = []
+
+    class _Bridge:
+        async def execute(self, cmd: str, timeout: float = 30) -> str:
+            calls.append(cmd)
+            responses = {
+                "scope show {top.hw}": "{top.hw.u_core} {top.hw.clk} {top.hw.inst_other}",
+                "scope show {top.hw.u_core}": "{top.hw.u_core.sda_in}",
+            }
+            return responses.get(cmd, "")
+
+    hits = await _list_signals_recursive(_Bridge(), "top.hw", "*sda*")
+
+    # Recursed into u_core (u_ prefix), found sda_in
+    assert "top.hw.u_core.sda_in" in hits
+    # Did NOT recurse into inst_other (no u_ prefix)
+    assert not any("inst_other" in c for c in calls if "scope show" in c and "u_core" not in c
+                   and "inst_other" in c)
+
+
+@pytest.mark.asyncio
+async def test_list_recursive_custom_prefix_recurses_matching() -> None:
+    """scope_prefixes=['inst_'] recurses only into inst_* items."""
+    from xcelium_mcp.tools.signal_inspection import _list_signals_recursive
+
+    calls: list[str] = []
+
+    class _Bridge:
+        async def execute(self, cmd: str, timeout: float = 30) -> str:
+            calls.append(cmd)
+            responses = {
+                "scope show {top}": "{top.inst_a} {top.u_b} {top.sda_sig}",
+                "scope show {top.inst_a}": "{top.inst_a.sda_out}",
+            }
+            return responses.get(cmd, "")
+
+    hits = await _list_signals_recursive(_Bridge(), "top", "*sda*", scope_prefixes=["inst_"])
+
+    assert "top.inst_a.sda_out" in hits
+    # u_b was NOT recursed (prefix not in ["inst_"])
+    assert not any("scope show {top.u_b}" in c for c in calls)
+    # sda_sig at top level still matches
+    assert "top.sda_sig" in hits
+
+
+@pytest.mark.asyncio
+async def test_list_recursive_empty_prefixes_general_mode() -> None:
+    """scope_prefixes=[] recurses into ALL items (general mode)."""
+    from xcelium_mcp.tools.signal_inspection import _list_signals_recursive
+
+    calls: list[str] = []
+
+    class _Bridge:
+        async def execute(self, cmd: str, timeout: float = 30) -> str:
+            calls.append(cmd)
+            responses = {
+                "scope show {top}": "{top.inst_a} {top.clk}",
+                "scope show {top.inst_a}": "{top.inst_a.sda_out}",
+                "scope show {top.clk}": "",  # signal → empty → no results
+            }
+            return responses.get(cmd, "")
+
+    hits = await _list_signals_recursive(_Bridge(), "top", "*sda*", scope_prefixes=[])
+
+    # Both inst_a and clk were tried
+    assert any("scope show {top.inst_a}" in c for c in calls)
+    assert any("scope show {top.clk}" in c for c in calls)
+    # Only inst_a.sda_out matches (clk returned "" = signal, no children)
+    assert "top.inst_a.sda_out" in hits
+    assert "top.clk" not in hits
+
+
+@pytest.mark.asyncio
+async def test_inspect_signal_list_scope_prefixes_threaded() -> None:
+    """scope_prefixes param on inspect_signal is forwarded to _list_signals_recursive."""
+    from unittest.mock import MagicMock, patch
+
+    calls: list[str] = []
+
+    class _SVBridge:
+        connected = True
+        async def execute(self, cmd: str, timeout: float = 30) -> str:
+            calls.append(cmd)
+            if cmd == "scope show {top}":
+                return "{top.inst_x} {top.u_y}"
+            if cmd == "scope show {top.inst_x}":
+                return "{top.inst_x.sda}"
+            return ""
+
+    sv_bridge = _SVBridge()
+    fake_bridges = MagicMock()
+    fake_bridges.get_bridge.return_value = sv_bridge
+    fake_bridges.xmsim_raw = MagicMock()   # different object → no fallback
+    fake_bridges.simvision_raw = sv_bridge
+
+    with patch("xcelium_mcp.tools.signal_inspection.sanitize_signal_name", side_effect=lambda s: s):
+        from xcelium_mcp.tools.signal_inspection import register
+        from mcp.server.fastmcp import FastMCP
+        mcp = FastMCP("test_f133")
+        register(mcp, fake_bridges)
+        tool = mcp._tool_manager._tools["inspect_signal"]
+        result = await tool.fn(
+            action="list", scope="top", pattern="*sda*",
+            target="simvision", recursive=True, scope_prefixes=["inst_"]
+        )
+
+    # inst_x was recursed (inst_ prefix), u_y was not
+    assert any("scope show {top.inst_x}" in c for c in calls)
+    assert not any("scope show {top.u_y}" in c for c in calls)
+    assert "top.inst_x.sda" in result
