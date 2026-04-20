@@ -917,14 +917,14 @@ async def test_start_simvision_removes_stale_ready_file_on_connection_failure() 
 
 
 # ---------------------------------------------------------------------------
-# F-131: inspect_signal list — recursive=True uses ... wildcard
+# F-131: inspect_signal list — recursive=True uses Python-side scope show walk
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_inspect_signal_list_nonrecursive_uses_dot() -> None:
+async def test_inspect_signal_list_nonrecursive_uses_describe_dot() -> None:
     """list action with recursive=False (default) sends describe scope.pattern."""
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import MagicMock, patch
 
     executed: list[str] = []
 
@@ -942,23 +942,42 @@ async def test_inspect_signal_list_nonrecursive_uses_dot() -> None:
         mcp = FastMCP("test")
         register(mcp, fake_bridges)
         tool = mcp._tool_manager._tools["inspect_signal"]
-        result = await tool.fn(action="list", scope="top.hw", pattern="*sda*", recursive=False)
+        await tool.fn(action="list", scope="top.hw", pattern="*sda*", recursive=False)
 
-    assert executed and "top.hw.*sda*" in executed[0], f"Expected dot-sep: {executed}"
-    assert "..." not in executed[0]
+    assert len(executed) == 1
+    assert executed[0] == "describe top.hw.*sda*"
 
 
 @pytest.mark.asyncio
-async def test_inspect_signal_list_recursive_uses_ellipsis() -> None:
-    """list action with recursive=True sends describe scope...pattern."""
-    from unittest.mock import AsyncMock, MagicMock, patch
+async def test_inspect_signal_list_recursive_uses_scope_show() -> None:
+    """list action with recursive=True calls scope show and recurses into u_ scopes."""
+    from unittest.mock import MagicMock, patch
 
     executed: list[str] = []
+
+    # Simulated scope show responses:
+    # top.hw contains u_core (sub-scope) and sda_out (signal)
+    # top.hw.u_core contains u_sub (sub-scope) and sda_in (signal)
+    # top.hw.u_core.u_sub contains just a signal sda_int
+    def fake_execute(cmd: str, timeout: float = 30):
+        import asyncio
+        executed.append(cmd)
+        responses = {
+            "scope show {top.hw}": "{top.hw.u_core} {top.hw.sda_out}",
+            "scope show {top.hw.u_core}": "{top.hw.u_core.u_sub} {top.hw.u_core.sda_in}",
+            "scope show {top.hw.u_core.u_sub}": "{top.hw.u_core.u_sub.sda_int}",
+        }
+        return asyncio.coroutine(lambda: responses.get(cmd, ""))()
 
     class _FakeBridge:
         async def execute(self, cmd: str, timeout: float = 30) -> str:
             executed.append(cmd)
-            return "top.hw.deep.sub.sda wire"
+            responses = {
+                "scope show {top.hw}": "{top.hw.u_core} {top.hw.sda_out}",
+                "scope show {top.hw.u_core}": "{top.hw.u_core.u_sub} {top.hw.u_core.sda_in}",
+                "scope show {top.hw.u_core.u_sub}": "{top.hw.u_core.u_sub.sda_int}",
+            }
+            return responses.get(cmd, "")
 
     fake_bridges = MagicMock()
     fake_bridges.get_bridge.return_value = _FakeBridge()
@@ -971,12 +990,45 @@ async def test_inspect_signal_list_recursive_uses_ellipsis() -> None:
         tool = mcp._tool_manager._tools["inspect_signal"]
         result = await tool.fn(action="list", scope="top.hw", pattern="*sda*", recursive=True)
 
-    assert executed and "top.hw...*sda*" in executed[0], f"Expected ellipsis: {executed}"
+    # scope show called for top.hw, then recursed into u_core and u_sub
+    assert any("scope show {top.hw}" in c for c in executed)
+    assert any("scope show {top.hw.u_core}" in c for c in executed)
+    assert any("scope show {top.hw.u_core.u_sub}" in c for c in executed)
+    # All sda* signals found at every level
+    assert "top.hw.sda_out" in result
+    assert "top.hw.u_core.sda_in" in result
+    assert "top.hw.u_core.u_sub.sda_int" in result
+    # u_core (as a bare scope name) does not appear on its own line
+    for line in result.splitlines():
+        assert line.endswith("u_core") is False, f"bare scope leaked into results: {line}"
 
 
 @pytest.mark.asyncio
-async def test_inspect_signal_list_recursive_default_is_false() -> None:
-    """recursive=False is the default — existing callers unaffected."""
+async def test_inspect_signal_list_recursive_no_match_returns_message() -> None:
+    """recursive=True with no matching signals returns a descriptive message."""
+    from unittest.mock import MagicMock, patch
+
+    class _FakeBridge:
+        async def execute(self, cmd: str, timeout: float = 30) -> str:
+            return "{top.hw.clk} {top.hw.rst_n}"  # no sda* signals
+
+    fake_bridges = MagicMock()
+    fake_bridges.get_bridge.return_value = _FakeBridge()
+
+    with patch("xcelium_mcp.tools.signal_inspection.sanitize_signal_name", side_effect=lambda s: s):
+        from xcelium_mcp.tools.signal_inspection import register
+        from mcp.server.fastmcp import FastMCP
+        mcp = FastMCP("test")
+        register(mcp, fake_bridges)
+        tool = mcp._tool_manager._tools["inspect_signal"]
+        result = await tool.fn(action="list", scope="top.hw", pattern="*sda*", recursive=True)
+
+    assert "No signals" in result
+
+
+@pytest.mark.asyncio
+async def test_inspect_signal_list_recursive_default_false_backward_compat() -> None:
+    """recursive=False (default) preserves the existing describe scope.pattern behaviour."""
     from unittest.mock import MagicMock, patch
 
     executed: list[str] = []
@@ -995,7 +1047,6 @@ async def test_inspect_signal_list_recursive_default_is_false() -> None:
         mcp = FastMCP("test")
         register(mcp, fake_bridges)
         tool = mcp._tool_manager._tools["inspect_signal"]
-        # No recursive param → default False
         await tool.fn(action="list", scope="top.hw", pattern="*")
 
-    assert executed and "top.hw.*" == executed[0].split("describe ", 1)[1].strip(), f"Unexpected: {executed}"
+    assert executed == ["describe top.hw.*"], f"Unexpected: {executed}"

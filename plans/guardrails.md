@@ -113,3 +113,9 @@ Learned constraints that prevent repeated failures. Each "sign" is a rule discov
 **Instruction:** Parse the listing output line-by-line to extract IDs before building delete/modify commands. Do NOT assume a fixed output format — run the listing, capture output, then parse.
 **Reason:** F-115 — watch clear-all used a stale `watch_ids` list instead of fresh `stop -show` parse, leaving ghost watchpoints
 **Added after:** F-115 (2026-04-15)
+
+### SIGN-018: No `...` Recursive Wildcard in Tcl Hierarchy Commands
+**Trigger:** Building a Tcl `describe` or similar command that needs to match signals at any depth (e.g. `describe top.hw...*sda*`)
+**Instruction:** Use Python-side recursion via `scope show {scope}` instead. Call `scope show` for each scope level, collect matching leaf names with `fnmatch`, and recurse into `u_*`-prefixed children. Never embed `...` in a Tcl hierarchy path.
+**Reason:** F-131 — `describe top.hw...*sda*` was tried on both xmsim (error: "Invalid first character in HDL identifier: ..*sda*") and SimVision (error: "invalid command name 'describe'"). Neither tool recognises `...` as a recursive wildcard.
+**Added after:** F-131 (2026-04-20)

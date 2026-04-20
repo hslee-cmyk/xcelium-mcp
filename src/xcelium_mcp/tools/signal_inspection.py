@@ -1,7 +1,10 @@
 """Signal inspection and manipulation tools."""
 from __future__ import annotations
 
+import asyncio
+import fnmatch
 import re
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
@@ -11,6 +14,32 @@ from xcelium_mcp.tcl_bridge import TclError
 
 # Verilog/SystemVerilog value literals: 1'b0, 8'hFF, 32'd100, 16'bxxxx, plain digits
 _DEPOSIT_VALUE_RE = re.compile(r"^[\d'bhBHdDoOxXzZ_]+$")
+
+
+async def _list_signals_recursive(
+    bridge: Any, scope: str, pattern: str, depth: int = 0, max_depth: int = 5
+) -> list[str]:
+    """Walk scope hierarchy via 'scope show' and collect signal names matching pattern.
+
+    Recurses into child scopes whose last component starts with 'u_' (module instances).
+    Stops at max_depth to bound the number of bridge round-trips.
+    """
+    try:
+        raw = await bridge.execute(f"scope show {{{scope}}}")
+    except (TclError, ConnectionError, asyncio.TimeoutError, OSError):
+        return []
+    results: list[str] = []
+    for item in raw.split():
+        clean = item.strip("{}")
+        if not clean:
+            continue
+        tail = clean.split(".")[-1].split("[")[0]
+        if fnmatch.fnmatch(tail, pattern):
+            results.append(clean)
+        if tail.startswith("u_") and depth < max_depth:
+            sub = await _list_signals_recursive(bridge, clean, pattern, depth + 1, max_depth)
+            results.extend(sub)
+    return results
 
 
 def register(mcp: FastMCP, bridges: BridgeManager) -> None:
@@ -81,8 +110,12 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             if not scope:
                 return "ERROR: 'scope' is required for action='list'."
             bridge = bridges.get_bridge(target)
-            sep = "..." if recursive else "."
-            return await bridge.execute(f"describe {scope}{sep}{pattern}")
+            if recursive:
+                hits = await _list_signals_recursive(bridge, scope, pattern)
+                if not hits:
+                    return f"No signals matching {pattern!r} found under {scope} (recursive search)"
+                return "\n".join(hits)
+            return await bridge.execute(f"describe {scope}.{pattern}")
 
         elif action == "drivers":
             if not signal:
