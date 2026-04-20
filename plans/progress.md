@@ -1,6 +1,22 @@
 
 ---
 
+## 2026-04-20 - F-130 + F-131
+
+### F-130: bridge_ready_* type-scoped cleanup
+- `_start_bridge`: was `rm -f bridge_ready_*` → now loops `scan_ready_files(target="xmsim")`, removes only xmsim files
+- `start_simvision`: step-1 connect loop deletes stale simvision ready files on BRIDGE_ERRORS
+- Bug found during fix: lazy `from bridge_manager import scan_ready_files` at line 301 inside `_start_bridge` compiled `scan_ready_files` as LOCAL → UnboundLocalError at line 200. Fix: remove lazy import. SIGN-017 added.
+- 261 tests pass.
+
+### F-131: inspect_signal list recursive=True
+- `recursive: bool = False` param added to inspect_signal
+- `recursive=True` → `describe {scope}...{pattern}` (ncsim recursive wildcard)
+- `recursive=False` (default) → existing behavior unchanged
+- 264 tests total pass.
+
+---
+
 ## 2026-04-20 - Bug Pattern Collection (guardrails update)
 
 **Task:** Collect recurring bug-causing patterns from F-107~F-129 and encode as SIGN-009~SIGN-016 in guardrails.md.
