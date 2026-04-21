@@ -23,7 +23,10 @@ _DEPOSIT_VALUE_RE = re.compile(r"^[\d'bhBHdDoOxXzZ_]+$")
 #   full.path           — plain unbraced path
 _DOUBLE_BRACED_ARRAY_RE = re.compile(r"^\{\{(.+?)\}(\[\d+(?::\d+)?\])\}$")
 _ARRAY_ELEM_RE = re.compile(r"^\{(.+?)\}(\[\d+(?::\d+)?\])$")
-_BRACED_PATH_RE = re.compile(r"^\{(.+?)\}$")
+_BRACED_PATH_RE = re.compile(r"^\{(.+)\}$", re.DOTALL)
+# Single bit-select paths (e.g. r_sdaDelayed[1]) are leaf signals — recursing into them
+# causes scope show to return {{r_sdaDelayed[1]}[0]} garbage (double bit-select).
+_BIT_SELECT_RE = re.compile(r"\[\d+\]$")
 
 
 def _parse_scope_item(item: str) -> str:
@@ -69,8 +72,11 @@ async def _list_signals_recursive(
         if fnmatch.fnmatch(tail, pattern):
             results.append(clean)
         should_recurse = (
-            not scope_prefixes  # [] = general: try all (scope show on signal returns "" → safe)
-            or any(tail.startswith(p) for p in scope_prefixes)
+            not _BIT_SELECT_RE.search(clean)  # [N] suffix = leaf bit-select, never a scope
+            and (
+                not scope_prefixes  # [] = general: try all
+                or any(tail.startswith(p) for p in scope_prefixes)
+            )
         )
         if should_recurse and depth < max_depth:
             sub = await _list_signals_recursive(

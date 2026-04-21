@@ -1377,3 +1377,46 @@ async def test_list_recursive_double_braced_array_elements() -> None:
 
     assert any("r_sdaDelayed[1]" in h for h in hits), f"Missing [1] in {hits}"
     assert any("r_sdaDelayed[0]" in h for h in hits), f"Missing [0] in {hits}"
+
+
+@pytest.mark.asyncio
+async def test_list_recursive_no_double_bit_select() -> None:
+    """Single bit-select [N] paths must not be recursed into — prevents r_bus[1][0] (F-134 v3)."""
+    from xcelium_mcp.tools.signal_inspection import _list_signals_recursive
+
+    recurse_calls: list[str] = []
+
+    class _Bridge:
+        async def execute(self, cmd: str, timeout: float = 30) -> str:
+            recurse_calls.append(cmd)
+            responses = {
+                # Array base scope: returns individual bit-select paths
+                "scope show {top.hw.u_x}": (
+                    "{{top.hw.u_x.r_bus}[1]} {{top.hw.u_x.r_bus}[0]}"
+                ),
+                # If we mistakenly recurse into [1], SimVision returns nested garbage
+                "scope show {top.hw.u_x.r_bus[1]}": "{{top.hw.u_x.r_bus[1]}[0]}",
+                "scope show {top.hw.u_x.r_bus[0]}": "",
+            }
+            return responses.get(cmd, "")
+
+    hits = await _list_signals_recursive(
+        _Bridge(), "top.hw.u_x", "*r_bus*", scope_prefixes=[]
+    )
+
+    # [N] paths must NOT be recursed into
+    assert "scope show {top.hw.u_x.r_bus[1]}" not in recurse_calls, (
+        f"Should not recurse into bit-select path: {recurse_calls}"
+    )
+    assert "scope show {top.hw.u_x.r_bus[0]}" not in recurse_calls, (
+        f"Should not recurse into bit-select path: {recurse_calls}"
+    )
+
+    # No double bit-select in results
+    for h in hits:
+        assert "[1][0]" not in h and "[0][0]" not in h, f"Double bit-select in result: {h!r}"
+        assert "{" not in h and "}" not in h, f"Brace artifact: {h!r}"
+
+    # Individual bits should be in results
+    assert any("r_bus[1]" in h for h in hits), f"Missing r_bus[1] in {hits}"
+    assert any("r_bus[0]" in h for h in hits), f"Missing r_bus[0] in {hits}"
