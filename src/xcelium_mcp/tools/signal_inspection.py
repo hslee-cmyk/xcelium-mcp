@@ -15,6 +15,24 @@ from xcelium_mcp.tcl_bridge import TclError
 # Verilog/SystemVerilog value literals: 1'b0, 8'hFF, 32'd100, 16'bxxxx, plain digits
 _DEPOSIT_VALUE_RE = re.compile(r"^[\d'bhBHdDoOxXzZ_]+$")
 
+# SimVision 'scope show' returns TCL list items in three forms:
+#   {full.path}[idx]  — array element (braced path + bracket index)
+#   {full.path}       — path that contains special chars, braced
+#   full.path         — plain unbraced path
+# strip("{}") only removes leading/trailing braces, leaving r_sdaDelayed}[1] artifacts.
+_ARRAY_ELEM_RE = re.compile(r"^\{(.+?)\}(\[\d+(?::\d+)?\])$")
+_BRACED_PATH_RE = re.compile(r"^\{(.+?)\}$")
+
+
+def _parse_scope_item(item: str) -> str:
+    m = _ARRAY_ELEM_RE.match(item)
+    if m:
+        return m.group(1) + m.group(2)
+    m = _BRACED_PATH_RE.match(item)
+    if m:
+        return m.group(1)
+    return item
+
 
 async def _list_signals_recursive(
     bridge: Any,
@@ -39,7 +57,7 @@ async def _list_signals_recursive(
         return []
     results: list[str] = []
     for item in raw.split():
-        clean = item.strip("{}")
+        clean = _parse_scope_item(item)
         if not clean:
             continue
         tail = clean.split(".")[-1].split("[")[0]

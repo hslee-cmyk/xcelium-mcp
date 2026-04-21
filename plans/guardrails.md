@@ -120,6 +120,12 @@ Learned constraints that prevent repeated failures. Each "sign" is a rule discov
 **Reason:** F-131 — `describe top.hw...*sda*` was tried on both xmsim (error: "Invalid first character in HDL identifier: ..*sda*") and SimVision (error: "invalid command name 'describe'"). Neither tool recognises `...` as a recursive wildcard.
 **Added after:** F-131 (2026-04-20)
 
+### SIGN-020: Use Regex to Parse SimVision TCL List Items — Never strip("{}")
+**Trigger:** Processing output of `scope show {scope}` token by token
+**Instruction:** Use `_parse_scope_item(item)` (regex-based) instead of `item.strip("{}")`. SimVision returns array elements as `{full.path}[idx]` — strip only removes leading/trailing braces, leaving `r_name}[1]` artifacts. The helper handles three forms: `{path}[idx]` → `path[idx]`, `{path}` → `path`, `plain` → `plain`.
+**Reason:** F-134 — `scope_prefixes=[]` mode exposed array element items from `scope show`; `strip("{}")` produced `r_sdaDelayed}[1]` which is an invalid signal path.
+**Added after:** F-134 (2026-04-21)
+
 ### SIGN-019: Bridge-Specific Tcl Commands Must Be Routed to the Correct Bridge
 **Trigger:** Sending a Tcl command that is only supported by one bridge type (xmsim vs SimVision) via `bridges.get_bridge(target)` which may return the wrong type
 **Instruction:** Before executing bridge-specific commands, check `bridge is bridges.xmsim_raw` and route to the correct bridge. If `scope show` is needed → must use SimVision bridge. If `describe` / `value` / `drivers` → must use xmsim. Add an explicit error or auto-fallback rather than letting the helper silently return empty results.

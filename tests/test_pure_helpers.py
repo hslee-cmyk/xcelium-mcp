@@ -1268,3 +1268,72 @@ async def test_inspect_signal_list_scope_prefixes_threaded() -> None:
     assert any("scope show {top.inst_x}" in c for c in calls)
     assert not any("scope show {top.u_y}" in c for c in calls)
     assert "top.inst_x.sda" in result
+
+
+# ---------------------------------------------------------------------------
+# F-134: _parse_scope_item — SimVision TCL list array element path parsing
+# ---------------------------------------------------------------------------
+
+
+class TestParseScopeItem:
+    """_parse_scope_item must handle all three SimVision scope show item formats."""
+
+    def _parse(self, item: str) -> str:
+        from xcelium_mcp.tools.signal_inspection import _parse_scope_item
+        return _parse_scope_item(item)
+
+    def test_array_element_braced(self) -> None:
+        """{path}[idx] → path[idx] (no } artifact)."""
+        assert self._parse("{top.hw.u_x.r_sdaDelayed}[1]") == "top.hw.u_x.r_sdaDelayed[1]"
+        assert self._parse("{top.hw.u_x.r_sdaDelayed}[0]") == "top.hw.u_x.r_sdaDelayed[0]"
+
+    def test_array_range_braced(self) -> None:
+        """{path}[1:0] → path[1:0]."""
+        assert self._parse("{top.hw.u_x.r_sdaDelayed}[1:0]") == "top.hw.u_x.r_sdaDelayed[1:0]"
+
+    def test_braced_plain_path(self) -> None:
+        """{path} → path (normal braced item)."""
+        assert self._parse("{top.hw.u_core}") == "top.hw.u_core"
+
+    def test_unbraced_plain_path(self) -> None:
+        """plain.path → plain.path (no transformation)."""
+        assert self._parse("top.hw.clk") == "top.hw.clk"
+
+    def test_no_brace_artifact_in_tail(self) -> None:
+        """tail extraction must not contain } when item is {path}[idx]."""
+        clean = self._parse("{top.hw.u_x.r_sdaDelayed}[1]")
+        assert "}" not in clean
+        assert clean == "top.hw.u_x.r_sdaDelayed[1]"
+
+
+@pytest.mark.asyncio
+async def test_list_recursive_empty_prefixes_no_brace_artifact() -> None:
+    """scope_prefixes=[] mode: array element items must not produce } artifacts (F-134)."""
+    from xcelium_mcp.tools.signal_inspection import _list_signals_recursive
+
+    class _Bridge:
+        async def execute(self, cmd: str, timeout: float = 30) -> str:
+            responses = {
+                # SimVision returns array elements in TCL list form
+                "scope show {top.hw.u_x}": (
+                    "{top.hw.u_x.r_sdaDelayed}[1:0] "
+                    "{top.hw.u_x.r_sdaDelayed}[1] "
+                    "{top.hw.u_x.r_sdaDelayed}[0] "
+                    "{top.hw.u_x.r_sdaDelayed}"
+                ),
+                "scope show {top.hw}": "{top.hw.u_x}",
+            }
+            return responses.get(cmd, "")
+
+    hits = await _list_signals_recursive(
+        _Bridge(), "top.hw", "*sdaDelayed*", scope_prefixes=[]
+    )
+
+    # All hits must be clean (no } artifact)
+    for h in hits:
+        assert "}" not in h, f"Brace artifact in result: {h!r}"
+
+    # Correct paths present
+    assert any("r_sdaDelayed[1:0]" in h for h in hits), f"Missing [1:0] in {hits}"
+    assert any("r_sdaDelayed[1]" in h for h in hits), f"Missing [1] in {hits}"
+    assert any("r_sdaDelayed[0]" in h for h in hits), f"Missing [0] in {hits}"
