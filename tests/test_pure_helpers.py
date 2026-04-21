@@ -826,13 +826,15 @@ async def test_start_bridge_removes_only_xmsim_ready_files() -> None:
         patch("xcelium_mcp.bridge_lifecycle.get_user_tmp_dir", AsyncMock(return_value="/tmp/mcp")),
         patch("xcelium_mcp.bridge_lifecycle.shell_run", fake_shell_run),
         patch("xcelium_mcp.bridge_lifecycle.find_shm", AsyncMock(return_value="")),
+        patch("xcelium_mcp.bridge_lifecycle.resolve_sim_params",
+              return_value={"test_args_format": "", "extra_args": "", "timeout": 2, "dump_args": ""}),
     ):
         from xcelium_mcp.bridge_lifecycle import _start_bridge
         from xcelium_mcp.bridge_manager import BridgeManager
 
         bridges = BridgeManager()
         try:
-            await _start_bridge("/sim", config, "t1", "/sim/setup.tcl", "normal", 60, bridges=bridges)
+            await _start_bridge("/sim", config, "t1", "/sim/setup.tcl", "normal", 2, bridges=bridges)
         except Exception:
             pass  # only care about which rm -f calls were made before launch
 
@@ -863,13 +865,15 @@ async def test_start_bridge_no_ready_files_is_noop() -> None:
         patch("xcelium_mcp.bridge_lifecycle.get_user_tmp_dir", AsyncMock(return_value="/tmp/mcp")),
         patch("xcelium_mcp.bridge_lifecycle.shell_run", fake_shell_run),
         patch("xcelium_mcp.bridge_lifecycle.find_shm", AsyncMock(return_value="")),
+        patch("xcelium_mcp.bridge_lifecycle.resolve_sim_params",
+              return_value={"test_args_format": "", "extra_args": "", "timeout": 2, "dump_args": ""}),
     ):
         from xcelium_mcp.bridge_lifecycle import _start_bridge
         from xcelium_mcp.bridge_manager import BridgeManager
 
         bridges = BridgeManager()
         try:
-            await _start_bridge("/sim", config, "t1", "/sim/setup.tcl", "normal", 60, bridges=bridges)
+            await _start_bridge("/sim", config, "t1", "/sim/setup.tcl", "normal", 2, bridges=bridges)
         except Exception:
             pass
 
