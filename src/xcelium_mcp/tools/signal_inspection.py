@@ -86,6 +86,26 @@ async def _list_signals_recursive(
     return results
 
 
+async def _list_signals_via_tcl(
+    bridge: Any,
+    scope: str,
+    pattern: str,
+    scope_prefixes: list[str] | None = None,
+    max_depth: int = 5,
+) -> list[str]:
+    """Single TCP call to TCL bridge for recursive signal listing.
+
+    Sends __LIST_SIGNALS__ to mcp_bridge.tcl which runs the recursion entirely
+    in TCL, eliminating per-item round-trips.
+    """
+    prefixes = scope_prefixes if scope_prefixes is not None else ["u_"]
+    prefixes_tcl = "{" + " ".join(prefixes) + "}"
+    raw = await bridge.execute(
+        f"__LIST_SIGNALS__ {{{scope}}} {{{pattern}}} {prefixes_tcl} {max_depth}"
+    )
+    return [line for line in raw.splitlines() if line.strip()] if raw.strip() else []
+
+
 def register(mcp: FastMCP, bridges: BridgeManager) -> None:
     """Register signal inspection tools."""
 
@@ -167,7 +187,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
                             "ERROR: recursive list requires SimVision (scope show is unavailable "
                             "in xmsim). Start SimVision first."
                         )
-                hits = await _list_signals_recursive(bridge, scope, pattern, scope_prefixes)
+                hits = await _list_signals_via_tcl(bridge, scope, pattern, scope_prefixes)
                 if not hits:
                     return f"No signals matching {pattern!r} found under {scope} (recursive search)"
                 return "\n".join(hits)

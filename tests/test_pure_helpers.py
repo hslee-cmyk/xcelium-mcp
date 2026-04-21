@@ -921,7 +921,7 @@ async def test_start_simvision_removes_stale_ready_file_on_connection_failure() 
 
 
 # ---------------------------------------------------------------------------
-# F-131: inspect_signal list — recursive=True uses Python-side scope show walk
+# F-131/F-135: inspect_signal list — recursive=True uses __LIST_SIGNALS__ (single TCL call)
 # ---------------------------------------------------------------------------
 
 
@@ -953,35 +953,18 @@ async def test_inspect_signal_list_nonrecursive_uses_describe_dot() -> None:
 
 
 @pytest.mark.asyncio
-async def test_inspect_signal_list_recursive_uses_scope_show() -> None:
-    """list action with recursive=True calls scope show and recurses into u_ scopes."""
+async def test_inspect_signal_list_recursive_single_tcl_call() -> None:
+    """list recursive=True sends a single __LIST_SIGNALS__ command (F-135: no per-item round-trips)."""
     from unittest.mock import MagicMock, patch
 
     executed: list[str] = []
 
-    # Simulated scope show responses:
-    # top.hw contains u_core (sub-scope) and sda_out (signal)
-    # top.hw.u_core contains u_sub (sub-scope) and sda_in (signal)
-    # top.hw.u_core.u_sub contains just a signal sda_int
-    def fake_execute(cmd: str, timeout: float = 30):
-        import asyncio
-        executed.append(cmd)
-        responses = {
-            "scope show {top.hw}": "{top.hw.u_core} {top.hw.sda_out}",
-            "scope show {top.hw.u_core}": "{top.hw.u_core.u_sub} {top.hw.u_core.sda_in}",
-            "scope show {top.hw.u_core.u_sub}": "{top.hw.u_core.u_sub.sda_int}",
-        }
-        return asyncio.coroutine(lambda: responses.get(cmd, ""))()
-
     class _FakeBridge:
         async def execute(self, cmd: str, timeout: float = 30) -> str:
             executed.append(cmd)
-            responses = {
-                "scope show {top.hw}": "{top.hw.u_core} {top.hw.sda_out}",
-                "scope show {top.hw.u_core}": "{top.hw.u_core.u_sub} {top.hw.u_core.sda_in}",
-                "scope show {top.hw.u_core.u_sub}": "{top.hw.u_core.u_sub.sda_int}",
-            }
-            return responses.get(cmd, "")
+            if cmd.startswith("__LIST_SIGNALS__"):
+                return "top.hw.sda_out\ntop.hw.u_core.sda_in\ntop.hw.u_core.u_sub.sda_int"
+            return ""
 
     fake_bridges = MagicMock()
     fake_bridges.get_bridge.return_value = _FakeBridge()
@@ -994,17 +977,15 @@ async def test_inspect_signal_list_recursive_uses_scope_show() -> None:
         tool = mcp._tool_manager._tools["inspect_signal"]
         result = await tool.fn(action="list", scope="top.hw", pattern="*sda*", recursive=True)
 
-    # scope show called for top.hw, then recursed into u_core and u_sub
-    assert any("scope show {top.hw}" in c for c in executed)
-    assert any("scope show {top.hw.u_core}" in c for c in executed)
-    assert any("scope show {top.hw.u_core.u_sub}" in c for c in executed)
-    # All sda* signals found at every level
+    # Exactly one TCP call (the __LIST_SIGNALS__ meta command)
+    assert len(executed) == 1
+    assert executed[0].startswith("__LIST_SIGNALS__")
+    assert "{top.hw}" in executed[0]
+    assert "{*sda*}" in executed[0]
+    # Results from TCL bridge are returned as-is
     assert "top.hw.sda_out" in result
     assert "top.hw.u_core.sda_in" in result
     assert "top.hw.u_core.u_sub.sda_int" in result
-    # u_core (as a bare scope name) does not appear on its own line
-    for line in result.splitlines():
-        assert line.endswith("u_core") is False, f"bare scope leaked into results: {line}"
 
 
 @pytest.mark.asyncio
@@ -1014,7 +995,7 @@ async def test_inspect_signal_list_recursive_no_match_returns_message() -> None:
 
     class _FakeBridge:
         async def execute(self, cmd: str, timeout: float = 30) -> str:
-            return "{top.hw.clk} {top.hw.rst_n}"  # no sda* signals
+            return ""  # TCL bridge found nothing
 
     fake_bridges = MagicMock()
     fake_bridges.get_bridge.return_value = _FakeBridge()
@@ -1087,7 +1068,9 @@ async def test_recursive_list_xmsim_autofallback_to_simvision() -> None:
         connected = True
         async def execute(self, cmd: str, timeout: float = 30) -> str:
             sv_executed.append(cmd)
-            return "{top.hw.sda_out}"
+            if cmd.startswith("__LIST_SIGNALS__"):
+                return "top.hw.sda_out"
+            return ""
 
     sv_bridge = _SVBridge()
 
@@ -1099,8 +1082,8 @@ async def test_recursive_list_xmsim_autofallback_to_simvision() -> None:
     tool_fn = _make_inspect_tool(fake_bridges)
     result = await tool_fn(action="list", scope="top.hw", pattern="*sda*", recursive=True)
 
-    # SimVision bridge was used (scope show called on sv_bridge)
-    assert any("scope show" in c for c in sv_executed), f"scope show not called on SimVision: {sv_executed}"
+    # SimVision bridge was used (__LIST_SIGNALS__ called on sv_bridge)
+    assert any("__LIST_SIGNALS__" in c for c in sv_executed), f"__LIST_SIGNALS__ not called on SimVision: {sv_executed}"
     assert "ERROR" not in result
 
 
@@ -1135,7 +1118,9 @@ async def test_recursive_list_simvision_target_unchanged() -> None:
         connected = True
         async def execute(self, cmd: str, timeout: float = 30) -> str:
             sv_executed.append(cmd)
-            return "{top.hw.sda_out}"
+            if cmd.startswith("__LIST_SIGNALS__"):
+                return "top.hw.sda_out"
+            return ""
 
     sv_bridge = _SVBridge()
 
@@ -1148,7 +1133,7 @@ async def test_recursive_list_simvision_target_unchanged() -> None:
     result = await tool_fn(action="list", scope="top.hw", pattern="*sda*",
                            target="simvision", recursive=True)
 
-    assert any("scope show" in c for c in sv_executed)
+    assert any("__LIST_SIGNALS__" in c for c in sv_executed)
     assert "ERROR" not in result
 
 
@@ -1236,7 +1221,7 @@ async def test_list_recursive_empty_prefixes_general_mode() -> None:
 
 @pytest.mark.asyncio
 async def test_inspect_signal_list_scope_prefixes_threaded() -> None:
-    """scope_prefixes param on inspect_signal is forwarded to _list_signals_recursive."""
+    """scope_prefixes param on inspect_signal is forwarded via __LIST_SIGNALS__ command."""
     from unittest.mock import MagicMock, patch
 
     calls: list[str] = []
@@ -1245,10 +1230,8 @@ async def test_inspect_signal_list_scope_prefixes_threaded() -> None:
         connected = True
         async def execute(self, cmd: str, timeout: float = 30) -> str:
             calls.append(cmd)
-            if cmd == "scope show {top}":
-                return "{top.inst_x} {top.u_y}"
-            if cmd == "scope show {top.inst_x}":
-                return "{top.inst_x.sda}"
+            if cmd.startswith("__LIST_SIGNALS__"):
+                return "top.inst_x.sda"
             return ""
 
     sv_bridge = _SVBridge()
@@ -1268,9 +1251,10 @@ async def test_inspect_signal_list_scope_prefixes_threaded() -> None:
             target="simvision", recursive=True, scope_prefixes=["inst_"]
         )
 
-    # inst_x was recursed (inst_ prefix), u_y was not
-    assert any("scope show {top.inst_x}" in c for c in calls)
-    assert not any("scope show {top.u_y}" in c for c in calls)
+    # __LIST_SIGNALS__ was called with inst_ prefix in the command
+    assert len(calls) == 1
+    assert "__LIST_SIGNALS__" in calls[0]
+    assert "{inst_}" in calls[0]
     assert "top.inst_x.sda" in result
 
 

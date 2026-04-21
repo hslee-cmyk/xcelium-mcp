@@ -398,6 +398,23 @@ proc ::mcp_bridge::dispatch {channel cmd} {
         return
     }
 
+    if {[string match "__LIST_SIGNALS__*" $cmd]} {
+        set args [string trim [string range $cmd 16 end]]
+        set scope_arg   [lindex $args 0]
+        set pattern_arg [lindex $args 1]
+        set prefixes    [lindex $args 2]
+        set max_depth   [lindex $args 3]
+        if {$scope_arg eq "" || $pattern_arg eq ""} {
+            ::mcp_bridge::send_error $channel "__LIST_SIGNALS__ requires scope and pattern"
+            return
+        }
+        if {![string is integer -strict $max_depth]} { set max_depth 5 }
+        set hits [::mcp_bridge::_list_signals_recursive \
+            $scope_arg $pattern_arg $prefixes 0 $max_depth]
+        ::mcp_bridge::send_ok $channel [join $hits "\n"]
+        return
+    }
+
     # Regular Tcl/SimVision command — evaluate in global namespace
     if {[catch {uplevel #0 $cmd} result]} {
         ::mcp_bridge::send_error $channel $result
@@ -1358,6 +1375,60 @@ proc ::mcp_bridge::do_waveform_remove {channel group_name sig_list} {
         append msg "|not_found:[join $not_found ,]"
     }
     ::mcp_bridge::send_ok $channel $msg
+}
+
+# ---------------------------------------------------------------------------
+# Recursive signal listing — used by __LIST_SIGNALS__ meta command
+# ---------------------------------------------------------------------------
+
+proc ::mcp_bridge::_parse_scope_item {token} {
+    # After foreach over a TCL list from [scope show], array elements appear as
+    # {path}[N] or {path}[N:M]: the outer list quoting is removed by foreach but
+    # inner braces remain as literal chars.
+    if {[regexp {^\{(.+)\}(\[\d+(?::\d+)?\])$} $token -> p idx]} {
+        return "${p}${idx}"
+    }
+    return $token
+}
+
+proc ::mcp_bridge::_list_signals_recursive {scope pattern prefixes depth max_depth} {
+    if {$depth >= $max_depth} { return {} }
+    if {[catch {scope show $scope} raw]} { return {} }
+    set results {}
+    foreach token $raw {
+        set clean [::mcp_bridge::_parse_scope_item $token]
+        if {$clean eq ""} { continue }
+        # Extract tail: last path component before any [
+        set base [lindex [split $clean {[}] 0]
+        set tail [lindex [split $base .] end]
+        # Match against pattern
+        if {[string match $pattern $tail]} {
+            lappend results $clean
+        }
+        # Bit-select suffix [N] = leaf signal, never a scope
+        if {[regexp {\[\d+\]$} $clean]} { continue }
+        # Determine whether to recurse into this item
+        set should_recurse 0
+        if {[llength $prefixes] == 0} {
+            # general mode: try scope show; non-empty result => sub-scope
+            if {![catch {scope show $clean} sub_raw] && $sub_raw ne ""} {
+                set should_recurse 1
+            }
+        } else {
+            foreach prefix $prefixes {
+                if {[string match "${prefix}*" $tail]} {
+                    set should_recurse 1
+                    break
+                }
+            }
+        }
+        if {$should_recurse} {
+            set sub [::mcp_bridge::_list_signals_recursive \
+                $clean $pattern $prefixes [expr {$depth + 1}] $max_depth]
+            foreach r $sub { lappend results $r }
+        }
+    }
+    return $results
 }
 
 # ---------------------------------------------------------------------------
