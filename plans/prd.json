@@ -1830,6 +1830,19 @@
         "pytest passes"
       ],
       "notes": "## 배경 (2026-04-20)\n\n### 현재 문제\n`_list_signals_recursive`의 L39:\n```python\nif tail.startswith('u_') and depth < max_depth:\n```\n`u_`는 venezia-fpga 프로젝트의 module instance 명명 규칙. 다른 프로젝트에서는 동작하지 않음.\n\n### 근거 (실증)\nSimVision TCL 조사 결과 (2026-04-20):\n- `scope show {signal_path}` → `\"\"` (빈 문자열)\n- `scope show {sub_scope_path}` → 자식 목록 반환 (non-empty)\n- `scope set {signal}; scope get` → scope 변경 없음 (silent fail)\n- sub-scope/signal 판별 전용 명령(`scope children`, `netlist`, `describe` 등) 없음\n\n따라서 `u_*` 체크는 **정확성이 아닌 성능 최적화** 목적임.\n`scope show {item}` 반환값이 비어있으면 signal, 비어있지 않으면 sub-scope로 판별 가능.\n\n### 구현 방안\n`_list_signals_recursive` 시그니처 변경:\n```python\nasync def _list_signals_recursive(\n    bridge, scope, pattern,\n    scope_prefixes: list[str] = [\"u_\"],  # [] = 전체 시도 (general mode)\n    depth=0, max_depth=5\n) -> list[str]:\n    ...\n    for item in raw.split():\n        clean = item.strip(\"{}\")\n        tail = clean.split(\".\")[-1].split(\"[\")[0]\n        if fnmatch.fnmatch(tail, pattern):\n            results.append(clean)\n        should_recurse = (\n            not scope_prefixes  # [] = general mode: try all\n            or any(tail.startswith(p) for p in scope_prefixes)\n        )\n        if should_recurse and depth < max_depth:\n            sub = await _list_signals_recursive(\n                bridge, clean, pattern, scope_prefixes, depth+1, max_depth\n            )\n            results.extend(sub)\n    return results\n```\n\n`inspect_signal` tool signature 에 `scope_prefixes: list[str] | None = None` 파라미터 추가.\n- `None` → 기본값 `[\"u_\"]` 적용 (하위 호환)\n- `[]` → general mode\n\n### 수정 대상 파일\n- `src/xcelium_mcp/tools/signal_inspection.py`: `_list_signals_recursive` + `inspect_signal` 파라미터 추가"
+    },
+    {
+      "id": "F-134",
+      "title": "inspect_signal list recursive — scope show 배열 원소 경로 파싱 버그 (} 아티팩트)",
+      "priority": 3,
+      "passes": false,
+      "acceptanceCriteria": [
+        "scope_prefixes=[] 모드에서 r_sdaDelayed}[1] 같은 } 아티팩트 경로가 결과에 포함되지 않음",
+        "r_sdaDelayed[1:0] (base), r_sdaDelayed[1], r_sdaDelayed[0] (개별 비트) 경로가 올바른 형식으로 반환",
+        "scope_prefixes=['u_'] 기본 모드 동작 영향 없음",
+        "pytest passes"
+      ],
+      "notes": "## 배경 (2026-04-21)\n\n### 재현 조건\n`inspect_signal(action='list', scope='top.hw', pattern='*sda*', recursive=True, scope_prefixes=[])` 실행 시:\n```\ntop.hw.u_ext.u_ext_d_main.u_ext_i2cSlave.r_sdaDelayed[1:0]   ← 정상\ntop.hw.u_ext.u_ext_d_main.u_ext_i2cSlave.r_sdaDelayed}[1]    ← 버그\ntop.hw.u_ext.u_ext_d_main.u_ext_i2cSlave.r_sdaDelayed}[0]    ← 버그\n```\n\n### 원인\nSimVision `scope show {scope}` 가 배열 원소를 반환할 때 TCL 리스트 형식 사용:\n```\n{top.hw.u_ext.u_ext_d_main.u_ext_i2cSlave.r_sdaDelayed}[1]\n```\n파이썬 파서의 `item.strip(\"{}\")` 는 문자열 **양 끝의 `{}`** 만 제거하므로,\n`}[1]` 이 붙은 형태(`r_sdaDelayed}[1]`)가 그대로 남음.\n\n`scope_prefixes=['u_']` 기본 모드에서는 배열 원소가 `scope show` 결과에 포함되지 않아 재현되지 않음.\n`scope_prefixes=[]` 일반 모드에서 모든 항목에 `scope show` 를 시도하면 배열 원소 경로도 시도하게 되어 버그 노출.\n\n### 수정 방안\n`_list_signals_recursive` 의 item 파싱 로직 수정:\n```python\nimport re\n\n# SimVision TCL list item: {full.path}[idx] or full.path or {full.path}\n_ARRAY_ELEM_RE = re.compile(r'^\\{(.+?)\\}(\\[\\d+\\])$')\n_BRACED_RE = re.compile(r'^\\{(.+?)\\}$')\n\ndef _parse_scope_item(item: str) -> str:\n    m = _ARRAY_ELEM_RE.match(item)\n    if m:\n        return m.group(1) + m.group(2)   # path[idx]\n    m = _BRACED_RE.match(item)\n    if m:\n        return m.group(1)                  # path\n    return item                            # plain token\n```\n`item.strip(\"{}\")` 대신 `_parse_scope_item(item)` 사용.\n\n### 수정 대상 파일\n- `src/xcelium_mcp/tools/signal_inspection.py`: `_list_signals_recursive` 파싱 로직"
     }
   ]
 }
