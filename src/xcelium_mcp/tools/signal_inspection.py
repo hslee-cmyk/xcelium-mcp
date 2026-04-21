@@ -15,16 +15,21 @@ from xcelium_mcp.tcl_bridge import TclError
 # Verilog/SystemVerilog value literals: 1'b0, 8'hFF, 32'd100, 16'bxxxx, plain digits
 _DEPOSIT_VALUE_RE = re.compile(r"^[\d'bhBHdDoOxXzZ_]+$")
 
-# SimVision 'scope show' returns TCL list items in three forms:
-#   {full.path}[idx]  — array element (braced path + bracket index)
-#   {full.path}       — path that contains special chars, braced
-#   full.path         — plain unbraced path
-# strip("{}") only removes leading/trailing braces, leaving r_sdaDelayed}[1] artifacts.
+# SimVision 'scope show' returns TCL list items in four forms:
+#   {{full.path}[idx]}  — scope show on array base returns double-braced elements
+#                         (outer {} = TCL list quoting, inner {path}[idx] = SimVision format)
+#   {full.path}[idx]    — array element at top-level scope show output
+#   {full.path}         — path with special chars, braced
+#   full.path           — plain unbraced path
+_DOUBLE_BRACED_ARRAY_RE = re.compile(r"^\{\{(.+?)\}(\[\d+(?::\d+)?\])\}$")
 _ARRAY_ELEM_RE = re.compile(r"^\{(.+?)\}(\[\d+(?::\d+)?\])$")
 _BRACED_PATH_RE = re.compile(r"^\{(.+?)\}$")
 
 
 def _parse_scope_item(item: str) -> str:
+    m = _DOUBLE_BRACED_ARRAY_RE.match(item)
+    if m:
+        return m.group(1) + m.group(2)
     m = _ARRAY_ELEM_RE.match(item)
     if m:
         return m.group(1) + m.group(2)

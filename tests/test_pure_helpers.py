@@ -1280,11 +1280,17 @@ async def test_inspect_signal_list_scope_prefixes_threaded() -> None:
 
 
 class TestParseScopeItem:
-    """_parse_scope_item must handle all three SimVision scope show item formats."""
+    """_parse_scope_item must handle all four SimVision scope show item formats."""
 
     def _parse(self, item: str) -> str:
         from xcelium_mcp.tools.signal_inspection import _parse_scope_item
         return _parse_scope_item(item)
+
+    def test_double_braced_array_element(self) -> None:
+        """{{path}[idx]} → path[idx] (scope show on array base returns double-braced)."""
+        assert self._parse("{{top.hw.u_x.r_sdaDelayed}[1]}") == "top.hw.u_x.r_sdaDelayed[1]"
+        assert self._parse("{{top.hw.u_x.r_sdaDelayed}[0]}") == "top.hw.u_x.r_sdaDelayed[0]"
+        assert self._parse("{{top.hw.u_x.r_sdaDelayed}[1:0]}") == "top.hw.u_x.r_sdaDelayed[1:0]"
 
     def test_array_element_braced(self) -> None:
         """{path}[idx] → path[idx] (no } artifact)."""
@@ -1304,21 +1310,24 @@ class TestParseScopeItem:
         assert self._parse("top.hw.clk") == "top.hw.clk"
 
     def test_no_brace_artifact_in_tail(self) -> None:
-        """tail extraction must not contain } when item is {path}[idx]."""
-        clean = self._parse("{top.hw.u_x.r_sdaDelayed}[1]")
-        assert "}" not in clean
-        assert clean == "top.hw.u_x.r_sdaDelayed[1]"
+        """No } artifact regardless of input format."""
+        for item in [
+            "{top.hw.u_x.r_sdaDelayed}[1]",
+            "{{top.hw.u_x.r_sdaDelayed}[1]}",
+        ]:
+            clean = self._parse(item)
+            assert "}" not in clean, f"Brace artifact in {item!r} → {clean!r}"
 
 
 @pytest.mark.asyncio
 async def test_list_recursive_empty_prefixes_no_brace_artifact() -> None:
-    """scope_prefixes=[] mode: array element items must not produce } artifacts (F-134)."""
+    """scope_prefixes=[] mode: single-braced array items must not produce } artifacts (F-134)."""
     from xcelium_mcp.tools.signal_inspection import _list_signals_recursive
 
     class _Bridge:
         async def execute(self, cmd: str, timeout: float = 30) -> str:
             responses = {
-                # SimVision returns array elements in TCL list form
+                # Top-level scope show: single-braced SimVision format
                 "scope show {top.hw.u_x}": (
                     "{top.hw.u_x.r_sdaDelayed}[1:0] "
                     "{top.hw.u_x.r_sdaDelayed}[1] "
@@ -1333,11 +1342,38 @@ async def test_list_recursive_empty_prefixes_no_brace_artifact() -> None:
         _Bridge(), "top.hw", "*sdaDelayed*", scope_prefixes=[]
     )
 
-    # All hits must be clean (no } artifact)
     for h in hits:
         assert "}" not in h, f"Brace artifact in result: {h!r}"
 
-    # Correct paths present
     assert any("r_sdaDelayed[1:0]" in h for h in hits), f"Missing [1:0] in {hits}"
+    assert any("r_sdaDelayed[1]" in h for h in hits), f"Missing [1] in {hits}"
+    assert any("r_sdaDelayed[0]" in h for h in hits), f"Missing [0] in {hits}"
+
+
+@pytest.mark.asyncio
+async def test_list_recursive_double_braced_array_elements() -> None:
+    """scope show on array base returns double-braced {{path}[idx]} items (F-134 v2)."""
+    from xcelium_mcp.tools.signal_inspection import _list_signals_recursive
+
+    class _Bridge:
+        async def execute(self, cmd: str, timeout: float = 30) -> str:
+            responses = {
+                "scope show {top.hw.u_x}": "{top.hw.u_x.r_sdaDelayed}[1:0] {top.hw.u_x.r_sdaDelayed}",
+                # Recursing into the array base returns double-braced individual elements
+                "scope show {top.hw.u_x.r_sdaDelayed[1:0]}": "",
+                "scope show {top.hw.u_x.r_sdaDelayed}": (
+                    "{{top.hw.u_x.r_sdaDelayed}[1]} {{top.hw.u_x.r_sdaDelayed}[0]}"
+                ),
+            }
+            return responses.get(cmd, "")
+
+    hits = await _list_signals_recursive(
+        _Bridge(), "top.hw.u_x", "*sdaDelayed*", scope_prefixes=[]
+    )
+
+    for h in hits:
+        assert "}" not in h, f"Brace artifact in result: {h!r}"
+        assert "{" not in h, f"Brace artifact in result: {h!r}"
+
     assert any("r_sdaDelayed[1]" in h for h in hits), f"Missing [1] in {hits}"
     assert any("r_sdaDelayed[0]" in h for h in hits), f"Missing [0] in {hits}"
