@@ -321,6 +321,13 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         elif action == "shutdown":
             user_tmp = await get_user_tmp_dir()
 
+            # Clean up session logs and orphaned PS files on shutdown
+            from xcelium_mcp.tmp_cleanup import cleanup_session_logs
+            try:
+                await cleanup_session_logs(user_tmp)
+            except Exception:
+                pass
+
             if target == "all":
                 # Each bridge is checked independently; only error if both disconnected.
                 results = []

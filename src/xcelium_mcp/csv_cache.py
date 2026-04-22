@@ -12,10 +12,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
+import os
 from collections import OrderedDict, deque
 from pathlib import Path
 
 from xcelium_mcp.shell_utils import get_user_tmp_dir, sanitize_signal_name, shell_quote, shell_run
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # simvisdbutil path resolution — MCP server runs in bash without EDA PATH
@@ -66,27 +70,42 @@ _MAX_CACHE_SIZE = 32
 _cache: OrderedDict[tuple, str] = OrderedDict()
 
 
+async def _get_shm_mtime(shm_path: str) -> int:
+    """Return integer mtime of the SHM root directory (or file if no .shm parent).
+
+    SHM paths may be /path/to/test.shm (directory) or /path/to/test.shm/test.trn.
+    We stat the .shm directory for a stable mtime that changes when the SHM is rewritten.
+    """
+    p = Path(shm_path)
+    target = p.parent if p.suffix == ".trn" else p
+    try:
+        return int(await asyncio.to_thread(os.path.getmtime, str(target)))
+    except OSError:
+        return 0
+
+
 def _cache_key(
-    shm_path: str, signals: list[str], start_ns: int, end_ns: int
+    shm_path: str, signals: list[str], start_ns: int, end_ns: int, shm_mtime: int = 0
 ) -> tuple:
-    return (shm_path, frozenset(signals), start_ns, end_ns)
+    return (shm_path, frozenset(signals), start_ns, end_ns, shm_mtime)
 
 
 async def _default_output_path(
-    shm_path: str, signals: list[str], start_ns: int, end_ns: int
+    shm_path: str, signals: list[str], start_ns: int, end_ns: int, shm_mtime: int = 0
 ) -> str:
     """Generate a deterministic CSV output path in per-user tmp dir.
 
-    Output path:
-      <user_tmp>/mcp_csv_<stem>_<sig_hash>[_<start>_<end>].csv
+    Output path (with mtime for persistent disk cache):
+      <user_tmp>/mcp_csv_<stem>_<sig_hash>_<shm_mtime>[_<start>_<end>].csv
     """
     sig_hash = hashlib.md5(",".join(sorted(signals)).encode()).hexdigest()[:8]
     # Extract .shm directory stem (not inner .trn filename)
     shm_p = Path(shm_path)
     stem = shm_p.parent.stem if shm_p.parent.suffix == ".shm" else shm_p.stem
+    mtime_part = f"_{shm_mtime}" if shm_mtime else ""
     suffix = f"_{start_ns}_{end_ns}" if (start_ns or end_ns) else ""
     user_tmp = await get_user_tmp_dir()
-    return f"{user_tmp}/mcp_csv_{stem}_{sig_hash}{suffix}.csv"
+    return f"{user_tmp}/mcp_csv_{stem}_{sig_hash}{mtime_part}{suffix}.csv"
 
 
 # ---------------------------------------------------------------------------
@@ -113,18 +132,26 @@ async def extract(
     Raises RuntimeError if simvisdbutil fails (output file not created).
     Result is cached; subsequent calls with same args return cached path directly.
     """
-    key = _cache_key(shm_path, signals, start_ns, end_ns)
+    shm_mtime = await _get_shm_mtime(shm_path) if not output_path else 0
+    key = _cache_key(shm_path, signals, start_ns, end_ns, shm_mtime)
     if key in _cache:
         _cache.move_to_end(key)  # LRU: mark as recently used
         return _cache[key]
 
     if not output_path:
-        output_path = await _default_output_path(shm_path, signals, start_ns, end_ns)
+        output_path = await _default_output_path(shm_path, signals, start_ns, end_ns, shm_mtime)
+        # Disk cache hit: reuse existing CSV if SHM mtime matches (simvisdbutil skip)
+        if shm_mtime and await asyncio.to_thread(Path(output_path).exists):
+            if len(_cache) >= _MAX_CACHE_SIZE:
+                _cache.popitem(last=False)
+            _cache[key] = output_path
+            return output_path
 
     # --- Build simvisdbutil command with EDA env ---
     svdb = await _resolve_simvisdbutil()
     # -timeunits ns: force nanosecond output regardless of SHM time resolution
-    parts = [svdb, shell_quote(shm_path), "-csv", "-output", shell_quote(output_path), "-overwrite", "-timeunits", "ns"]
+    # No -overwrite: mtime-keyed filename is unique per SHM version
+    parts = [svdb, shell_quote(shm_path), "-csv", "-output", shell_quote(output_path), "-timeunits", "ns"]
 
     if start_ns or end_ns:
         parts += ["-range", f"{start_ns}:{end_ns}ns"]
@@ -375,6 +402,35 @@ async def bisect_signal_dump(
         lines.append(f"{prefix}{row.get('_ns', row.get('SimTime', row.get('time', '?'))):>10} | {vals}")
 
     return "\n".join(lines)
+
+
+async def cleanup_stale_csv(user_tmp: str, current_shm_path: str) -> int:
+    """Delete mcp_csv_*.csv files whose embedded mtime differs from current SHM mtime.
+
+    Called after sim_batch_run to remove CSV files from previous SHM versions while
+    preserving any valid (same mtime) cache files.
+
+    Filename format: mcp_csv_{stem}_{sig_hash}_{mtime}[_{start}_{end}].csv
+    The mtime field is a 9+ digit decimal integer (Unix timestamp).
+
+    Returns count of deleted files.
+    """
+    current_mtime = await _get_shm_mtime(current_shm_path)
+    if not current_mtime:
+        return 0
+
+    deleted = 0
+    for f in Path(user_tmp).glob("mcp_csv_*.csv"):
+        parts = f.stem.split("_")
+        mtime_candidates = [p for p in parts if p.isdigit() and len(p) >= 9]
+        if mtime_candidates and int(mtime_candidates[0]) != current_mtime:
+            try:
+                f.unlink(missing_ok=True)
+                deleted += 1
+                logger.debug("cleanup_stale_csv: removed %s", f.name)
+            except OSError:
+                pass
+    return deleted
 
 
 def clear_cache(shm_path: str | None = None) -> None:

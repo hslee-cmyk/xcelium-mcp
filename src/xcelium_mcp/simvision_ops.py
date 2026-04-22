@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import os
 import re
 from collections.abc import Callable, Coroutine
 from typing import Any
@@ -218,7 +219,13 @@ async def setup_waveform(
                 cfg = await load_sim_config(sim_dir)
             except ValueError:
                 pass
-            await ps_to_png(ps_path, config=cfg)
+            try:
+                await ps_to_png(ps_path, config=cfg)
+            finally:
+                try:
+                    os.unlink(ps_path)
+                except OSError:
+                    pass
             results.append("Screenshot captured.")
         except (TclError, ConnectionError, RuntimeError, OSError, TimeoutError) as e:
             results.append(f"Screenshot failed: {e}")

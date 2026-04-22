@@ -112,6 +112,14 @@ async def start_bridge_simulation(
     """Start simulation in bridge (interactive) mode. Registry없으면 sim_discover 자동 호출."""
     validate_extra_args(extra_args)
 
+    # Cleanup stale logs (TTL 24h) before starting a new session
+    from xcelium_mcp.tmp_cleanup import cleanup_old_logs
+    try:
+        user_tmp = await get_user_tmp_dir()
+        await cleanup_old_logs(user_tmp)
+    except Exception:
+        pass
+
     try:
         resolved_dir = await resolve_sim_dir(sim_dir)
     except ValueError as e:

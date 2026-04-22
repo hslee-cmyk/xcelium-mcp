@@ -1,6 +1,7 @@
 """Debug and analysis tools."""
 from __future__ import annotations
 
+import os
 import re
 import textwrap
 import time
@@ -364,7 +365,13 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             except ValueError:
                 pass
             ps_path = await bridge.screenshot()
-            png_bytes = await ps_to_png(ps_path, config=cfg)
+            try:
+                png_bytes = await ps_to_png(ps_path, config=cfg)
+            finally:
+                try:
+                    os.unlink(ps_path)
+                except OSError:
+                    pass
             screenshot = Image(data=png_bytes, format="png")
             return [report, screenshot]
         except (TclError, ConnectionError, RuntimeError, OSError, TimeoutError) as e:

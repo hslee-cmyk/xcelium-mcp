@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import functools
+import os
 import re
 
 from mcp.server.fastmcp import FastMCP, Image
@@ -178,8 +179,14 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
 
         bridge = bridges.simvision
         ps_path = await bridge.screenshot()
-        png_bytes = await ps_to_png(ps_path, config=cfg)
-        return Image(data=png_bytes, format="png")
+        try:
+            png_bytes = await ps_to_png(ps_path, config=cfg)
+            return Image(data=png_bytes, format="png")
+        finally:
+            try:
+                os.unlink(ps_path)
+            except OSError:
+                pass
 
     return {
         "_waveform_add_impl": functools.partial(_waveform_add_impl, bridges),

@@ -27,12 +27,15 @@ async def restore_checkpoint_impl(bridges: BridgeManager, name: str, sim_dir: st
     try:
         resolved_dir = await resolve_sim_dir(sim_dir)
     except ValueError:
-        resolved_dir = ""
-    chk_base = os.path.join(resolved_dir, "checkpoints") if resolved_dir else f"{await get_user_tmp_dir()}/checkpoints"
+        return (
+            "ERROR: Project directory not configured. "
+            "Run sim_discover first, then retry checkpoint."
+        )
+    chk_base = os.path.join(resolved_dir, "checkpoints")
 
     # Pre-check manifest: reject non-existent names before sending to Tcl bridge.
     # This prevents silent failures where xmsim returns current position instead of error.
-    if name and resolved_dir:
+    if name:
         manifest = await asyncio.to_thread(checkpoint_manager._read_manifest, resolved_dir)
         known = manifest.get("checkpoints", {})
         if known and name not in known:

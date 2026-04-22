@@ -104,6 +104,15 @@ def register(
             return f"Invalid dump_depth='{dump_depth}'. Must be 'boundary', 'all', or '' (auto)."
         if sdf_file and sdf_corner not in ("min", "max", "typ"):
             return f"Invalid sdf_corner='{sdf_corner}'. Must be 'min', 'max', or 'typ'."
+        # Cleanup stale logs (TTL 24h) before starting a new batch run
+        from xcelium_mcp.shell_utils import get_user_tmp_dir
+        from xcelium_mcp.tmp_cleanup import cleanup_old_logs
+        try:
+            _user_tmp = await get_user_tmp_dir()
+            await cleanup_old_logs(_user_tmp)
+        except Exception:
+            pass
+
         # Resolve sim_dir
         try:
             resolved_sim_dir = await resolve_sim_dir(sim_dir)
@@ -173,6 +182,13 @@ def register(
         # Resolve SHM path for downstream tools (bisect_signal, extract_csv)
         # find_shm: *test_name* glob removes project-specific prefix (ci_top) hardcoding
         shm_path = await find_shm(resolved_sim_dir, test_name)
+
+        # Remove stale bisect CSV files (mtime differs from new SHM)
+        if shm_path:
+            try:
+                await _csv_cache.cleanup_stale_csv(_user_tmp, shm_path)
+            except Exception:
+                pass
 
         return (
             f"sim_batch_run {test_name} completed.\n\n"
