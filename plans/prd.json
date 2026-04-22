@@ -1882,13 +1882,14 @@
       "acceptanceCriteria": [
         "로그 (*.log, *.log.done): sim_bridge_run 시작 시 TTL 24h 초과 파일 삭제",
         "스크린샷 (screenshot_*.ps): PNG 변환 완료 즉시 삭제 (기존 동작 확인)",
-        "bisect 캐시 (mcp_csv_*.csv): 캐시 키에 SHM mtime 포함 — SHM 교체 시 구 CSV 자동 무효화 (B안)",
+        "bisect 캐시 (mcp_csv_*.csv): 캐시 키에 SHM mtime 포함 — sim_batch_run 재실행으로 SHM 교체 시 자동 cache miss (B안)",
+        "stale CSV (cache miss 상태): sim_batch_run 시작 시 SHM mtime 불일치 CSV 스캔·삭제",
         "sim_disconnect 호출 시 해당 세션 로그/스크린샷 즉시 정리 (복합 trigger)",
         "init_snapshot/ 은 TCL bridge 자동 관리 — Python cleanup 불필요 (검증)",
         "mcp_registry.json, setup_batch_*.tcl 은 cleanup 대상 제외 (영구 파일)",
         "pytest passes"
       ],
-      "notes": "## 배경 (2026-04-22)\n\n### 발견 경위\n2026-04-22 cloud0 /tmp/xcelium_mcp_1001/ 분석: 933M → 정리 후 96K.\n로그, 스크린샷 PS, bisect CSV가 무제한 누적됨.\n\n### 파일 유형별 분류\n\n| 유형 | 패턴 | 생성 위치 | 정책 |\n|------|------|-----------|------|\n| 로그 | ,  |  | 시작 시 TTL 24h |\n| 스크린샷 |  |  | 변환 즉시 삭제 |\n| bisect 캐시 |  |  | SHM mtime 키 연동 (B안) |\n| 세션 스냅샷 |  |  | TCL bridge 자동 관리 |\n| 영구 파일 | ,  |  | cleanup 무관 |\n\n### bisect CSV 캐시 무효화 (B안)\n캐시 키 구조: \nSHM mtime을 캐시 키에 포함 → SHM 교체(sim_bridge_run 재시작) 시 mtime 변화 → 구 CSV miss → 재생성.\nA안(전체 삭제)보다 정밀: 동일 SHM 세션 내 반복 bisect 시 캐시 재사용 가능.\n\n### cleanup trigger (복합)\n- **시작 시**:  진입 시 TTL 24h 초과 로그/스크린샷 스캔·삭제\n- **종료 시**:  호출 시 해당 세션 로그/스크린샷 즉시 삭제\n- 종료 없이 프로세스 강제종료 시에는 시작 시 TTL로 다음 세션에서 정리\n\n### init_snapshot 설계 확인\n: sim_bridge_run 시작 시 이전 init_snapshot 삭제 후 재생성.\n세션 전용 스냅샷 — /tmp/ 위치가 설계상 올바름. Python cleanup 불필요."
+      "notes": "## 배경 (2026-04-22)\n\n### 발견 경위\n2026-04-22 cloud0 /tmp/xcelium_mcp_1001/ 분석: 933M → 정리 후 96K.\n로그, 스크린샷 PS, bisect CSV가 무제한 누적됨.\n\n### 파일 유형별 분류 및 생성 워크플로우\n\n| 유형 | 패턴 | 생성 시점 | 생성 위치 | 정책 |\n|------|------|-----------|-----------|------|\n| 로그 | ,  | sim_bridge_run / sim_batch_run |  | sim_bridge_run 시작 시 TTL 24h |\n| 스크린샷 |  | waveform_screenshot |  | PNG 변환 즉시 삭제 |\n| bisect 캐시 |  | bisect_signal / waveform (batch 분석) |  | SHM mtime 키 연동 (B안) |\n| 세션 스냅샷 |  | sim_bridge_run 시작 |  | TCL bridge 자동 관리 |\n| 영구 파일 | ,  | sim_discover / mcp_config |  | cleanup 무관 |\n\n### bisect CSV 캐시 워크플로우 (수정)\n\nCSV 캐시는 batch 분석 결과물 — bridge mode와 무관.\n\n\n\nsim_batch_run 재실행 → SHM 교체 → mtime 변화 → 자동 cache miss.\n별도 명시적 무효화 불필요. 단, stale CSV(miss 상태) 파일은 디스크에 잔류 →\nsim_batch_run 시작 시 SHM mtime 불일치 CSV 스캔·삭제.\n\n### cleanup trigger (복합)\n- **시작 시 (sim_bridge_run)**: TTL 24h 초과 로그/스크린샷 스캔·삭제\n- **시작 시 (sim_batch_run)**: SHM mtime 불일치 stale CSV 스캔·삭제\n- **종료 시 (sim_disconnect)**: 해당 세션 로그/스크린샷 즉시 삭제\n- 종료 없이 프로세스 강제종료 시: 다음 세션 시작 시 TTL/mtime check로 정리\n\n### init_snapshot 설계 확인\ntcl/mcp_bridge.tcl: sim_bridge_run 시작 시 이전 init_snapshot 삭제 후 재생성.\n세션 전용 스냅샷 — /tmp/ 위치가 설계상 올바름. Python cleanup 불필요."
     }
   ]
 }
