@@ -1,33 +1,24 @@
 
 ---
 
-## 2026-04-20 - F-130 + F-131
+## 2026-04-22 - F-136 + F-137
 
-### F-130: bridge_ready_* type-scoped cleanup
-- `_start_bridge`: was `rm -f bridge_ready_*` → now loops `scan_ready_files(target="xmsim")`, removes only xmsim files
-- `start_simvision`: step-1 connect loop deletes stale simvision ready files on BRIDGE_ERRORS
-- Bug found during fix: lazy `from bridge_manager import scan_ready_files` at line 301 inside `_start_bridge` compiled `scan_ready_files` as LOCAL → UnboundLocalError at line 200. Fix: remove lazy import. SIGN-017 added.
-- 261 tests pass.
+### F-136: checkpoint.py restore_checkpoint_impl /tmp fallback 제거
+- `restore_checkpoint_impl()`: `except ValueError: resolved_dir = ""` → `return "ERROR: Project directory not configured. Run sim_discover first..."`
+- BUG-A (예외 무시) + BUG-B (/tmp fallback) + BUG-C (manifest 검증 스킵) 동시 해결
+- chk_base 분기 제거: `os.path.join(resolved_dir, "checkpoints")` 단일 경로
+- 두 호출부(checkpoint tool, batch.py)는 이미 resolve 완료 상태로 호출 → 추가 수정 불필요
 
-### F-131: inspect_signal list recursive=True
-- `recursive: bool = False` param added to inspect_signal
-- `recursive=True` → `describe {scope}...{pattern}` (ncsim recursive wildcard)
-- `recursive=False` (default) → existing behavior unchanged
-- 264 tests total pass.
-
----
-
-## 2026-04-20 - Bug Pattern Collection (guardrails update)
-
-**Task:** Collect recurring bug-causing patterns from F-107~F-129 and encode as SIGN-009~SIGN-016 in guardrails.md.
-
-**Patterns documented:**
-- SIGN-009: Double error prefix in except clauses (F-129)
-- SIGN-010: Blind forwarding to Tcl bridge without pre-validation (F-128)
-- SIGN-011: List mutation AFTER join() is already called (F-116 v1)
-- SIGN-012: Hardcoded project-specific file path patterns (F-116)
-- SIGN-013: Bulk Tcl delete commands vs per-item loops (F-114)
-- SIGN-014: EDA tool invocations without login_shell_cmd (F-110)
+### F-137: Temp 파일 Cleanup 메커니즘
+- `tmp_cleanup.py` 신규: `cleanup_old_logs(ttl=86400)`, `cleanup_session_logs()`
+- `csv_cache.py`: SHM mtime 파일명 포함 영속 디스크 캐시; `_get_shm_mtime()`, `_cache_key(shm_mtime)`, `_default_output_path(shm_mtime)`, `extract()` disk hit 로직, `cleanup_stale_csv()`
+- `-overwrite` 플래그 제거 (mtime-keyed 파일명이 unique)
+- `bridge_lifecycle.py`: `start_bridge_simulation()` 시작 시 `cleanup_old_logs()` 호출
+- `tools/batch.py`: `sim_batch_run` 시작 시 `cleanup_old_logs()`, 완료 후 `cleanup_stale_csv(shm_path)`
+- `tools/sim_lifecycle.py`: `sim_disconnect(shutdown)` 시 `cleanup_session_logs()`
+- `tools/waveform.py`, `debug.py`, `simvision_ops.py`: `ps_to_png()` 후 `os.unlink(ps_path)` (try/finally)
+- 11 tests in test_f136_f137.py — 292/292 pass, ruff clean
+cmd (F-110)
 - SIGN-015: Wrong Tcl flag for operation variant (F-109)
 - SIGN-016: Using stale ID lists instead of fresh parse (F-115)
 
