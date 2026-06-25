@@ -169,8 +169,6 @@ class TestCsvCacheDiskcache:
         # Clear module-level cache to force fresh lookup
         csv_cache._cache.clear()
 
-        run_count = 0
-
         async def _fake_get_tmp() -> str:
             return str(tmp_path)
 

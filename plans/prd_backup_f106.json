@@ -1,0 +1,1471 @@
+{
+  "repo": "hslee-cmyk/xcelium-mcp",
+  "verifyCommand": "python -m pytest && python -m ruff check src/",
+  "acceptanceCriteria": [
+    "Verification command passes (pytest + ruff)",
+    "All non-skipped tasks marked passes: true"
+  ],
+  "features": [
+    {
+      "id": "F-001",
+      "title": "Fix Tcl injection gap in watch/probe/waveform tools",
+      "priority": 1,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "sanitize_signal_name() called on signal params in tools/debug.py watch (L131-156) and probe (L177-196)",
+        "sanitize_signal_name() called on signal params in tools/waveform.py add (L55) and remove (L107)",
+        "Also sanitize op, value, watch_id — all user-controlled bridge command args",
+        "pytest passes (existing + any new sanitization tests)"
+      ],
+      "notes": "bisect_signal/inspect_signal/deposit_signal already sanitize. watch/probe/waveform.add,remove do not — same threat model, inconsistent defense."
+    },
+    {
+      "id": "F-002",
+      "title": "Fix compare_waveforms: injection + fd leak + validate_path",
+      "priority": 1,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "display param validated against regex ^:?[0-9]+(\\.[0-9]+)?$",
+        "simvision launch uses (nohup ... &) subshell pattern + build_redirect like batch_runner B-0 fix",
+        "shm_before/shm_after pass through validate_path()",
+        "pytest passes"
+      ],
+      "notes": "tools/simvision.py:503-518. Three bugs in ~15 lines. Batch runner already has the fd-leak fix pattern."
+    },
+    {
+      "id": "F-003",
+      "title": "Fix screenshot.py temp file leak on double-exception",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "try/finally wraps both _convert_gs and _convert_imagemagick paths",
+        "Temp file is always cleaned up if cleanup=True, even on exception",
+        "pytest passes"
+      ],
+      "notes": "screenshot.py:40-55. mkstemp creates temp, no finally block, double exception leaks file."
+    },
+    {
+      "id": "F-004",
+      "title": "Fix csv_cache.clear_cache OrderedDict downgrade",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "clear_cache(shm_path=...) preserves OrderedDict type after filtering",
+        "Subsequent move_to_end/popitem calls do not raise AttributeError",
+        "pytest passes"
+      ],
+      "notes": "csv_cache.py:317-322. Dict comprehension replaces OrderedDict with plain dict. Fix: use OrderedDict comprehension or clear()+update()."
+    },
+    {
+      "id": "F-005",
+      "title": "Split sim_runner.py god module",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "bridge_lifecycle.py 신규: _patch_legacy_run_script, _update_simvisionrc, run_with_dump_window, start_bridge_simulation, _start_bridge 이동",
+        "discovery.py 신규: run_full_discovery, _format_discovery_result, _extract_top_module_*, _parse_ifdef_around_sdf, _analyze_sdf_annotate 이동",
+        "shell_utils.py에 get_user_tmp_dir, _parse_shm_path, _parse_time_ns 이동",
+        "7개 tool 모듈(9곳)의 from xcelium_mcp.sim_runner import → 실제 출처 모듈로 변경",
+        "lazy import 2곳(checkpoint.py:149, signal_inspection.py:95) 제거 — 직접 import로 교체",
+        "sim_runner.py 삭제 또는 deprecated re-export stub만 유지",
+        "No circular import at import time (python -c 'import xcelium_mcp.server' 성공)",
+        "pytest passes"
+      ],
+      "notes": "842-line god module. Re-export facade(L27-78, ~30 names) + 자체 로직 혼재. 분리 대상: bridge_lifecycle(~300줄), discovery(~300줄), shell_utils(+50줄). 7 tool 모듈 import 변경 필수."
+    },
+    {
+      "id": "F-006",
+      "title": "Extract pure helpers from batch_runner._run_batch_*",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "parse_existing_job(job_file) — 기존 job 파일 파싱, dict 반환",
+        "build_launch_cmd(runner, test_name, ...) — nohup launch 명령 구성, str 반환",
+        "launch_nohup_job(cmd, ...) — 실행 + PID 수집, int 반환",
+        "watch_pid_and_poll(pid, log_file, timeout) — PID 감시 + 로그 polling, result 반환",
+        "_run_batch_single이 30줄 이내 orchestrator로 축소",
+        "추출된 4개 헬퍼에 단위 테스트 추가",
+        "pytest passes"
+      ],
+      "notes": "batch_runner.py _run_batch_single(L128-285, 157줄) 6개 책임 혼재. F-005 완료 후 import 경로 안정화된 상태에서 진행. F-020 SSH 통합 이미 반영됨."
+    },
+    {
+      "id": "F-007",
+      "title": "Remove test theater — inline copies replaced with real imports",
+      "priority": 1,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "test_dump_strategy.py imports real functions from tcl_preprocessing/sim_runner",
+        "test_shm_naming.py imports real _replace_shm_stems from tcl_preprocessing",
+        "test_imports.py smoke tests all modules",
+        "61 tests pass"
+      ],
+      "notes": "DONE in commit bf878e7. 37 → 61 tests, -145 lines net."
+    },
+    {
+      "id": "F-008",
+      "title": "Add Tcl escaping to debug_tools.generate_debug_tcl_content",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "shm_path validated as filesystem path (no shell metachars)",
+        "signals pass through sanitize_signal_name",
+        "context_note and markers[].label Tcl-escaped (quote \", [, $, backslash)",
+        "pytest passes"
+      ],
+      "notes": "debug_tools.py:43-97. Output Tcl embeds user inputs via raw f-string. Attack surface: MCP client plants malicious .tcl."
+    },
+    {
+      "id": "F-009",
+      "title": "Narrow bare except Exception in connect/retry loops",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "TclBridge.disconnect catches (ConnectionError, asyncio.TimeoutError, OSError) not Exception",
+        "Retry loops in simvision.py, sim_lifecycle.py catch specific exceptions",
+        "Last exception included in final error message",
+        "pytest passes"
+      ],
+      "notes": "tcl_bridge.py:59,64; simvision.py:144,231; sim_lifecycle.py:75,239; sim_runner.py:800."
+    },
+    {
+      "id": "F-010",
+      "title": "Clean up dead code in register() return dicts",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "generate_debug_tcl_fn param removed from simvision.register and server.py",
+        "waveform.register lambda replaced with functools.partial",
+        "Unused dict entries cleaned from debug.register and waveform.register returns",
+        "pytest passes"
+      ],
+      "notes": "tools/debug.py:473, tools/waveform.py:160-163. Vestigial cross-tool wiring that nothing invokes."
+    },
+    {
+      "id": "F-011",
+      "title": "Fix Tcl denylist bypass via semicolons/tabs without space",
+      "priority": 1,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "execute_tcl normalizes whitespace (collapse tabs/multiple spaces) before denylist check",
+        "Input split on ; and newline, each segment's first token checked against denylist",
+        "Payloads like \";exec rm\" and \"\\texec rm\" are rejected",
+        "pytest passes"
+      ],
+      "notes": "S-11. tools/sim_lifecycle.py:362-366. Denylist checks startswith(denied) and \"; {denied}\" but not \";exec\" (no space) or \"\\texec\"."
+    },
+    {
+      "id": "F-012",
+      "title": "Add regex validation to deposit_signal value parameter",
+      "priority": 1,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "value validated with re.fullmatch(r\"[\\d'bhBHxXzZ_]+\", value) or equivalent",
+        "Tcl metacharacters in value are rejected before reaching Tcl bridge",
+        "Payload like \"1 ; exec rm\" is rejected with clear error",
+        "pytest passes"
+      ],
+      "notes": "S-12. tools/signal_inspection.py:191. signal is sanitized but value is passed raw to Tcl bridge."
+    },
+    {
+      "id": "F-013",
+      "title": "Add regex validation to sim_run duration parameter",
+      "priority": 1,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "duration validated with re.fullmatch(r\"\\d+\\s*(ns|us|ms|s|ps|fs)?\", duration) or equivalent",
+        "Tcl metacharacters in duration are rejected before reaching Tcl bridge",
+        "Payload like \"100ns; exec rm\" is rejected with clear error",
+        "pytest passes"
+      ],
+      "notes": "S-13. tools/sim_lifecycle.py:321. duration string sent raw to Tcl bridge as __RUN_AND_REPORT__ {duration}."
+    },
+    {
+      "id": "F-014",
+      "title": "Replace 2>/dev/null with || true pattern for tcsh compat",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "sim_runner.py:171,175 no longer use 2>/dev/null",
+        "Replaced with '|| true' pattern or Python-side filtering",
+        "No 2>/dev/null remains in any ssh_run call across codebase",
+        "pytest passes"
+      ],
+      "notes": "S-14. 2>/dev/null causes tcsh 'Ambiguous redirect'. Violates project CLAUDE.md rule."
+    },
+    {
+      "id": "F-015",
+      "title": "Move csv_cache CSV output to per-user tmp dir",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "csv_cache.extract writes to get_user_tmp_dir() instead of SHM-adjacent path",
+        "Deterministic filename still used for cache key matching",
+        "No symlink race possible in multi-user scenario",
+        "pytest passes"
+      ],
+      "notes": "S-15. csv_cache.py:80. Predictable path mcp_csv_{stem}_{sig_hash}.csv next to shared SHM dir."
+    },
+    {
+      "id": "F-016",
+      "title": "Extract bridge ready-file scan helper (5x duplication)",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "New bridge_manager.scan_ready_file() or similar helper extracts common logic",
+        "sim_lifecycle.py (2 copies), simvision.py (2 copies), sim_runner.py (1 copy) all use the helper",
+        "No duplicate cat bridge_ready_* + parse logic remains",
+        "pytest passes"
+      ],
+      "notes": "Pattern review. Logic to cat bridge_ready_*, parse lines, extract port+type duplicated 5 times."
+    },
+    {
+      "id": "F-017",
+      "title": "Extract EDA env sourcing command builder (5x duplication)",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "New build_eda_command(runner, inner_cmd) helper in shell_utils or similar",
+        "csv_cache.py, env_detection.py, sim_runner.py, simvision.py, checkpoint.py all use the helper",
+        "No duplicate source_separately/env_shell/login_shell_cmd construction remains",
+        "pytest passes"
+      ],
+      "notes": "Pattern review. source_separately check + source cmd + env_shell wrapping duplicated 5 times with minor variations."
+    },
+    {
+      "id": "F-018",
+      "title": "Consolidate scattered constants (BRIDGE_ERRORS, DEFAULT_BRIDGE_PORT, etc.)",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "DEFAULT_BRIDGE_PORT = 9876 defined once, used in 6 locations",
+        "BRIDGE_ERRORS = (ConnectionError, asyncio.TimeoutError, OSError, TclError) defined once, used in 5 locations",
+        "_PROTECTED_KEYS moved to module-level constant in registry.py",
+        "No inline 9876 or repeated exception tuples remain",
+        "pytest passes"
+      ],
+      "notes": "Pattern review. Port 9876 in 6 files, exception tuple in 5 files, PROTECTED_KEYS inside function body."
+    },
+    {
+      "id": "F-019",
+      "title": "Extract simvision.py orchestration logic into testable functions",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "start_simvision, open_database, setup_waveform, live_start, reload_waveform, compare_csv_diff, compare_simvision — 7개 모듈 레벨 async 함수로 추출",
+        "bridges, waveform_add_impl_fn 등 클로저 캡처 → 명시적 파라미터 전달로 변경",
+        "register() 내 @mcp.tool 클로저는 각 30줄 이내 thin wrapper",
+        "추출된 함수는 MCP 프레임워크 없이 단위 테스트 가능",
+        "pytest passes"
+      ],
+      "notes": "Arch review. 654-line simvision.py — 3 MCP tools + 2 internal fns all inside register() closure. 7 orchestration flows (each 30-100 lines) untestable without MCP boot. F-016~F-018 dedup completed, ready for extraction."
+    },
+    {
+      "id": "F-020",
+      "title": "Consolidate batch regression SSH bookkeeping calls",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "base64 encode+write 2회를 1회로 통합 (job file 생성 시 한 번에 전체 내용 작성)",
+        "per-test grep results 수집을 단일 find+grep 명령으로 배치화",
+        "Total SSH calls per test 8-10 → 4-5로 감소",
+        "기존 _run_batch_single, _run_batch_regression 동작 변경 없음",
+        "pytest passes"
+      ],
+      "notes": "Perf review. batch_runner.py _run_batch_single: lines 432-443 (1st base64 write) + 460-466 (2nd base64 write) 통합. _run_batch_regression:527-529 per-test grep → find+grep 일괄. ssh_run 호출 수 절감이 핵심."
+    },
+    {
+      "id": "F-021",
+      "title": "Replace bridge polling spin loop with TCP connect retry",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "_start_bridge의 cat polling loop를 TCP connect retry로 교체 (asyncio.open_connection 시도)",
+        "inotifywait 의존 없이 순수 TCP probe — 포트가 열리면 즉시 연결",
+        "inotifywait 불필요: bridge_ready 파일 대신 직접 포트 연결 시도가 더 단순",
+        "기존 timeout/retry 횟수 동일하게 유지, fallback으로 현재 cat polling 보존",
+        "pytest passes"
+      ],
+      "notes": "Perf review. sim_runner.py _start_bridge: cat bridge_ready_* polling 매 2초 × 최대 60회 = 60 subprocess. TCP connect는 subprocess 0회. scan_ready_files로 포트 번호 확인 후 asyncio.open_connection으로 직접 시도."
+    },
+    {
+      "id": "F-022",
+      "title": "Add regex validation to waveform zoom/cursor parameters",
+      "priority": 1,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "start_time, end_time에 _DURATION_RE 또는 동등한 regex 검증 적용 (waveform.py:138-150)",
+        "cursor_name에 ^[A-Za-z0-9_]+$ regex 검증 적용",
+        "time 파라미터에 동일 검증 적용",
+        "Tcl metachar 포함 시 명확한 에러 메시지 반환",
+        "pytest passes"
+      ],
+      "notes": "S-16. tools/waveform.py — zoom/cursor 파라미터가 Tcl 명령에 직접 삽입. deposit_signal(F-012), sim_run(F-013)과 동일 패턴의 injection 취약점."
+    },
+    {
+      "id": "F-023",
+      "title": "Add internal signal name sanitization in csv_cache.extract",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "csv_cache.extract() 내부에서 각 signal에 sanitize_signal_name() 또는 shell_quote() 적용",
+        "외부 caller 사전 검증에 의존하지 않는 defense-in-depth 구현",
+        "기존 caller 동작 변경 없음",
+        "pytest passes"
+      ],
+      "notes": "S-17. csv_cache.py:127-130 — signal names가 ssh_run 명령에 join되지만 내부 검증 없음. caller(tools/debug.py)가 sanitize하지만 함수 자체는 무방비."
+    },
+    {
+      "id": "F-024",
+      "title": "Move _validate_group_name inside _encode_group_arg",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "_encode_group_arg 내부에서 _validate_group_name 호출하여 self-contained 검증",
+        "외부에서 별도 validate 호출 불필요",
+        "기존 caller 동작 변경 없음",
+        "pytest passes"
+      ],
+      "notes": "S-18. tools/waveform.py:14-18 — validation과 encoding이 분리되어 호출 순서 바뀌면 brace injection 가능. 하나로 통합."
+    },
+    {
+      "id": "F-025",
+      "title": "Remove sim_runner.py re-export stub",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "sim_runner.py 삭제 또는 빈 모듈로 축소",
+        "모든 tools/*.py 및 내부 모듈이 실제 출처 모듈에서 직접 import 확인",
+        "python -c 'import xcelium_mcp.server' 성공",
+        "pytest passes"
+      ],
+      "notes": "Arch review. 106줄 re-export stub — 외부 consumer 없음. tools/*.py는 이미 직접 import로 전환됨. 삭제해도 무방."
+    },
+    {
+      "id": "F-026",
+      "title": "Resolve discovery ↔ bridge_lifecycle circular dependency",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "_patch_legacy_run_script, _update_simvisionrc를 discovery.py로 이동 또는 별도 script_patching.py로 분리",
+        "discovery.py의 lazy import 제거",
+        "순환 의존 해소 확인 (python -c import 성공)",
+        "pytest passes"
+      ],
+      "notes": "Arch review. discovery.run_full_discovery()가 bridge_lifecycle의 patching 함수를 lazy import. sole caller이므로 이동이 자연스러움."
+    },
+    {
+      "id": "F-027",
+      "title": "Merge batch_runner job-state write + PID watcher into single SSH call",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "batch_runner.py의 job state write(line 541)와 PID watcher launch(line 548)를 && 체이닝으로 1회 ssh_run 호출로 병합",
+        "테스트당 SSH 호출 1회 추가 절감",
+        "기존 동작 변경 없음",
+        "pytest passes"
+      ],
+      "notes": "Perf review. 두 명령은 독립적이므로 && 체이닝 가능. F-020에서 미처 병합하지 않은 부분."
+    },
+    {
+      "id": "F-028",
+      "title": "Rename sanitize_tcl_string to is_safe_tcl_string",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "shell_utils.py의 sanitize_tcl_string → is_safe_tcl_string으로 rename",
+        "모든 caller (tools/*.py, shell_utils.py 내부) import/호출 변경",
+        "함수 이름이 bool 반환 의미를 정확히 표현",
+        "pytest passes"
+      ],
+      "notes": "Pattern review R-001. sanitize_는 변환 의미, 실제로는 bool 반환. is_safe_ 또는 validate_ 접두사가 적절."
+    },
+    {
+      "id": "F-029",
+      "title": "Fix env_detection.py private function export — add __all__ or remove _ prefix",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "외부에서 import되는 17개 함수의 _ prefix 제거, 또는 __all__ 정의로 public API 명시",
+        "sim_runner.py stub의 re-export 목록과 일치 확인",
+        "discovery.py, bridge_lifecycle.py 등 caller의 import 문 업데이트",
+        "pytest passes"
+      ],
+      "notes": "Pattern review R-003. 17개 _-prefixed 함수를 5개 외부 모듈에서 직접 import — private 규약 위반."
+    },
+    {
+      "id": "F-030",
+      "title": "Add return type hints to batch_runner and tools/*.py functions",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "batch_runner.py 6개 함수에 -> str, -> dict, -> int 등 return annotation 추가",
+        "tools/*.py 9개 함수에 -> str return annotation 추가",
+        "ruff check 통과",
+        "pytest passes"
+      ],
+      "notes": "Pattern review N-001/N-002. 총 15개 함수에 return type hint 누락. 기존 타입 힌트가 있는 모듈과 일관성 맞추기."
+    },
+    {
+      "id": "F-031",
+      "title": "Narrow except Exception to specific exceptions in tools/*.py",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-10",
+      "acceptanceCriteria": [
+        "tools/*.py 11곳의 except Exception을 (RuntimeError, ValueError, ConnectionError, TclError) 등 구체적 예외로 교체",
+        "F-009에서 적용한 BRIDGE_ERRORS 패턴과 일관성 유지",
+        "예상치 못한 예외는 전파되도록 변경",
+        "pytest passes"
+      ],
+      "notes": "Pattern review N-003. F-009에서 connect/retry는 수정했으나 tools 내 일반 핸들러 11곳 잔존. batch:2, checkpoint:2, debug:1, simvision:3, discovery:1."
+    },
+    {
+      "id": "F-032",
+      "title": "Extend Tcl denylist: add eval, interp, uplevel, load, after",
+      "priority": 1,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "_TCL_DENYLIST에 eval, interp, package, load, uplevel, after 추가",
+        "\"eval {exec id}\" 등 우회 페이로드가 차단되는 테스트 추가",
+        "기존 정상 Tcl 명령 (run, stop, value 등)은 통과 확인",
+        "pytest passes"
+      ],
+      "notes": "Security review. execute_tcl denylist가 exec/open/source만 차단. eval/interp/uplevel로 임의 코드 실행 가능. sim_lifecycle.py:354-375."
+    },
+    {
+      "id": "F-033",
+      "title": "Sanitize shm_path before Tcl command interpolation in open_database",
+      "priority": 1,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "tools/simvision.py open_database에서 shm_path에 validate_path() 적용",
+        "tools/debug.py generate_debug_tcl_content에서 shm_path에 validate_path() 적용",
+        "Tcl metachar 포함 shm_path (세미콜론, 대괄호 등) 차단 테스트 추가",
+        "pytest passes"
+      ],
+      "notes": "Security review. simvision.py:61-73 — shm_path가 f\"database open {shm_path}\"로 직접 삽입. compare_waveforms에는 validate_path 있지만 open_database에는 없음."
+    },
+    {
+      "id": "F-034",
+      "title": "Wrap blocking file I/O in asyncio.to_thread for async functions",
+      "priority": 1,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "registry.py load_sim_config의 path.exists()/stat()/read_text()를 asyncio.to_thread로 래핑",
+        "csv_cache.py:109 Path.exists()를 asyncio.to_thread 또는 캐시 플래그로 대체",
+        "debug.py Path.write_text()를 asyncio.to_thread로 래핑",
+        "event loop 차단 없이 동작 확인",
+        "pytest passes"
+      ],
+      "notes": "Performance+Python review. async 함수 내 동기 I/O가 event loop 차단. registry.py:49-58, csv_cache.py:109,151, debug.py:467."
+    },
+    {
+      "id": "F-035",
+      "title": "Add asyncio.Lock to get_user_tmp_dir global cache initialization",
+      "priority": 1,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "shell_utils.py get_user_tmp_dir()에 asyncio.Lock 추가하여 동시 초기화 방지",
+        "두 번째 호출은 lock 경합 없이 캐시 반환 확인",
+        "pytest passes"
+      ],
+      "notes": "Python review. _USER_TMP global 캐시에 lock 없음. 두 coroutine이 동시에 첫 호출 시 SSH 명령 중복 실행 가능. shell_utils.py:202-218."
+    },
+    {
+      "id": "F-036",
+      "title": "Parallelize batch regression test execution with asyncio.gather",
+      "priority": 2,
+      "passes": false,
+      "skip": true,
+      "skipReason": "Functionally not parallelizable — tests have shared resource dependencies",
+      "acceptanceCriteria": [
+        "_run_batch_regression에서 독립 테스트를 asyncio.gather + Semaphore로 병렬 실행",
+        "max_parallel 파라미터 추가 (기본값 4)",
+        "순차 실행 대비 2+ 테스트에서 총 시간 단축 확인",
+        "기존 단일 테스트 동작 변경 없음",
+        "pytest passes"
+      ],
+      "notes": "Performance review. batch_runner.py:477-594 — N개 독립 테스트를 직렬 루프로 실행. 각 테스트는 nohup subprocess로 독립적이므로 병렬화 가능."
+    },
+    {
+      "id": "F-037",
+      "title": "Add shell_quote to shm_path/output_path in csv_cache command construction",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "csv_cache.py extract()에서 shm_path, output_path에 sq() 적용",
+        "공백/특수문자 포함 경로에서도 명령 정상 실행",
+        "pytest passes"
+      ],
+      "notes": "Security review. csv_cache.py:119-131 — parts list에 shm_path/output_path가 shell_quote 없이 삽입. 파일시스템 접근 필요하므로 Low이지만 defense-in-depth."
+    },
+    {
+      "id": "F-038",
+      "title": "Split batch_runner.py: extract test_resolution and batch_polling modules",
+      "priority": 2,
+      "passes": true,
+      "acceptanceCriteria": [
+        "test_resolution.py 신규: resolve_test_name, resolve_sim_params, _resolve_test_name_cached 이동",
+        "batch_polling.py 신규: _poll_batch_log, watch_pid_and_poll 이동",
+        "batch_runner.py 400줄 이하로 축소",
+        "기존 import 경로 업데이트 (tools/batch.py 등)",
+        "python -c 'import xcelium_mcp.server' 성공",
+        "pytest passes"
+      ],
+      "notes": "Architecture review. batch_runner.py 783줄 — test resolution, polling, execution, regression 혼재. 400줄 이하 목표로 분리.",
+      "completed_at": "2026-04-11"
+    },
+    {
+      "id": "F-039",
+      "title": "Extract simvision orchestration into simvision_ops.py domain module",
+      "priority": 2,
+      "passes": true,
+      "acceptanceCriteria": [
+        "simvision_ops.py 신규: open_database, start_simvision, setup_waveform, live_start, reload_waveform, compare_csv_diff, compare_simvision, _load_rows 이동",
+        "tools/simvision.py는 thin registration wrapper만 유지 (300줄 이하)",
+        "python -c 'import xcelium_mcp.server' 성공",
+        "pytest passes"
+      ],
+      "notes": "Architecture review. tools/simvision.py 712줄 — 7개 orchestration 함수가 도메인 로직. tools는 thin wrapper 원칙에 위배.",
+      "completed_at": "2026-04-11"
+    },
+    {
+      "id": "F-040",
+      "title": "Add type annotation to bridges parameter in bridge_lifecycle.py",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "bridge_lifecycle.py의 start_bridge_simulation, _start_bridge에 bridges: BridgeManager | None = None 타입 힌트 추가",
+        "ruff check 통과",
+        "pytest passes"
+      ],
+      "notes": "Python review. bridge_lifecycle.py:78 — bridges 파라미터가 bare None default로 타입 정보 없음."
+    },
+    {
+      "id": "F-041",
+      "title": "Add logger.warning for swallowed UserInputRequired in discovery.py",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "discovery.py:488-491 except UserInputRequired에 logger.warning() 추가",
+        "SDF 분석 스킵 사유가 사용자에게 전달됨",
+        "pytest passes"
+      ],
+      "notes": "Python review. discovery.py:389-395 — UserInputRequired 예외 시 sdf_info를 기본값으로 대체하면서 무시. 사용자에게 스킵 사실 미통보."
+    },
+    {
+      "id": "F-042",
+      "title": "Merge PID read + cleanup into single SSH call in launch_nohup_job",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "batch_runner.py launch_nohup_job에서 PID file read와 cleanup을 && 체이닝으로 1회 ssh_run 호출로 병합",
+        "테스트당 SSH 호출 1회 절감",
+        "기존 동작 변경 없음",
+        "pytest passes"
+      ],
+      "notes": "Performance review. batch_runner.py:249-264 — PID read(1 SSH) + cleanup(1 SSH) 분리. regression 경로(line 529)에서는 이미 병합됨."
+    },
+    {
+      "id": "F-043",
+      "title": "Parallelize _analyze_sdf_annotate SSH calls with asyncio.gather",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "discovery.py _analyze_sdf_annotate에서 독립적인 grep SSH 호출을 asyncio.gather로 병렬화",
+        "discovery 시간 600ms+ 절감",
+        "기존 결과 동일",
+        "pytest passes"
+      ],
+      "notes": "Performance review. discovery.py:189-268 — 6+ 순차 SSH 호출 (grep top module, cat, grep includes 등). 독립적인 호출은 병렬화 가능."
+    },
+    {
+      "id": "F-044",
+      "title": "Rename private _ functions to public in env_detection.py",
+      "priority": 3,
+      "passes": true,
+      "acceptanceCriteria": [
+        "외부에서 import되는 함수의 _ prefix 제거 (_load_or_detect_runner → load_or_detect_runner, _detect_vnc_display → detect_vnc_display 등)",
+        "__all__ 정의로 public API 명시",
+        "caller (tools/batch.py, tools/simvision.py 등) import 문 업데이트",
+        "pytest passes"
+      ],
+      "notes": "Architecture review. env_detection.py 18개 _-prefixed 함수를 외부 모듈에서 직접 import — private naming 위반. F-029와 동일 패턴.",
+      "completed_at": "2026-04-11"
+    },
+    {
+      "id": "F-045",
+      "title": "Remove tcl_preprocessing re-exports from batch_runner.py",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "batch_runner.py lines 27-41의 noqa: F401 re-export 블록 제거",
+        "외부 consumer가 batch_runner에서 import하는 경로 없음 확인",
+        "python -c 'import xcelium_mcp.server' 성공",
+        "pytest passes"
+      ],
+      "notes": "Architecture review. 14개 심볼 re-export는 sim_runner.py 분할 당시 호환성용. 외부 consumer 없으면 제거 가능."
+    },
+    {
+      "id": "F-046",
+      "title": "Add unit tests for pure functions: discovery, env_detection, bridge_lifecycle",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "discovery.py 순수 함수 (resolve 계열) 테스트 추가",
+        "env_detection.py 순수 함수 테스트 추가",
+        "bridge_lifecycle.py 순수 함수 테스트 추가",
+        "csv_cache.bisect_csv, sanitize_signal_name, validate_extra_args 테스트 추가",
+        "테스트 커버리지 15% → 25%+ 향상",
+        "pytest passes"
+      ],
+      "notes": "Architecture+Python review. 1026줄 테스트 / 6929줄 소스 = 15%. 추출된 순수 함수는 MCP 프레임워크 없이 단위 테스트 가능."
+    },
+    {
+      "id": "F-047",
+      "title": "Move stdlib imports to module level in batch_runner.py",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "batch_runner.py의 함수 내 import time, import base64를 모듈 상단으로 이동",
+        "bridge_lifecycle.py의 lazy import from tcl_bridge를 함수 상단 1회로 변경",
+        "PEP 8 준수",
+        "pytest passes"
+      ],
+      "notes": "Python review. stdlib import를 함수 body에 배치. circular dep 회피용은 프로젝트 모듈만 해당, stdlib은 모듈 레벨이 원칙."
+    },
+    {
+      "id": "F-048",
+      "title": "Add warnings.warn to deprecated sq alias in shell_utils.py",
+      "priority": 3,
+      "passes": true,
+      "acceptanceCriteria": [
+        "shell_utils.py sq()에 warnings.warn('sq is deprecated, use shell_quote', DeprecationWarning, stacklevel=2) 추가",
+        "또는 모든 caller를 shell_quote로 변경하고 sq 제거",
+        "ruff check 통과",
+        "pytest passes"
+      ],
+      "notes": "Python review. shell_utils.py:30-31 — 주석에 'will be removed in v5'이지만 경고 없음. 여러 파일에서 sq로 import 중.",
+      "completed_at": "2026-04-11"
+    },
+    {
+      "id": "F-049",
+      "title": "Add eviction to _config_cache and remove Path.exists on csv_cache hit",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "registry.py _config_cache를 maxsize 있는 LRU 또는 TTL 캐시로 변경 (maxsize=8 등)",
+        "csv_cache.py cache hit 시 Path.exists() 제거 — extraction 실패 시에만 재검증",
+        "pytest passes"
+      ],
+      "notes": "Performance review. _config_cache 무제한 dict (실질 1-2건이지만 형식적 unbounded). csv_cache hit마다 stat 호출은 hot-path에서 불필요."
+    },
+    {
+      "id": "F-050",
+      "title": "Wrap registry save/write functions in asyncio.to_thread",
+      "priority": 1,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "registry.py save_sim_config (line 75) path.write_text를 asyncio.to_thread로 래핑",
+        "registry.py save_registry / _write_json (line 33,83) 동일 적용",
+        "registry.py load_registry (line 25-26) Path.exists/read_text를 asyncio.to_thread로 래핑",
+        "event loop 차단 없이 동작 확인",
+        "pytest passes"
+      ],
+      "notes": "2차 Review #1. load_sim_config은 to_thread 적용됨, write 경로는 누락. registry.py:33,75,83."
+    },
+    {
+      "id": "F-051",
+      "title": "Wrap simvision_ops._load_rows in asyncio.to_thread",
+      "priority": 1,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "simvision_ops.py _load_rows (line 388) 또는 caller compare_csv_diff에서 asyncio.to_thread로 래핑",
+        "대용량 CSV에서도 event loop 차단 없음",
+        "pytest passes"
+      ],
+      "notes": "2차 Review #2. _load_rows는 동기 open()으로 CSV 읽기. caller compare_csv_diff가 async 함수. simvision_ops.py:388-395."
+    },
+    {
+      "id": "F-052",
+      "title": "Apply shell_quote to DISPLAY in start_simvision setenv command",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "simvision_ops.py start_simvision에서 setenv DISPLAY {display}를 shell_quote(display)로 변경",
+        "또는 _DISPLAY_RE 검증을 start_simvision 진입점에 추가",
+        "compare_simvision과 동일 수준 보호 달성",
+        "pytest passes"
+      ],
+      "notes": "2차 Security #3. simvision_ops.py:142 — xdpyinfo는 shell_quote 적용, setenv는 미적용. \":1; exec sh\" 페이로드 가능."
+    },
+    {
+      "id": "F-053",
+      "title": "Validate or document test_discovery.command trust boundary",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "test_resolution.py에서 test_discovery.command에 기본 denylist 검증 추가 (;, |, && 외 메타문자 차단)",
+        "또는 config 파일을 trusted input으로 명시하는 docstring/주석 추가",
+        "선택한 방식에 대한 테스트 또는 문서 추가",
+        "pytest passes"
+      ],
+      "notes": "2차 Security #4. test_resolution.py:99, tools/sim_lifecycle.py:100 — config에서 읽은 명령을 ssh_run으로 무검증 실행."
+    },
+    {
+      "id": "F-054",
+      "title": "Wrap tcl_preprocessing file I/O in asyncio.to_thread",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "tcl_preprocessing.py read_setup_tcl (line 62-64) Path.exists/read_text를 asyncio.to_thread로 래핑",
+        "tcl_preprocessing.py line 353 Path.write_text를 asyncio.to_thread로 래핑",
+        "async caller에서 event loop 차단 없음",
+        "pytest passes"
+      ],
+      "notes": "2차 Perf #5. tcl_preprocessing.py:62,353 — 동기 Path I/O가 async 경로에서 호출."
+    },
+    {
+      "id": "F-055",
+      "title": "Parallelize discover_sim_dir SSH calls with asyncio.gather",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "env_detection.py discover_sim_dir (line 336-351) 내부 루프를 asyncio.gather로 병렬화",
+        "각 후보 디렉토리의 analyze_tb_type + auto_detect_runner를 동시 실행",
+        "기존 결과 동일",
+        "pytest passes"
+      ],
+      "notes": "2차 Perf #6. env_detection.py:336-351 — 후보 디렉토리별 순차 SSH N*M 호출."
+    },
+    {
+      "id": "F-056",
+      "title": "Batch _detect_eda_env find+grep into single SSH per directory",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "env_detection.py _detect_eda_env (line 105-111) find+grep을 단일 SSH 명령으로 병합",
+        "또는 asyncio.gather로 디렉토리별 병렬 실행",
+        "SSH 호출 8+ → 2-4로 절감",
+        "pytest passes"
+      ],
+      "notes": "2차 Perf #7. env_detection.py:105-111 — 4개 search dir × 2 SSH = 8+ 순차 호출."
+    },
+    {
+      "id": "F-057",
+      "title": "Split env_detection.py into runner_detection and sim_env_detection",
+      "priority": 2,
+      "passes": true,
+      "acceptanceCriteria": [
+        "runner_detection.py 신규: runner/shell/EDA 관련 함수 이동 (load_or_detect_runner, detect_eda_env 등)",
+        "sim_env_detection.py 신규: bridge/port/VNC/directory 관련 함수 이동 (detect_vnc_display, discover_sim_dir 등)",
+        "env_detection.py 삭제 또는 re-export stub",
+        "각 모듈 400줄 이하",
+        "python -c 'import xcelium_mcp.server' 성공",
+        "pytest passes"
+      ],
+      "notes": "2차 Arch #8. env_detection.py 682줄 15개 함수 — runner vs environment 두 가지 관심사 혼재.",
+      "completed_at": "2026-04-11"
+    },
+    {
+      "id": "F-058",
+      "title": "Add asyncio.Lock to csv_cache._simvisdbutil_path global write",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "csv_cache.py _resolve_simvisdbutil (line 45) global write에 asyncio.Lock 추가",
+        "get_user_tmp_dir와 동일한 double-checked locking 패턴 적용",
+        "pytest passes"
+      ],
+      "notes": "2차 Python #9. csv_cache.py:45 — asyncio.to_thread에서 race 가능. get_user_tmp_dir는 Lock 있으나 여기는 없음."
+    },
+    {
+      "id": "F-059",
+      "title": "Extend is_safe_tcl_string bracket denylist (socket, file delete, interp eval)",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "shell_utils.py is_safe_tcl_string에 [socket, [file delete, [interp eval 등 위험 bracket 명령 추가",
+        "execute_tcl denylist와 일관된 차단 범위",
+        "기존 정상 입력 통과 확인",
+        "pytest passes"
+      ],
+      "notes": "2차 Security #10. shell_utils.py:179 — [exec], [open]만 차단. [socket localhost 4444] 등 우회 가능."
+    },
+    {
+      "id": "F-060",
+      "title": "Add test_name regex validation at batch_runner entry point",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "batch_runner.py build_batch_cmd 진입점에서 test_name을 [A-Za-z0-9_-]+ regex 검증",
+        "tcl_preprocessing._preprocess_setup_tcl과 동일 기준 적용",
+        "잘못된 test_name에 명확한 에러 메시지",
+        "pytest passes"
+      ],
+      "notes": "2차 Security #11. batch_runner.py:194 — shell_quote만 적용, regex 미검증. tcl_preprocessing은 검증하지만 entry point에서 누락."
+    },
+    {
+      "id": "F-061",
+      "title": "Rename _poll_batch_log and other cross-module private functions to public",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "batch_polling.py _poll_batch_log → poll_batch_log 로 rename",
+        "batch_runner.py _run_batch_single, _run_batch_regression → public name으로 변경 (tools/batch.py에서 import)",
+        "caller import 문 업데이트",
+        "pytest passes"
+      ],
+      "notes": "2차 Arch #12. cross-module import되는 private 함수 — naming convention 위반."
+    },
+    {
+      "id": "F-062",
+      "title": "Add tests for validate_extra_args and sanitize_signal_name",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "validate_extra_args: forbidden chars (; | & $ ` ' \\n) 차단 + 정상 args 통과 parameterized 테스트",
+        "sanitize_signal_name: bracket-content 로직, edge case (빈 문자열, 중첩 bracket) 테스트",
+        "is_safe_tcl_string: denylist 차단 + 정상 Tcl 통과 테스트",
+        "pytest passes"
+      ],
+      "notes": "2차 Python #13. 보안 핵심 함수에 전용 테스트 없음. shell_utils.py:146,179, batch_runner.py:62-75."
+    },
+    {
+      "id": "F-063",
+      "title": "Remove unnecessary lazy imports in batch_runner.py",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "batch_runner.py line 241,302,369의 from xcelium_mcp.shell_utils import를 모듈 상단 import로 통합",
+        "shell_utils는 이미 line 22에서 import 중 — 중복 lazy import 제거",
+        "pytest passes"
+      ],
+      "notes": "2차 Python #14. shell_utils는 circular dep 아님. 불필요한 lazy import 잔존."
+    },
+    {
+      "id": "F-064",
+      "title": "Wrap checkpoint_manager.register_checkpoint compute_compile_hash in to_thread",
+      "priority": 3,
+      "passes": true,
+      "acceptanceCriteria": [
+        "checkpoint_manager.py register_checkpoint에서 compute_compile_hash 호출을 compute_compile_hash_async로 교체하거나 asyncio.to_thread로 래핑",
+        "async caller에서 os.walk 블로킹 없음",
+        "pytest passes"
+      ],
+      "notes": "3차 Review #1. checkpoint_manager.py:109 — sync os.walk가 async 경로(batch_runner.py:543)에서 호출. compute_compile_hash_async가 이미 존재하지만 미사용.",
+      "completed_at": "2026-04-11"
+    },
+    {
+      "id": "F-065",
+      "title": "Wrap csv_cache.bisect_csv caller in asyncio.to_thread",
+      "priority": 3,
+      "passes": true,
+      "acceptanceCriteria": [
+        "tools/debug.py에서 bisect_csv 호출을 asyncio.to_thread(csv_cache.bisect_csv, ...)로 래핑",
+        "대용량 CSV에서 event loop 차단 없음",
+        "pytest passes"
+      ],
+      "notes": "3차 Review #2. csv_cache.py:215 — sync open(). caller _bisect_signal_dump_impl이 async 함수.",
+      "completed_at": "2026-04-11"
+    },
+    {
+      "id": "F-066",
+      "title": "Remove stale import asyncio as _asyncio in csv_cache.extract",
+      "priority": 3,
+      "passes": true,
+      "acceptanceCriteria": [
+        "csv_cache.py line 159의 import asyncio as _asyncio 제거",
+        "모듈 레벨 asyncio import (line 7) 사용으로 통일",
+        "pytest passes"
+      ],
+      "notes": "3차 Review #3. 리팩터링 잔재 — 함수 내부 중복 import.",
+      "completed_at": "2026-04-11"
+    },
+    {
+      "id": "F-067",
+      "title": "Delete env_detection.py re-export stub (zero consumers)",
+      "priority": 3,
+      "passes": true,
+      "acceptanceCriteria": [
+        "env_detection.py 삭제",
+        "내부 consumer 0건 확인 (runner_detection, sim_env_detection으로 모두 이전됨)",
+        "python -c 'import xcelium_mcp.server' 성공",
+        "pytest passes"
+      ],
+      "notes": "3차 Arch #4. env_detection.py 47줄 pure re-export stub — runner_detection.py + sim_env_detection.py로 분할 완료 후 잔존.",
+      "completed_at": "2026-04-11"
+    },
+    {
+      "id": "F-068",
+      "title": "Move _bisect_signal_dump_impl from tools/debug.py to csv_cache or bisect module",
+      "priority": 3,
+      "passes": true,
+      "acceptanceCriteria": [
+        "_bisect_signal_dump_impl (70줄)을 csv_cache.py 또는 신규 bisect.py로 이동",
+        "tools/debug.py는 thin wrapper만 유지",
+        "python -c 'import xcelium_mcp.server' 성공",
+        "pytest passes"
+      ],
+      "notes": "3차 Arch #5. tools/debug.py에 CSV extraction/bisection 비즈니스 로직 잔존 — tool layer thinness 위반.",
+      "completed_at": "2026-04-11"
+    },
+    {
+      "id": "F-069",
+      "title": "Add null byte check to validate_path for defense-in-depth",
+      "priority": 3,
+      "passes": true,
+      "acceptanceCriteria": [
+        "shell_utils.py validate_path에 null byte (\\x00) 포함 시 거부 추가",
+        "기존 .. traversal 검증과 동일 레벨에서 처리",
+        "pytest passes"
+      ],
+      "notes": "3차 Security #7. shell_utils.py:136 — Python Path가 자체 차단하지만 validate_path 레벨에서도 명시적 차단이 defense-in-depth.",
+      "completed_at": "2026-04-11"
+    },
+    {
+      "id": "F-070",
+      "title": "Note: batch_runner/simvision_ops/discovery 400줄 초과 모니터링",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-11",
+      "acceptanceCriteria": [
+        "batch_runner.py(595), simvision_ops.py(561), discovery.py(531) — 현재 상태 기록",
+        "추후 기능 추가 시 400줄 초과 여부 재검토"
+      ],
+      "notes": "3차 Arch #6. 3개 모듈이 400줄 초과하지만 내부 응집도 높아 추가 분할은 과도. 모니터링 항목으로 등록."
+    },
+    {
+      "id": "F-071",
+      "title": "Wrap cleanup_checkpoints and rebuild_manifest in asyncio.to_thread at call sites",
+      "priority": 1,
+      "passes": true,
+      "acceptanceCriteria": [
+        "tools/checkpoint.py:162 cleanup_checkpoints 호출을 await asyncio.to_thread(checkpoint_manager.cleanup_checkpoints, ...) 로 변경",
+        "tools/checkpoint.py:180 rebuild_manifest 호출을 await asyncio.to_thread(checkpoint_manager.rebuild_manifest, ...) 로 변경",
+        "register action (line 111)은 이미 to_thread 적용 — 변경 불필요",
+        "pytest passes"
+      ],
+      "notes": "4차 Review #1. tools/checkpoint.py:162,180 — cleanup/rebuild action이 sync 함수를 직접 호출. os.walk 포함한 블로킹 경로가 event loop 차단. register action(line 111)은 이미 수정됨.",
+      "completed_at": "2026-04-11"
+    },
+    {
+      "id": "F-072",
+      "title": "Fix dead except ValueError on validate_path in tools/debug.py probe handler",
+      "priority": 2,
+      "passes": true,
+      "acceptanceCriteria": [
+        "tools/debug.py:123-127 try/except ValueError 블록을 err = validate_path(shm_path); if err: return err 패턴으로 교체",
+        "다른 호출부(tools/batch.py:96, simvision_ops.py:41)와 동일한 패턴 적용",
+        "shm_path에 .. 또는 null byte 포함 시 에러 반환 확인",
+        "pytest passes"
+      ],
+      "notes": "4차 Security #2. validate_path는 ValueError를 raise하지 않고 error string을 반환. dead except 블록으로 인해 probe handler의 shm_path traversal 검증이 무효화됨.",
+      "completed_at": "2026-04-11"
+    },
+    {
+      "id": "F-073",
+      "title": "Fix tools/debug.py write_text encoding mismatch and wrap in asyncio.to_thread",
+      "priority": 3,
+      "passes": true,
+      "acceptanceCriteria": [
+        "tools/debug.py:392 write_text 호출에 encoding='utf-8' 인수 추가 (line 421과 일관성)",
+        "tools/debug.py:392,421 write_text 호출을 asyncio.to_thread로 래핑",
+        "pytest passes"
+      ],
+      "notes": "4차 Python #3. line 392는 encoding 없음, line 421은 있음 — 불일치. 비 UTF-8 시스템에서 latent bug. 두 호출 모두 async 함수 내 sync file write.",
+      "completed_at": "2026-04-11"
+    },
+    {
+      "id": "F-074",
+      "title": "Add unit tests for csv_cache.bisect_csv and bisect_signal_dump",
+      "priority": 3,
+      "passes": true,
+      "acceptanceCriteria": [
+        "tests/에 bisect_csv fixture CSV로 단위 테스트 추가 (정상 bisect, edge case: 빈 파일, 신호 미존재)",
+        "bisect_signal_dump의 결과 포맷 검증 테스트 추가",
+        "_bisect_signal_dump_impl 이동 후 회귀 방지 목적",
+        "pytest passes"
+      ],
+      "notes": "4차 Python #4. csv_cache.py로 이동 후 bisect_csv, bisect_signal_dump 테스트 없음. pure 함수로 fixture CSV로 쉽게 테스트 가능.",
+      "completed_at": "2026-04-11"
+    },
+    {
+      "id": "F-075",
+      "title": "Fix stale comment in runner_detection.py referencing deleted env_detection",
+      "priority": 3,
+      "passes": true,
+      "acceptanceCriteria": [
+        "runner_detection.py:283 주석의 'env_detection'을 'sim_env_detection'으로 수정",
+        "실제 순환 의존 경로(runner_detection -> discovery -> sim_env_detection -> runner_detection)를 정확히 반영",
+        "pytest passes"
+      ],
+      "notes": "4차 Arch #5. runner_detection.py:283 — 삭제된 env_detection 참조 주석. 미래 독자가 잘못된 의존성 경로를 파악할 수 있음.",
+      "completed_at": "2026-04-11"
+    },
+    {
+      "id": "F-076",
+      "title": "Add validate_path for shm_path in bisect_signal Mode A",
+      "priority": 2,
+      "passes": true,
+      "acceptanceCriteria": [
+        "tools/debug.py bisect_signal Mode A (line 187 이전)에서 validate_path(shm_path, 'shm_path') 호출 추가",
+        "다른 shm_path 입력점 (probe handler line 124, debug_snapshot line 251)과 동일 패턴 적용",
+        ".. 포함 shm_path가 csv_cache.bisect_signal_dump에 전달되기 전 차단 확인",
+        "pytest passes"
+      ],
+      "notes": "5차 Security #1. tools/debug.py:187-197 — bisect_signal Mode A에서 shm_path를 validate_path 없이 csv_cache.bisect_signal_dump로 전달. shell_quote로 injection은 차단되지만 경로 traversal은 미방어. 다른 shm_path 입력점과 일관성 불일치.",
+      "completed_at": "2026-04-11"
+    },
+    {
+      "id": "F-077",
+      "title": "Add validate_path for sdf_file in tcl_preprocessing.py",
+      "priority": 2,
+      "passes": true,
+      "acceptanceCriteria": [
+        "tcl_preprocessing.py line 253 이전에 validate_path(sdf_file, 'sdf_file') 호출 추가",
+        "../../ 패턴 포함 sdf_file이 차단되는 테스트 추가",
+        "기존 정상 SDF 파일 경로 통과 확인",
+        "pytest passes"
+      ],
+      "notes": "5차 Security #2. tcl_preprocessing.py:253,282 — sdf_file regex r'[\\w./\\-]+' 가 ../../ 패턴 허용. validate_path 없이 generated tfile에 literal 삽입 (shell_quote 없음). MCP tool access 필요하므로 Low이지만 다른 경로 입력점과 일관성 차원에서 수정 권장.",
+      "completed_at": "2026-04-11"
+    },
+    {
+      "id": "F-078",
+      "title": "Surface RUN_ERROR from __RUN_AND_REPORT__ as ERROR response",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-13",
+      "acceptanceCriteria": [
+        "tools/sim_lifecycle.py sim_run (line 300-315)에서 bridge.execute 반환값 확인",
+        "where.startswith('RUN_ERROR') 또는 'RUN_ERROR:' 포함 시 f'ERROR: {where}' 반환",
+        "정상 케이스는 기존 'Simulation advanced. Current position: ...' 유지",
+        "pytest: mock bridge가 'RUN_ERROR:bad duration\n(pos)' 반환할 때 response가 'ERROR'로 시작하는지 검증",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "sim-run-timeout-fix 코드 리뷰 High #1. tools/sim_lifecycle.py:314-315. Tcl 매크로 do_run_and_report는 run 실패 시 'RUN_ERROR:$err\n$pos' (mcp_bridge.tcl:932,939) 반환하지만 Python 측에서 success 포맷으로 무조건 래핑. MCP 클라이언트가 실패를 감지 못함."
+    },
+    {
+      "id": "F-079",
+      "title": "Move _DURATION_RE to module scope and consolidate duration.strip()",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-13",
+      "acceptanceCriteria": [
+        "_DURATION_RE를 tools/sim_lifecycle.py 모듈 최상단(register() 외부)으로 이동",
+        "sim_run 내부에서 duration = duration.strip() 먼저 수행 후 _DURATION_RE.fullmatch(duration) 호출",
+        "이후 Tcl 전달도 strip된 duration 변수 사용 (현재는 원본 duration 보간)",
+        "모듈 상단 regex 정의 옆에 주석: '# fullmatch required — changing to match/search opens Tcl injection'",
+        "pytest: import 시 regex 접근 가능 확인, strip 전후 동일 검증",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "sim-run-timeout-fix 코드 리뷰 Medium #1+#2. sim_lifecycle.py:297,307,314. 현재 _DURATION_RE가 register() 내부라 re-compile 및 단위 테스트 불가. 또한 검증은 strip된 값, Tcl 전달은 원본 — code smell (실제 취약 없음)."
+    },
+    {
+      "id": "F-080",
+      "title": "Harden sim_run duration: length cap + ASCII-only digits",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-13",
+      "acceptanceCriteria": [
+        "sim_lifecycle.py sim_run에서 regex 검증 전 len(duration) > 32 거부 ('ERROR: duration too long')",
+        "_DURATION_RE를 r'^\\d+\\s*(ns|us|ms|s|ps|fs)?$'에서 r'^[0-9]+\\s*(ns|us|ms|s|ps|fs)?$'로 변경 (또는 re.ASCII 플래그)",
+        "pytest: '9'*100 + 'ns' 거부, Unicode digit '１００ns' 거부, 정상 '100ns' 통과",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "sim-run-timeout-fix 코드 리뷰 Low #1+#2 (security-sentinel). Payload DoS 및 Unicode digit 혼입 방지. 실제 MCP 클라이언트는 신뢰되지만 defense-in-depth."
+    },
+    {
+      "id": "F-081",
+      "title": "Add timeout parameter to sim_stop",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-13",
+      "acceptanceCriteria": [
+        "tools/sim_lifecycle.py sim_stop 시그니처를 'async def sim_stop(timeout: float = 30.0) -> str'로 변경",
+        "bridge.execute('stop', timeout=timeout) 로 timeout 전달",
+        "docstring에 timeout 인자 설명 추가",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "sim-run-timeout-fix 코드 리뷰 Low #3. sim_lifecycle.py:318-322. 모듈 내 다른 bridge 호출은 timeout override 하는데 sim_stop만 default. 시뮬레이터 wedged 상태에서 stop이 hang 가능."
+    },
+    {
+      "id": "F-082",
+      "title": "Catch asyncio.TimeoutError in sim_run with actionable message",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-13",
+      "acceptanceCriteria": [
+        "sim_run에서 bridge.execute await을 try/except asyncio.TimeoutError로 감쌈",
+        "timeout 초과 시 'ERROR: sim_run exceeded {timeout}s. Pass larger timeout= argument or split the run duration.' 반환",
+        "기존 정상 경로 영향 없음",
+        "pytest: mock bridge가 asyncio.TimeoutError 발생시 response에 'ERROR' 및 'timeout' 포함 확인",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "sim-run-timeout-fix 코드 리뷰 Low #4 (kieran). sim_lifecycle.py:314. timeout 초과 시 원인/해결책이 client에게 전달되지 않음. MCP 에러 메시지로 actionable guidance 제공."
+    },
+    {
+      "id": "F-083",
+      "title": "Require explicit time unit in sim_run duration",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-13",
+      "acceptanceCriteria": [
+        "_DURATION_RE에서 unit group 옵셔널 '?' 제거 → 단위 필수화",
+        "최종 패턴: r'^[0-9]+\\s*(ns|us|ms|s|ps|fs)$' (F-080과 병행 적용)",
+        "docstring 'duration:' 줄에 accepted suffix (ns/us/ms/s/ps/fs) 명시",
+        "pytest: '100' (단위 없음) 거부 확인, '100ns' 통과 확인",
+        "기존 호출부에서 단위 없이 전달하는 케이스 없는지 repo grep 확인 (sim_run(duration='숫자만') 호출)",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "sim-run-timeout-fix 코드 리뷰 Medium #3 (kieran). sim_lifecycle.py:297. 현재 regex가 bare integer 허용 → Xcelium default timescale 해석으로 사용자 의도 불명확. Behavior change라 별도 항목으로 분리. F-080과 함께 적용 권장 (같은 regex 수정)."
+    },
+    {
+      "id": "F-084",
+      "title": "Suppress git rev-parse stderr in discover_sim_dir",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-13",
+      "acceptanceCriteria": [
+        "sim_env_detection.py discover_sim_dir() 내 'git rev-parse --show-toplevel || echo ~'를 'git rev-parse --show-toplevel 2>/dev/null || echo ~'로 변경",
+        "수정 후 sim_discover(force=False, sim_dir='') 호출 시 'simvisdbutil not found' 대신 'USER INPUT REQUIRED: Could not auto-detect...' 반환",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "shell_run()이 stderr를 stdout에 append하는 설계로 인해, git rev-parse가 git repo 외부에서 실행되면 'fatal: Not a git repository...' stderr가 project_root에 혼입됨. 이 garbage path로 find/grep/ls가 실행되고, 그 에러 출력도 다시 혼입되어 analyze_tb_type이 'mixed'를 반환. 결국 garbage sim_dir로 full discovery 진행 → resolve_eda_tools() 실패 → RuntimeError('simvisdbutil not found'). 수정: 2>/dev/null로 git stderr 억제. cloud0 서버 CWD: /users/hoseung.lee (HOME, git repo 아님). 검증 완료: 수정 시 project_root='/users/hoseung.lee' (clean), find 결과 empty, UserInputRequired 정상 발생."
+    },
+    {
+      "id": "F-085",
+      "title": "Fix sim_regression pass_count unit mismatch — Option C dual-level summary",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-13",
+      "acceptanceCriteria": [
+        "batch_runner.py 672-683 블록 수정: 테스트 레벨(pass_count/fail_count)과 체크 레벨(check_pass/check_fail) 분리 카운트",
+        "테스트 레벨 판정: _COMPLETE_RE = re.compile(r'COMPLETE\\.\\s*Errors:\\s*(\\d+)') 로 COMPLETE 라인 파싱. Errors=0 → pass_count+1, Errors>0 → fail_count+1. COMPLETE 없이 FAIL 포함 → fail_count+1 (crash/abort)",
+        "체크 레벨: check_pass = t_raw.count('PASS'), check_fail = t_raw.count('FAIL') (기존 로직 유지, 변수명만 변경)",
+        "summary 형식: '{pass_count}/{total} tests PASS ({check_pass} checks passed, {check_fail} failed)'",
+        "TOP015+TOP016 regression 실행 결과: '2/2 tests PASS (15 checks passed, 0 failed)' 형태로 출력",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "sim_regression 결과 '15/2 tests PASS' 오출력. pass_count += t_raw.count('PASS')가 테스트 내 개별 체크라인([V-xx] PASS: ...)을 모두 카운트하여 분자(체크 수)와 분모(테스트 수)의 단위가 불일치. TOP015 로그에 12개 PASS 라인, TOP016에 3개 → 15/2. 수정: 테스트 레벨(COMPLETE. Errors: N 파싱)과 체크 레벨(기존 substring count) 분리하여 Option C 포맷으로 출력. _COMPLETE_RE는 모듈 레벨 상수로 정의. 대상: HAS_VERDICT 테스트(TOP013~TOP016)만. NO_VERDICT 테스트 처리는 F-086."
+    },
+    {
+      "id": "F-086",
+      "title": "sim_regression: waveform-only (NO_VERDICT) 테스트 판정 지원",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-13",
+      "acceptanceCriteria": [
+        "per_test_results 수집 grep 패턴에 '\\$finish' 추가: grep -E 'PASS|FAIL|Errors:|COMPLETE|\\$finish'",
+        "per_test_errors: dict[str, str] 신규 추가 — 테스트별 에러 라인 수집. grep -iE '\\*E |^Error:|fatal error|Segmentation' log | head -3",
+        "집계 로직 분기: (1) COMPLETE. Errors: N 있음 → HAS_VERDICT (pass/fail_count, check_pass/fail_count). (2) FAIL만 있음 → fail_count+1. (3) $finish 있음 + no errors → complete_count+1. (4) $finish 있음 + errors → error_count+1. (5) $finish 없음 → error_count+1 (timeout/crash)",
+        "summary 포맷: '{pass_count}/{verdict_total} verdict tests PASS ({check_pass} checks passed, {check_fail} failed)\\n{complete_count}/{waveform_total} waveform tests COMPLETE'",
+        "verdict_total = pass_count + fail_count, waveform_total = complete_count + error_count",
+        "verdict_total=0 또는 waveform_total=0인 경우 해당 라인 생략",
+        "venezia TOP000~TOP012 regression 실행: '13/13 waveform tests COMPLETE' 출력 확인",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "venezia-fpga 프로젝트 17개 테스트 중 13개(TOP000~TOP012)가 PASS/FAIL/COMPLETE 출력 없이 $finish만으로 종료하는 waveform-only 테스트. 현재 sim_regression의 grep 패턴에 걸리지 않아 per_test_results가 빈 배열 → pass_count/fail_count 모두 0으로 묵살됨. 단기 구현: $finish 도달 + 에러 없음 → COMPLETE로 분류. 에러 패턴: '*E , Error:, fatal error, Segmentation'. 중장기: testbench에 PASS/FAIL verdict 추가(별도 이슈). F-085(HAS_VERDICT pass_count 수정)와 함께 적용."
+    },
+    {
+      "id": "F-087",
+      "title": "run_full_discovery: registry 우선 확인 후 discover_sim_dir() fallback",
+      "priority": 2,
+      "passes": true,
+      "completed_at": "2026-04-13",
+      "acceptanceCriteria": [
+        "run_full_discovery(sim_dir='', force=False) 호출 시: discover_sim_dir() 전에 get_default_sim_dir()로 registry 먼저 확인",
+        "registry에 is_default sim_dir 있음 → 해당 sim_dir 사용 → load_sim_config → 기존 config 있으면 조기 종료 반환",
+        "registry 없거나 is_default 없음 → discover_sim_dir() fallback (기존 동작 유지)",
+        "수정 위치: discovery.py run_full_discovery() 상단 'if not sim_dir:' 블록",
+        "코드: sim_dir = await get_default_sim_dir(); if not sim_dir: envs = await discover_sim_dir(); sim_dir = envs[0]['sim_dir']",
+        "sim_discover(force=False) 재호출(sim_dir='') 시 'Registry already exists for {sim_dir}.' 반환 확인",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "run_full_discovery에서 sim_dir=''일 때 registry 확인보다 discover_sim_dir() CWD 기반 탐색을 먼저 수행하는 순서 버그. 원래 설계 의도(v4 plan §3.4): 최초 1회 sim_discover(sim_dir=explicit) → registry 생성 → 이후 sim_dir='' 재호출 시 registry 기반 조기 종료. 현재는 registry가 있어도 discover_sim_dir()를 먼저 호출하여 CWD 기반 탐색 실패 시 UserInputRequired 발생(F-084 수정 후). get_default_sim_dir()는 ~/.xcelium_mcp/mcp_registry.json 읽기 → CWD 무관하게 항상 접근 가능."
+    },
+    {
+      "id": "F-088",
+      "title": "shell_run stderr 오염 전면 수정 (find/grep/ls 파싱 안전화)",
+      "priority": 2,
+      "passes": true,
+      "acceptanceCriteria": [
+        "CRITICAL A: sim_env_detection.py detect_run_dir grep (L283) — 2>/dev/null 추가, 파싱 전 'cd'로 시작하는지 검증",
+        "CRITICAL B: discovery.py git rev-parse (L~395) — 2>/dev/null 추가 (F-084와 동일 패턴)",
+        "CRITICAL C: sim_env_detection.py find {project_root} (L95-96) — 2>/dev/null 추가",
+        "CRITICAL D: runner_detection.py find+grep candidates (L104-106) — 2>/dev/null 추가",
+        "CRITICAL E: runner_detection.py auto_detect_runner Makefile grep (L180) — 2>/dev/null 추가",
+        "CRITICAL F: runner_detection.py auto_detect_runner Makefile targets grep (L183) — 2>/dev/null 추가, splitlines()[0] 파싱 전 패턴 검증",
+        "HIGH G: sim_env_detection.py grep -rl uvm_component (L39-43) — 2>/dev/null 추가, stderr 있으면 False 처리",
+        "HIGH H: sim_env_detection.py grep -rl interface (L57-60) — 2>/dev/null 추가",
+        "HIGH I: discovery.py grep -n 'xmsim.*-input' (L305) — 2>/dev/null 추가",
+        "HIGH J: simvision_ops.py ls -td *.shm (L110-112) — 2>/dev/null 추가",
+        "sim_discover(force=True, run_dir='run') 결과에서 runner: grep: 미표시",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "shell_run()은 stderr를 stdout에 append하는 구조. find/grep/ls/git 명령이 실패 시 stderr 출력이 파싱 결과를 오염시킴. F-084(git rev-parse)와 detect_run_dir(grep::) 아티팩트에서 확인된 패턴이 코드베이스 전반에 존재. CRITICAL A~D는 1차 수정됐으나 E/F(auto_detect_runner Makefile grep)가 누락됨 — sim_discover(force=True) 결과에서 runner: grep: 출력으로 확인. CRITICAL E: Makefile 없는 환경에서 grep stderr가 bool() 통과 → CRITICAL F: targets.strip().splitlines()[0]이 'grep: /path/Makefile: No such file' → extract_script_name이 'grep:' 반환. 수정 원칙: (1) 파싱에 사용되는 shell_run 호출에 2>/dev/null 추가, (2) splitlines() 후 예상 패턴으로 라인 필터링.",
+      "completed_at": "2026-04-13"
+    },
+    {
+      "id": "F-089",
+      "title": "sim_discover에 run_dir 파라미터 추가 — run_dir 후보 복수 시 재호출 지원",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-04-13",
+      "acceptanceCriteria": [
+        "sim_discover에 run_dir: str = '' 파라미터 추가",
+        "run_dir != '' 이면 detect_run_dir() 호출 생략, 해당 값을 직접 사용",
+        "run_dir == '' + 후보 복수 → UserInputRequired 메시지에 're-call with run_dir=<choice>' 안내 포함",
+        "sim_discover(force=True, run_dir='run') 재호출 시 정상 등록 완료",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "MCP 툴은 stateless single-call — 툴 실행 중 사용자 입력 불가. sim_dir UserInputRequired는 sim_dir 파라미터로 해결 가능하지만 run_dir UserInputRequired는 해결 수단 없음. F-088로 grep:: 가짜 후보는 제거되지만, 실제로 run 서브디렉토리가 여러 개 존재하는 환경에서는 여전히 발생. run_dir 파라미터 추가로 재호출 패턴 완성."
+    },
+    {
+      "id": "F-090",
+      "title": "resolve_eda_tools: csh/tcsh env_shell에서 $() 문법 실패 수정",
+      "priority": 2,
+      "passes": true,
+      "acceptanceCriteria": [
+        "env_shell이 csh/tcsh일 때 which_cmds를 backtick 문법으로 생성: echo __TOOL_simvisdbutil__=`which simvisdbutil`",
+        "env_shell이 bash/sh일 때 기존 $() 문법 유지",
+        "sim_discover(force=True, run_dir='run') 호출 시 simvisdbutil 경로 정상 감지",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "resolve_eda_tools()에서 which_cmds를 bash $() 문법으로 생성하여 csh/tcsh에서 실행하면 command substitution이 동작하지 않음. eda.env가 csh 스크립트인 경우(#/bin/csh shebang 또는 setenv 키워드로 감지), _detect_env_shell()이 env_shell=/bin/csh를 반환하고 shell_env에 저장됨. 이후 resolve_eda_tools()에서 csh -c 'source eda.env && echo __TOOL_simvisdbutil__=$(which simvisdbutil)'를 실행하면 $()가 빈 문자열로 평가되어 결과가 __TOOL_simvisdbutil__=(빈값)이 됨. _detect_eda_env Step 3의 which xrun은 csh native 문법이라 성공하지만 resolve_eda_tools의 $() 혼용으로 실패. force=True + run_dir 제공 시에만 이 경로가 실행되므로 F-088 이전에는 드러나지 않았음.",
+      "completed_at": "2026-04-13"
+    },
+    {
+      "id": "F-091",
+      "title": "mcp_registry.json project_root/sim_dir 경로 불일치 — symlink vs 실경로 혼재",
+      "priority": 3,
+      "passes": true,
+      "acceptanceCriteria": [
+        "run_full_discovery() 진입 시 sim_dir에 os.path.realpath() 적용 (사용자 입력 정규화)",
+        "_update_registry_from_config()에서 sim_dir, project_root 모두 os.path.realpath() 적용",
+        "sim_discover(force=True) 후 mcp_registry.json의 project key와 env key가 모두 realpath 기준으로 통일",
+        "기존 registry 파일은 삭제 후 sim_discover 재실행으로 초기화 (마이그레이션 코드 불필요)",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "~/git.clone이 /usrdata/.../git.clone의 symlink인 환경에서 불일치 발생. sim_dir(env key)은 /users/.../ncsim (symlink 미해소 경로), project_root(project key)는 git rev-parse --show-toplevel이 내부적으로 realpath를 적용하여 /usrdata/.../venezia-t0를 반환. 현재 get_default_sim_dir()은 env_key만 반환하고 project_root를 무시하므로 현재 동작에는 영향 없음. 그러나 사용자가 다른 경로 형식으로 sim_discover를 호출하면 동일 환경이 다른 key로 중복 등록 가능. 수정: run_full_discovery() 진입 시와 _update_registry_from_config() 내부에서 sim_dir/project_root 모두 os.path.realpath()로 정규화. 기존 registry는 파일 삭제 후 sim_discover 재실행으로 클린 초기화.",
+      "completed_at": "2026-04-13"
+    },
+    {
+      "id": "F-094",
+      "title": "bridge_lifecycle: ./script 상대경로 오류 + detect_run_dir early-return 시 script_has_cd 미감지",
+      "priority": 2,
+      "passes": true,
+      "acceptanceCriteria": [
+        "bridge_lifecycle.py _start_bridge()에서 script 실행 시 상대경로 ./script 대신 {sim_dir}/{script} 절대경로 사용",
+        "detect_run_dir()에서 run_dir가 명시적으로 전달된 경우에도 script_has_cd 감지 로직 실행 (early-return 제거)",
+        "sim_discover(force=True) 후 생성된 config의 script_has_cd 값이 run_sim 스크립트 내 cd 유무와 일치",
+        "sim_bridge_run(test_name='TOP015') 성공적으로 xmsim 새 프로세스를 시작하고 bridge 연결 확인",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "root cause 2개: (1) bridge_lifecycle.py L174/L178에서 ./{script} 상대경로 사용. cwd={sim_dir}/{run_dir}(e.g. ncsim/run/)이지만 run_sim은 ncsim/에 위치 → ./run_sim: Command not found. (2) detect_run_dir()에서 run_dir가 명시적 전달되면 즉시 script_has_cd=False 반환. F-089 추가 시 early-return 삽입했으나 script_has_cd 감지를 건너뜀. 결과: script_has_cd=False 저장 → bridge_lifecycle이 cwd=sim_dir/run_dir로 설정하고 ./run_sim 실행 시도 → Command not found → 기존 SimVision 포트에 연결 → sim_run 실패. fix: (A) bridge_lifecycle: shell_quote(f'{sim_dir}/{script}') 절대경로 사용, (B) detect_run_dir: early-return 제거하고 run_dir 반환 전에도 script_has_cd 감지 실행",
+      "completed_at": "2026-04-13"
+    },
+    {
+      "id": "F-095",
+      "title": "simvision_connect attach: 이미 연결된 SimVision에 중복 TCP 접속 시도 → Connection closed",
+      "priority": 3,
+      "passes": true,
+      "acceptanceCriteria": [
+        "simvision_connect(action='attach') 호출 시 bridges.simvision_raw가 이미 연결돼 있으면 재접속 없이 현재 연결 정보를 반환",
+        "start → attach 순서로 호출해도 오류 없이 동작",
+        "mcp_bridge.tcl TCP server가 두 번째 연결 시도를 받아도 서버가 crash/hang 없이 정상 거절",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "root cause: simvision_connect(start)가 SimVision 시작 + 연결(port 9877)을 완료해 bridges.simvision_raw 설정. 이후 simvision_connect(attach, port=0)가 ready 파일에서 9877을 찾아 또다시 TCP 연결 시도. mcp_bridge.tcl은 클라이언트 1개만 허용하므로 두 번째 연결을 즉시 닫음 → 'Connection closed while reading body'. 포트 분리(xmsim=9876, simvision=9877) 자체는 정상 동작. fix: simvision_connect attach 핸들러에서 bridges.simvision_raw.connected == True이면 early-return으로 현재 연결 상태 반환.",
+      "completed_at": "2026-04-13"
+    },
+    {
+      "id": "F-096",
+      "title": "sim_bridge_run: bridge port 점유 프로세스 사전 확인 없이 xmsim 시작 → 다른 프로세스(SimVision 등)에 연결되는 오동작",
+      "priority": 2,
+      "passes": true,
+      "acceptanceCriteria": [
+        "_start_bridge() 진입 시 xmsim 실행 여부 체크에 더해 bridge port(기본 9876)가 이미 다른 프로세스에 점유됐는지 확인",
+        "port 점유 프로세스가 xmsim이 아닌 경우(예: simvision) 명확한 에러 메시지 반환 — 점유 프로세스 이름/PID 포함",
+        "sim_bridge_run 후 MCP bridge가 실제로 xmsim에 연결됐는지 bridge_type 확인으로 검증",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "root cause: _start_bridge()가 'pgrep xmsim'으로 xmsim 실행 여부만 체크. port 9876이 SimVision 등 다른 프로세스에 점유된 경우 체크 없이 xmsim 시작 → xmsim은 IPv6 9876(:::9876)만 바인드 성공, IPv4 9876은 SimVision 점유 유지 → MCP bridge가 localhost:9876 연결 시 OS가 IPv4 리스너(SimVision)로 라우팅 → sim_run에서 'invalid command name run' 에러. 발생 조건: 이전 세션의 SimVision 프로세스가 종료 없이 살아있거나, 포트 분리 fix 이전 config로 시작된 SimVision이 잔존하는 경우. fix: xmsim pgrep 체크 후 추가로 'ss -tlnp | grep {port}'로 port 점유 프로세스 확인, xmsim이 아닌 프로세스가 점유 중이면 에러 반환.",
+      "completed_at": "2026-04-13"
+    },
+    {
+      "id": "F-097",
+      "title": "F-096 port check 무효: cloud0에 ss 미설치 → ss -tlnp가 silently fail, 포트 점유 감지 불가",
+      "priority": 2,
+      "passes": true,
+      "acceptanceCriteria": [
+        "_start_bridge() port check가 ss 대신 ss-then-netstat fallback 또는 /proc/net/tcp 파싱으로 대체",
+        "ss 없는 환경(cloud0: net-tools 2.10-alpha, netstat만 존재)에서도 port 점유 프로세스 정확히 감지",
+        "netstat -tlnp 2>/dev/null | grep ':{port}' 로 대체 시 정상 동작 확인 (cloud0 검증: python3 bind IPv4 9875 → netstat에서 검출됨)",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "root cause: F-096 fix가 'ss -tlnp 2>/dev/null | grep :{port}\\b'를 사용. cloud0에는 ss가 없음(which ss → not found). 2>/dev/null이 'ss: command not found' stderr를 삼키므로 빈 출력 → port 점유 감지 실패. 대안: (1) command -v ss >/dev/null 2>&1 로 ss 가용 여부 체크 후 ss 없으면 netstat -tlnp으로 fallback (2) /proc/net/tcp 직접 파싱(hex port, 0A=LISTEN) — 외부 명령 의존성 없음. 검증: cloud0에서 netstat -tlnp 2>/dev/null | grep ':9875' → '0.0.0.0:9875 ... 18949/python3' 정상 출력 확인됨.",
+      "completed_at": "2026-04-13"
+    },
+    {
+      "id": "F-098",
+      "title": "F-097 fix 오류: _LIST_LISTENERS에 '2>&1' 포함 → shell_run() hard-check에 차단",
+      "priority": 1,
+      "passes": true,
+      "acceptanceCriteria": [
+        "_start_bridge() port check에서 2>&1 미사용",
+        "ss/netstat 모두 없는 환경에서도 동작 — /proc/net/tcp fallback 포함",
+        "sim_bridge_run 호출 시 port 9876을 python3가 점유한 상태에서 'ERROR: Bridge port ... occupied by python3' 반환",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "root cause: F-097 fix의 _LIST_LISTENERS = '(command -v ss >/dev/null 2>&1 && ...)'. shell_run()이 L98에서 '2>&1' 포함 명령을 하드 차단 — tcsh 호환성 규칙. 수정 방향: (A) 'command -v ss >& /dev/null'로 교체 — >& /dev/null는 shell_run() 검사를 통과하고 bash/tcsh 양쪽에서 동작. (B) 가장 단순: _LIST_LISTENERS 없애고 /proc/net/tcp 파싱 — hex(port).upper().zfill(4)로 LISTEN 상태(0A) 직접 확인, 외부 명령 의존성 0. 추천: (A)로 최소 변경. '>/dev/null 2>&1' → '>& /dev/null' 한 줄 수정으로 해결.",
+      "completed_at": "2026-04-13"
+    },
+    {
+      "id": "F-099",
+      "title": "sim_disconnect shutdown target=all: xmsim 미연결 시 즉시 에러 반환",
+      "priority": 2,
+      "passes": true,
+      "acceptanceCriteria": [
+        "sim_disconnect shutdown target=all: xmsim/simvision 각각 독립 확인, 연결된 것만 shutdown",
+        "xmsim 미연결 + simvision 연결 시 target=all -> simvision만 정상 종료, 에러 없음",
+        "xmsim 연결 + simvision 미연결 시 target=all -> xmsim만 정상 종료",
+        "둘 다 미연결 시에만 에러 반환",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "root cause: shutdown target=all 구현이 xmsim 미연결이면 즉시 에러 반환. simvision 정리 안 됨. 수정: xmsim_raw/simvision_raw 각각 독립 확인.",
+      "completed_at": "2026-04-14"
+    },
+    {
+      "id": "F-100",
+      "title": "Remove sim_stop tool + expose xmsim_pid in sim_bridge_run/connect_simulator result",
+      "priority": 2,
+      "passes": true,
+      "acceptanceCriteria": [
+        "sim_stop tool 제거 (tools/sim_lifecycle.py 함수 삭제, MCP tool 등록 해제)",
+        "sim_bridge_run / connect_simulator result에 xmsim_pid: {pid} 줄 추가",
+        "BridgeManager.xmsim_pid 필드 유지, set_xmsim(None) 시 클리어",
+        "워크플로우 대체: 정지 확인 -> sim_status(), 실행 중 중단 -> ssh kill -s INT + sim_status()",
+        "PID 조회는 port 기반 ss/netstat 사용 (pgrep 금지)",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "sim_stop 기능은 sim_status + ssh kill로 대체 가능. sim_stop 제거. PID는 port 기반 ss/netstat 조회.",
+      "completed_at": "2026-04-14"
+    },
+    {
+      "id": "F-102",
+      "title": "Fix debug_snapshot snapshot mode: signal names parsed incorrectly, relative path value",
+      "priority": 3,
+      "passes": true,
+      "acceptanceCriteria": [
+        "debug_snapshot mode=snapshot: 신호 값 정상 반환",
+        "신호명 파싱: line.strip().split('..')[0] 으로 변경 (점 패딩 제거)",
+        "describe *는 현재 scope 유지 (상대경로), value도 상대경로 사용",
+        "scope에 직접 신호 없을 때 graceful fallback: (no signals in current scope) 반환",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "Bug A: split()[0]이 점 패딩 포함 이름 반환. 해결: split(\"..\"[0]. Bug B: describe {scope}.* 미지원. describe *를 유지하고 상대경로 사용.",
+      "completed_at": "2026-04-14"
+    },
+    {
+      "id": "F-103",
+      "title": "Fix debug_snapshot: skip bit-select expansion lines and named event lines in describe output",
+      "priority": 3,
+      "passes": true,
+      "acceptanceCriteria": [
+        "bit-select 확장 라인 (들여쓰기 시작) 스킵 — 부모 신호 값이 이미 읽혔으므로 정보 손실 없음",
+        "named event 라인 스킵 — value 명령 미지원 타입, 'could not read' 출력 제거",
+        "debug_snapshot mode=snapshot 결과에 '(could not read)' 항목 최소화",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "debug_snapshot mode=snapshot의 describe * 출력에 두 가지 파싱 불가 라인이 존재.\n\nBug A (bit-select 확장 라인): 벡터 신호는 부모+자식 두 줄로 출력.\n  w_u_dut_o_eprom_xa.............net logic [4:0]   ← 부모 (col 0, 점 패딩 있음)\n     w_u_dut_o_eprom_xa[4] (wire/tri) = St0        ← 자식 (공백 시작, 점 패딩 없음)\n자식 라인에 '..'가 없으므로 split('..')[0]이 전체 라인을 반환 → value 명령 실패. 부모 라인이 이미 처리되므로 자식은 스킵해도 정보 손실 없음.\n탐지: line[0] == ' ' (원본 라인 기준, strip 전)\n\nBug B (named event 라인): sim_run, vector_start 등 named event는 describe 출력에 'named event' 타입으로 표시.\n  sim_run........................ named event\nvalue 명령이 named event 타입을 지원하지 않아 TclError 발생.\n탐지: 'named event' in line (원본 라인 기준)\n\n[검증됨 ✓] bug 발생 위치: tools/debug.py signal values 루프 내 for line in lines 처리 부분\n[검증됨 ✓] line[0] == ' ' 로 bit-select 자식 라인 탐지 가능 (들여쓰기는 항상 공백 3칸)\n[검증됨 ✓] 'named event' in line 으로 event 라인 탐지 가능\n\n[수정 방법] strip() 이전 원본 라인에서 두 조건을 먼저 검사:\n  for line in lines:\n      if not line or line[0] == ' ' or 'named event' in line:\n          continue\n      sig_name = line.strip().split('..')[0]",
+      "completed_at": "2026-04-14"
+    },
+    {
+      "id": "F-104",
+      "title": "Fix sim_run timeout + SIGINT: asyncio timeout leaves TCP open → client_channel stale → reconnect fails",
+      "priority": 2,
+      "passes": true,
+      "acceptanceCriteria": [
+        "sim_run timeout 후 self.connected = False (writer closed, _reader/_writer = None)",
+        "timeout 후 즉시 connect_simulator 호출 시 재연결 성공 (desync 없음, ECONNRESET 없음)",
+        "SIGINT로 sim 중단 후 connect_simulator 재연결 성공",
+        "재연결 후 sim_status / inspect_signal 정상 동작",
+        "xmsim 프로세스 생존, server socket(9876) 유지",
+        "pytest passes + ruff check passes"
+      ],
+      "notes": "## Root Cause (검증 완료 2026-04-14)\n\n### 문제 1: asyncio timeout이 TCP를 닫지 않음\nasyncio.wait_for(_send_and_recv(), timeout=30)가 타임아웃 시 코루틴만 취소하고 _writer(TCP)는 닫지 않음.\n\n### 문제 2: 연쇄 실패 — client_channel stale로 인한 reconnect 차단\n\n검증된 실패 시퀀스 (TOP000, xmsim_pid=12485, port=9876):\n\n```\nStep 1: sim_run asyncio timeout (30s)\n  asyncio.wait_for raises TimeoutError\n  _send_and_recv 취소됨 (readline() 중단)\n  _writer.close() 호출 안 됨 → TCP 연결(port 58502) CLOSE_WAIT 상태로 남음\n  xmsim: client_channel이 아직 살아있다고 인식\n\nStep 2: SIGINT at 5s (deferred)\n  xmsim C handler → client socket close → FIN to Python\n  Python은 asyncio.wait_for 취소 상태라 FIN을 읽지 못함\n\nStep 3: sim_disconnect (잘못된 상태에서 호출)\n  _writer 살아있어 __QUIT__ 전송\n  reader buffer에 stale RUN_ERROR 응답 있음 (SIGINT 후 send_ok가 보낸 것)\n  stale RUN_ERROR를 __QUIT__ 응답으로 읽음 (desync!)\n  _writer.close() → FIN 전송\n  xmsim: FIN 수신 → on_readable EOF → send_ok('bye') 먼저 시도\n    → EPIPE (Python이 이미 닫음) → TCL 에러 → disconnect() 끝까지 실행 안 됨\n    → client_channel 여전히 stale!\n\nStep 4: connect_simulator 시도\n  xmsim: client_channel ne '' → 'Another client is connected' + close → RST\n  Python: ECONNRESET 수신 → 재연결 실패\n```\n\n검증된 netstat 상태 (실패 후):\n```\n::1:58502 → ::1:9876  CLOSE_WAIT  python    ← 원본 연결 미닫힘\n::1:9876  → ::1:58550 CLOSE_WAIT  xmsim     ← 재연결 시도 후 거절\n::1:58550 → ::1:9876  FIN_WAIT2   -\n```\n\n## Fix\n\n`execute_safe()`에서 모든 예외 시 `_force_close()` 즉시 호출. 이 한 줄이 연쇄 실패 전체를 차단:\n\n```python\nasync def execute_safe(self, command, timeout=None):\n    ...\n    async with self._lock:\n        try:\n            return await asyncio.wait_for(\n                self._send_and_recv(command),\n                timeout=effective_timeout,\n            )\n        except (asyncio.TimeoutError, ConnectionError, OSError):\n            await self._force_close()   # ← 이 한 줄이 핵심\n            raise\n\nasync def _force_close(self) -> None:\n    \"\"\"Close TCP without __QUIT__. Ensures xmsim's on_readable fires → disconnect() → client_channel=''.\"\"\"\n    if self._writer and not self._writer.is_closing():\n        self._writer.close()\n        try:\n            await asyncio.wait_for(self._writer.wait_closed(), timeout=2.0)\n        except Exception:\n            pass\n    self._reader = None\n    self._writer = None\n```\n\n_force_close 효과:\n- Python FIN 전송 → xmsim on_readable EOF (send_ok 개입 전) → disconnect() clean 실행\n  → client_channel = '' 확실히 클리어\n- self.connected = False → 다음 명령에서 즉시 ConnectionError (desync 없음)\n- xmsim server socket(9876) LISTEN 유지 (검증됨) → connect_simulator 즉시 재연결 가능\n\n### SIGINT 흐름 (fix 적용 후)\n```\nSIGINT → xmsim C handler → client socket FIN → Python EOF\n       → execute_safe ConnectionError → _force_close() (writer.close 포함)\n       → xmsim on_readable EOF → disconnect() → client_channel = ''\n       → connected = False\n       → connect_simulator → 수락 → 재연결 성공\n       → sim_status / inspect_signal 계속 사용 가능\n```\n\n## 파일\nsrc/xcelium_mcp/tcl_bridge.py :: execute_safe() 예외 처리 + 신규 _force_close() 메서드\n\n## 주의\nF-104 단독으로는 reconnect 불완전. F-105(mcp_bridge.tcl accept stale check) 필수."
+    },
+    {
+      "id": "F-105",
+      "title": "Fix mcp_bridge.tcl accept: stale client_channel로 인한 reconnect 영구 차단 해결",
+      "priority": 2,
+      "passes": true,
+      "acceptanceCriteria": [
+        "sim_run timeout + _force_close 후 SIGINT → connect_simulator 재연결 성공",
+        "재연결 후 sim_status / inspect_signal 정상 동작",
+        "xmsim restart 없이 reconnect 가능"
+      ],
+      "notes": "## Root Cause (검증 완료 2026-04-14)\n\nF-104의 _force_close()가 Python FIN을 전송하고 xmsim 측은 CLOSE_WAIT 상태가 됨.\n그러나 accept proc에서 stale 감지가 실패해 재연결이 차단됨.\n\n### TCL `eof`의 핵심 특성 — 검증으로 확인\n```\neof $channel → kernel CLOSE_WAIT 상태를 직접 읽지 않음\n               마지막 read 작업이 EOF를 반환한 경우에만 true\n               read를 시도하기 전까지 항상 false!\n```\n\n### 버그 1 — 초기 구현: read 없이 eof 호출 (v1, passes: false)\n```tcl\ncatch {set is_dead [eof $client_channel]}  ← read 없이 호출 → 항상 false → stale 감지 불가\n```\n\n### 버그 2 — non-blocking read 구현 이후에도 실패 (v2, passes: false, 2026-04-14 검증)\n\nSIGINT 후 send_ok EPIPE가 client_channel에 error flag를 설정함.\n이후 accept proc에서 `fconfigure -blocking 0` 또는 `read` 호출 시 TCL error 발생.\n현재 catch가 exception을 잡지만 is_dead를 1로 설정하지 않음 → is_dead=0 유지 → else 분기 → 재연결 차단.\n\n검증 증거:\n- nc로 9876 연결 시 RST 수신 (accept 콜백이 실행돼 close했다는 의미)\n- \"MCP Bridge: stale client_channel reclaimed\" 메시지 없음 (is_dead=1 분기 미실행)\n- netstat: CLOSE_WAIT Recv-Q=1 영속 → on_readable EOF 미감지\n\n```\nSIGINT 후 흐름:\n  run 중단 → do_run_and_report → send_ok EPIPE → client_channel에 TCL error flag\n  → connect_simulator → accept 콜백 실행\n  → catch { fconfigure -blocking 0; read 4096 } → TCL error → catch가 잡음\n  → is_dead=0 (업데이트 안 됨) → else → \"Another client is connected\" + close\n  → Python: \"Connection closed by bridge\"\n```\n\nCLOSE_WAIT + Recv-Q=1 상태 분석:\n- netstat: tcp6 1 0 ::1:9876→::1:{old_port} CLOSE_WAIT xmsim (Recv-Q=1 영속)\n- `eof $channel`: 직전 read 없으므로 TCL 내부 EOF 플래그 미설정 → false\n- `read $channel 4096`: Recv-Q 1바이트 소비 → FIN 도달 → EOF 플래그 설정 → `eof` = true\n  (단, channel에 error flag 있으면 read 자체가 TCL error → catch 필요)\n\n### 버그 3 — -buffering line이 non-blocking read를 차단 (v3, passes: false, 2026-04-14 검증)\n\n결정적 증거: connect 전후로 `netstat Recv-Q=1이 변화 없음` → `read $client_channel 4096`이 실제로 1바이트를 읽지 않음.\n\n원인: accept proc이 채널을 `fconfigure $channel -buffering line`으로 설정함.\nline-buffering 모드에서 non-blocking `read $N`은 완전한 라인(`\\n`)이 없으면 EWOULDBLOCK → 0바이트 반환.\nRecv-Q에 1바이트(라인 미완성)가 있어도 TCL이 반환하지 않아 eof=false → is_dead=0 → 재연결 차단.\n\n### 버그 3/4 결론 — CLOSE_WAIT 감지는 TCL에서 신뢰할 수 없음\n\n- v3: catch exception → is_dead=1 추가 → 여전히 실패 (에러 변화: RST → EOF)\n- v4: `-buffering none` 추가 → Recv-Q=1 변화 없음 (read 0바이트, eof=false)\n- 근본 원인: SIGINT EPIPE 후 client_channel이 error 상태 → fconfigure/read 모두 불안정\n\n```\nSIGINT → run 중단 → do_run_and_report → send_ok EPIPE\n→ client_channel TCL error 상태 (EPIPE flag)\n→ accept에서 모든 read 시도 신뢰 불가\n→ eof, buffering none read 등 어떤 방법도 Recv-Q=1을 소비 못 함\n```\n\n## Fix (올바른 버전 v5) — 무조건 기존 연결 닫기\n\n접근: stale 감지를 포기하고 새 연결 시 기존 client_channel을 무조건 닫는다.\n두 클라이언트 동시 연결 없는 단일 사용자 환경에서 트레이드오프 없음.\n\ntcl/mcp_bridge.tcl :: accept 프로시저:\n\n```tcl\nif {$client_channel ne \"\"} {\n    puts \"MCP Bridge: closing previous client_channel (reconnect)\"\n    catch {close $client_channel}\n    set client_channel \"\"\n    ;# fall-through → 신규 연결 수락\n}\n```\n\n## 파일\ntcl/mcp_bridge.tcl :: accept 프로시저 (L135~L160 근방)",
+      "completed_at": "2026-04-14"
+    }
+  ]
+}

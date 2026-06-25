@@ -1,0 +1,25 @@
+{
+  "kb-global": {
+    "feature": "kb-global",
+    "phase": "check",
+    "projectLevel": "global",
+    "timestamp": "2026-06-25T03:52:03.299526+00:00",
+    "metrics": {
+      "kb_search_mrr": {
+        "value": 1.0,
+        "collector": "eval_gate",
+        "collectedAt": "2026-06-25T03:52:03.299526+00:00"
+      },
+      "kb_search_p1": {
+        "value": 1.0,
+        "collector": "eval_gate",
+        "collectedAt": "2026-06-25T03:52:03.299526+00:00"
+      },
+      "kb_eval_n_queries": {
+        "value": 16,
+        "collector": "eval_gate",
+        "collectedAt": "2026-06-25T03:52:03.299526+00:00"
+      }
+    }
+  }
+}
