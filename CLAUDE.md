@@ -77,6 +77,11 @@ Meta commands (13): `__PING__`, `__SCREENSHOT__`, `__QUIT__`, `__SHUTDOWN__`, `_
 
 Regular commands are evaluated via `uplevel #0` in SimVision's global Tcl namespace.
 
+## 파일/폴더 작업 규칙
+
+- 파일명/폴더명이 언급되면 작업 전 반드시 `ls` 또는 `Glob`으로 존재 확인
+- `git mv`, `mv`, `rm` 등 비가역 작업은 대상을 확인한 후 실행
+
 ## Coding Conventions
 
 - All tool functions are `async` and decorated with `@mcp.tool()`
