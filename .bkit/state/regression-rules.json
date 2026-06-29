@@ -1,0 +1,38 @@
+{
+  "version": "2.0",
+  "rules": [
+    {
+      "id": "shell-run-stderr-contamination-pattern-20260624",
+      "category": "toolflow",
+      "description": "shell_run() stderr 오염 패턴 — subprocess 결과 파싱 오류",
+      "pattern": "shell-run, stderr, subprocess, python, xcelium-mcp, parsing",
+      "severity": "major",
+      "addedAt": "2026-06-24",
+      "violationCount": 1,
+      "source": "docs/solutions/toolflow/shell-run-stderr-contamination-pattern-20260624.md",
+      "syncedBy": "docs-solutions"
+    },
+    {
+      "id": "simvision-duplicate-db-explorefull-20260408",
+      "category": "toolflow",
+      "description": "SimVision: explorefull이 duplicate DB 생성 → waveform placeholder 유발",
+      "pattern": "simvision, tcl, database, explorefull, waveform, placeholder",
+      "severity": "minor",
+      "addedAt": "2026-04-08",
+      "violationCount": 1,
+      "source": "docs/solutions/toolflow/simvision-duplicate-db-explorefull-20260408.md",
+      "syncedBy": "docs-solutions"
+    },
+    {
+      "id": "graphify-version-drift-skill-resync-20260622",
+      "category": "toolflow",
+      "description": "graphify 버전 드리프트 + skill↔package 불일치 → 재동기로 해결",
+      "pattern": "graphify, version-drift, skill-resync, venv, pin, tree-sitter-verilog",
+      "severity": "minor",
+      "addedAt": "2026-06-22",
+      "violationCount": 1,
+      "source": "docs/solutions/toolflow/graphify-version-drift-skill-resync-20260622.md",
+      "syncedBy": "docs-solutions"
+    }
+  ]
+}
