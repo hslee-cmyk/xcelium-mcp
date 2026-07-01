@@ -2,11 +2,18 @@
 
 Covers _resolve_probe_signals, get_dump_strategy, and _preprocess_setup_tcl
 backward compat and new hierarchical behavior.
+Phase 2: _parse_describe_output, _boundaries_from_json unit tests.
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 
+from xcelium_mcp.sim_env_detection import (
+    _boundaries_from_json,
+    _parse_describe_output,
+)
 from xcelium_mcp.tcl_preprocessing import (
     BOUNDARY_SIGNALS,
     _resolve_probe_signals,
@@ -253,3 +260,150 @@ def test_dump_summary_structure():
     assert "total_signals" in summary
     assert summary["scope_overrides"] == {"top.u_blk_a": "boundary"}
     assert summary["total_signals"] == len(probe_info["signals"])
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 tests: _parse_describe_output
+# ---------------------------------------------------------------------------
+
+def test_parse_describe_output_basic():
+    output = "input clk\noutput data\ninout bus"
+    signals = _parse_describe_output("top.u_blk", output)
+    assert set(signals) == {"top.u_blk.clk", "top.u_blk.data", "top.u_blk.bus"}
+
+
+def test_parse_describe_output_strips_bit_range():
+    output = "input data[7:0]\noutput valid[0:0]\ninout bus_io"
+    signals = _parse_describe_output("top.u_blk", output)
+    assert "top.u_blk.data" in signals
+    assert "top.u_blk.valid" in signals
+    assert "top.u_blk.bus_io" in signals
+    # No bracket artifacts
+    assert not any("[" in s for s in signals)
+
+
+def test_parse_describe_output_skips_non_ports():
+    output = "module u_blk\nparameter WIDTH = 8\ninput clk\nwire internal"
+    signals = _parse_describe_output("top", output)
+    assert signals == ["top.clk"]
+
+
+def test_parse_describe_output_empty():
+    assert _parse_describe_output("top.u_leaf", "") == []
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 tests: _boundaries_from_json
+# ---------------------------------------------------------------------------
+
+def _make_netlist(tmp_path, modules: dict) -> object:
+    p = tmp_path / "netlist.json"
+    p.write_text(json.dumps({"modules": modules}), encoding="utf-8")
+    return p
+
+
+def test_boundaries_from_json_basic(tmp_path):
+    p = _make_netlist(tmp_path, {
+        "top": {
+            "ports": {"clk": {"direction": "input"}, "rst": {"direction": "input"}},
+            "cells": {"u_blk_a": {"type": "blk_a"}},
+        },
+        "blk_a": {
+            "ports": {
+                "i_data": {"direction": "input"},
+                "o_result": {"direction": "output"},
+            },
+            "cells": {},
+        },
+    })
+    result = _boundaries_from_json(p, "top", depth=3)
+    assert "top.u_blk_a" in result
+    assert "top.u_blk_a.i_data" in result["top.u_blk_a"]
+    assert "top.u_blk_a.o_result" in result["top.u_blk_a"]
+    # top itself should NOT appear as a block
+    assert "top" not in result
+
+
+def test_boundaries_from_json_depth_limit(tmp_path):
+    p = _make_netlist(tmp_path, {
+        "top": {"ports": {}, "cells": {"u_blk_a": {"type": "blk_a"}}},
+        "blk_a": {
+            "ports": {"i_x": {"direction": "input"}},
+            "cells": {"u_sub": {"type": "sub_mod"}},
+        },
+        "sub_mod": {
+            "ports": {"i_y": {"direction": "input"}},
+            "cells": {},
+        },
+    })
+    # depth=1: only direct children of top are included
+    result = _boundaries_from_json(p, "top", depth=1)
+    assert "top.u_blk_a" in result
+    assert "top.u_blk_a.u_sub" not in result
+
+
+def test_boundaries_from_json_block_filter(tmp_path):
+    p = _make_netlist(tmp_path, {
+        "top": {
+            "ports": {},
+            "cells": {
+                "u_blk_a": {"type": "blk_a"},
+                "u_blk_b": {"type": "blk_b"},
+            },
+        },
+        "blk_a": {"ports": {"i_a": {"direction": "input"}}, "cells": {}},
+        "blk_b": {"ports": {"i_b": {"direction": "input"}}, "cells": {}},
+    })
+    result = _boundaries_from_json(p, "top", depth=3, block_filter=["top.u_blk_a"])
+    assert "top.u_blk_a" in result
+    assert "top.u_blk_b" not in result
+
+
+def test_boundaries_from_json_glob_filter(tmp_path):
+    p = _make_netlist(tmp_path, {
+        "top": {
+            "ports": {},
+            "cells": {
+                "u_core_a": {"type": "core_a"},
+                "u_core_b": {"type": "core_b"},
+                "u_mem": {"type": "mem"},
+            },
+        },
+        "core_a": {"ports": {"i_in": {"direction": "input"}}, "cells": {}},
+        "core_b": {"ports": {"i_in": {"direction": "input"}}, "cells": {}},
+        "mem": {"ports": {"i_addr": {"direction": "input"}}, "cells": {}},
+    })
+    result = _boundaries_from_json(p, "top", depth=3, block_filter=["top.u_core*"])
+    assert "top.u_core_a" in result
+    assert "top.u_core_b" in result
+    assert "top.u_mem" not in result
+
+
+def test_boundaries_from_json_missing_module(tmp_path):
+    # Cell type not in modules → skip gracefully
+    p = _make_netlist(tmp_path, {
+        "top": {
+            "ports": {},
+            "cells": {"u_prim": {"type": "PRIMITIVE_CELL"}},
+        },
+    })
+    result = _boundaries_from_json(p, "top", depth=3)
+    assert result == {}
+
+
+def test_boundaries_from_json_string_filter(tmp_path):
+    # block_filter as string (not list) should also work
+    p = _make_netlist(tmp_path, {
+        "top": {
+            "ports": {},
+            "cells": {
+                "u_blk_a": {"type": "blk_a"},
+                "u_blk_b": {"type": "blk_b"},
+            },
+        },
+        "blk_a": {"ports": {"i_a": {"direction": "input"}}, "cells": {}},
+        "blk_b": {"ports": {"i_b": {"direction": "input"}}, "cells": {}},
+    })
+    result = _boundaries_from_json(p, "top", depth=3, block_filter="top.u_blk_a")
+    assert "top.u_blk_a" in result
+    assert "top.u_blk_b" not in result

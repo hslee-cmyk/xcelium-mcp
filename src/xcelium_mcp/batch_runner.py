@@ -18,8 +18,10 @@ import re as _re
 import time as _time
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 
 from xcelium_mcp.batch_polling import poll_batch_log, watch_pid_and_poll
+from xcelium_mcp.registry import load_sim_config, save_sim_config
 from xcelium_mcp.shell_utils import (
     build_redirect,
     get_user_tmp_dir,
@@ -28,7 +30,6 @@ from xcelium_mcp.shell_utils import (
     shell_run,
     shell_run_fire_and_forget,
 )
-from xcelium_mcp.registry import load_sim_config, save_sim_config
 from xcelium_mcp.tcl_preprocessing import (
     _build_checkpoint_tcl,
     _handle_sdf_override,
@@ -331,6 +332,54 @@ async def launch_nohup_job(
     return pid
 
 
+async def _lazy_discover_boundaries(
+    sim_dir: str,
+    dump_strategy: dict,
+    sim_mode: str,
+) -> dict | None:
+    """Flow B: lazily discover block boundaries from a Yosys JSON netlist.
+
+    Called when dump_depth="boundary" but block_boundaries is empty.
+    Reads netlist_info.{mode}.boundary_json from config and parses it.
+    If dump_strategy['write_discovered_boundaries'] is True, persists the
+    result back to config.
+
+    Returns discovered {scope: [signals]} dict, or None if unavailable.
+    """
+    from xcelium_mcp.sim_env_detection import _boundaries_from_json
+
+    try:
+        config = await load_sim_config(sim_dir) or {}
+        base_mode = "gate" if "gate" in sim_mode else "rtl"
+        json_rel = (
+            config.get("netlist_info", {})
+            .get(base_mode, {})
+            .get("boundary_json", "")
+        )
+        if not json_rel:
+            return None
+        json_path = Path(sim_dir) / json_rel
+        if not json_path.exists():
+            return None
+
+        block_filter = dump_strategy.get("block_filter")
+        boundaries = _boundaries_from_json(
+            json_path,
+            config.get("top_module", "top"),
+            depth=dump_strategy.get("boundary_depth", 3),
+            block_filter=block_filter,
+        )
+
+        if boundaries and dump_strategy.get("write_discovered_boundaries"):
+            config.setdefault("dump_strategy", {}).setdefault(base_mode, {})
+            config["dump_strategy"][base_mode]["block_boundaries"] = boundaries
+            await save_sim_config(sim_dir, config)
+
+        return boundaries or None
+    except Exception:
+        return None
+
+
 async def _update_dump_history(
     sim_dir: str,
     test_name: str,
@@ -399,6 +448,18 @@ async def run_batch_single(
             dump_strategy = get_dump_strategy(config, sim_mode)
         except Exception:
             pass
+
+    # Flow B: lazy boundary discovery when block_boundaries is empty
+    if (
+        dump_depth == "boundary"
+        and dump_strategy is not None
+        and not dump_strategy.get("block_boundaries")
+        and dump_strategy.get("default_block_policy")
+    ):
+        discovered = await _lazy_discover_boundaries(sim_dir, dump_strategy, sim_mode)
+        if discovered:
+            dump_strategy = dict(dump_strategy)
+            dump_strategy["block_boundaries"] = discovered
 
     # Resume existing job if alive (skip if force=True)
     params = resolve_sim_params(runner, sim_mode, extra_args, timeout, dump_depth=dump_depth)

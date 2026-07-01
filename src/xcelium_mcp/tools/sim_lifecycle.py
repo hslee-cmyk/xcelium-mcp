@@ -11,7 +11,7 @@ from mcp.server.fastmcp import FastMCP
 from xcelium_mcp.bridge_lifecycle import _get_pid_for_port, start_bridge_simulation
 from xcelium_mcp.bridge_manager import BridgeManager, scan_ready_files
 from xcelium_mcp.discovery import resolve_sim_dir, run_full_discovery
-from xcelium_mcp.registry import config_action, load_sim_config
+from xcelium_mcp.registry import config_action, load_sim_config, save_sim_config
 from xcelium_mcp.shell_utils import UserInputRequired, get_user_tmp_dir, shell_run
 from xcelium_mcp.tcl_bridge import BRIDGE_ERRORS, TclBridge, TclError
 from xcelium_mcp.test_resolution import resolve_test_name
@@ -165,6 +165,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         force: bool = False,
         top_module: str = "",
         run_dir: str = "",
+        boundary_depth: int = 3,
     ) -> str:
         """Discover simulation environment and register in mcp_registry.
 
@@ -172,16 +173,33 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         setup TCLs, EDA tool paths, bridge port, $sdf_annotate guards (v4.3).
 
         Args:
-            sim_dir:    Explicit simulation directory. Empty = auto-discover.
-            force:      Re-detect even if registry already exists.
-            top_module: Top module name for SDF analysis. Empty = auto-detect from script.
-            run_dir:    Run directory override. Use when multiple candidates found
-                        and USER INPUT REQUIRED prompted you to re-call with run_dir=.
+            sim_dir:        Explicit simulation directory. Empty = auto-discover.
+            force:          Re-detect even if registry already exists.
+            top_module:     Top module name for SDF analysis. Empty = auto-detect from script.
+            run_dir:        Run directory override. Use when multiple candidates found
+                            and USER INPUT REQUIRED prompted you to re-call with run_dir=.
+            boundary_depth: Max hierarchy depth for block boundary auto-detection (default 3).
+                            Saved to dump_strategy.{mode}.boundary_depth for Flow A/B use.
         """
         try:
-            return await run_full_discovery(sim_dir, force, top_module=top_module, run_dir=run_dir)
+            result = await run_full_discovery(sim_dir, force, top_module=top_module, run_dir=run_dir)
         except UserInputRequired as e:
             return f"USER INPUT REQUIRED:\n{e.prompt}"
+
+        if not result.startswith(("ERROR", "USER INPUT REQUIRED")):
+            try:
+                resolved_dir = await resolve_sim_dir(sim_dir)
+                config = await load_sim_config(resolved_dir) or {}
+                for mode in ("rtl", "gate"):
+                    config.setdefault("dump_strategy", {}).setdefault(mode, {})
+                    config["dump_strategy"][mode]["boundary_depth"] = boundary_depth
+                await save_sim_config(resolved_dir, config)
+                if boundary_depth != 3:
+                    result += f"\nboundary_depth={boundary_depth} saved to dump_strategy (rtl/gate)"
+            except Exception:
+                pass
+
+        return result
 
     @mcp.tool()
     async def mcp_config(
@@ -212,6 +230,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         timeout: int = 120,
         extra_args: str = "",
         dump_depth: str = "",
+        auto_boundaries: bool = False,
     ) -> str:
         """Start simulation in bridge (interactive) mode. Compile + launch + connect bridge.
 
@@ -219,16 +238,19 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         For batch (non-interactive) runs, use sim_batch_run instead.
 
         Args:
-            test_name:  Required — test to run. Short name OK (e.g. "TOP015").
-            sim_dir:    Simulation dir. Empty = registry default.
-            sim_mode:   "rtl"|"gate"|"ams_rtl"|"ams_gate". Empty = default_mode.
-            timeout:    Max seconds to wait for bridge ready.
-            extra_args: 1-shot extra simulation arguments (not saved to registry).
-            dump_depth: "boundary"|"all"|"" (auto from mode_defaults). v4.3.
+            test_name:        Required — test to run. Short name OK (e.g. "TOP015").
+            sim_dir:          Simulation dir. Empty = registry default.
+            sim_mode:         "rtl"|"gate"|"ams_rtl"|"ams_gate". Empty = default_mode.
+            timeout:          Max seconds to wait for bridge ready.
+            extra_args:       1-shot extra simulation arguments (not saved to registry).
+            dump_depth:       "boundary"|"all"|"" (auto from mode_defaults). v4.3.
+            auto_boundaries:  If True and SimVision bridge is connected, auto-discover
+                              block boundaries via 'scope -describe' and save to config.
+                              Flow A of v5.2 hierarchical dump strategy.
         """
         try:
             test_name = await resolve_test_name(test_name, sim_dir)
-            return await start_bridge_simulation(
+            result = await start_bridge_simulation(
                 test_name, sim_dir, sim_mode, timeout,
                 extra_args=extra_args, bridges=bridges, dump_depth=dump_depth,
             )
@@ -236,6 +258,37 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             return f"USER INPUT REQUIRED:\n{e.prompt}"
         except RuntimeError as e:
             return f"ERROR: {e}"
+
+        if auto_boundaries and bridges.simvision_raw and bridges.simvision_raw.connected:
+            try:
+                from xcelium_mcp.sim_env_detection import _boundaries_from_tcl
+                from xcelium_mcp.tcl_preprocessing import get_dump_strategy
+                resolved_dir = await resolve_sim_dir(sim_dir)
+                config = await load_sim_config(resolved_dir) or {}
+                effective_mode = sim_mode or config.get("runner", {}).get("default_mode", "rtl")
+                base_mode = "gate" if "gate" in effective_mode else "rtl"
+                strategy = get_dump_strategy(config, effective_mode)
+                depth = strategy.get("boundary_depth", 3)
+                top = config.get("top_module", "top")
+                block_filter = strategy.get("block_filter")
+                if isinstance(block_filter, str):
+                    block_filter = [block_filter]
+                boundaries = await _boundaries_from_tcl(
+                    bridges.simvision_raw, top, depth=depth, block_filter=block_filter
+                )
+                if boundaries:
+                    await config_action(
+                        "set", "config",
+                        f"dump_strategy.{base_mode}.block_boundaries",
+                        json.dumps(boundaries),
+                    )
+                    result += f"\nauto_boundaries: discovered {len(boundaries)} block(s) via SimVision"
+                else:
+                    result += "\nauto_boundaries: no boundary signals found (check top_module in config)"
+            except Exception as _e:
+                result += f"\nauto_boundaries: skipped ({_e})"
+
+        return result
 
     @mcp.tool()
     async def connect_simulator(

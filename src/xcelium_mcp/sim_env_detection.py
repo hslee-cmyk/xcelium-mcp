@@ -14,9 +14,15 @@ __all__ = [
     "detect_setup_tcls",
     "detect_vnc_display",
     "discover_sim_dir",
+    "_parse_describe_output",
+    "_boundaries_from_tcl",
+    "_boundaries_from_json",
 ]
 
 import asyncio
+import fnmatch
+import json
+import re
 from pathlib import Path
 
 from xcelium_mcp.shell_utils import (
@@ -24,6 +30,184 @@ from xcelium_mcp.shell_utils import (
     shell_quote,
     shell_run,
 )
+
+# Scope path whitelist: only word chars and dots (blocks TCL injection)
+_SCOPE_PATH_RE = re.compile(r'^[\w.]+$')
+
+
+def _parse_scope_item_local(item: str) -> str:
+    """Parse a SimVision 'scope show' token to canonical signal path.
+
+    Handles four forms produced by SimVision:
+      {{path}[idx]}  → path[idx]
+      {path}[idx]    → path[idx]
+      {path}         → path
+      plain          → plain
+    """
+    _DOUBLE = re.compile(r'^\{\{(.+?)\}(\[\d+(?::\d+)?\])\}$')
+    _ARRAY = re.compile(r'^\{(.+?)\}(\[\d+(?::\d+)?\])$')
+    _BRACED = re.compile(r'^\{(.+)\}$', re.DOTALL)
+    m = _DOUBLE.match(item)
+    if m:
+        return m.group(1) + m.group(2)
+    m = _ARRAY.match(item)
+    if m:
+        return m.group(1) + m.group(2)
+    m = _BRACED.match(item)
+    if m:
+        return m.group(1)
+    return item
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: boundary auto-detection helpers
+# ---------------------------------------------------------------------------
+
+def _parse_describe_output(scope: str, output: str) -> list[str]:
+    """Parse 'scope -describe -sort kind' output into port signal names.
+
+    Extracts lines starting with 'input ', 'output ', 'inout ' and returns
+    '{scope}.{port}' strings. Bit-range notation ([N:M]) is stripped.
+    """
+    signals: list[str] = []
+    for line in output.splitlines():
+        stripped = line.strip()
+        for prefix in ("input ", "output ", "inout "):
+            if stripped.startswith(prefix):
+                port = stripped[len(prefix):].strip()
+                port = re.sub(r'\[.*?\]', '', port).strip()
+                if port:
+                    signals.append(f"{scope}.{port}")
+                break
+    return signals
+
+
+async def _boundaries_from_tcl(
+    bridge,
+    top_scope: str,
+    depth: int = 3,
+    block_filter: list[str] | str | None = None,
+) -> dict[str, list[str]]:
+    """Discover block boundary signals via SimVision TCL bridge (Flow A).
+
+    Uses 'scope -describe -sort kind' for port extraction and 'scope show'
+    for child enumeration. Both commands are SimVision-specific — pass the
+    SimVision bridge instance.
+
+    Args:
+        bridge:       TclBridge connected to SimVision.
+        top_scope:    Root scope path to start from (e.g. "top").
+        depth:        Maximum recursion depth (1 = only direct children of top).
+        block_filter: fnmatch pattern(s) to include only matching scopes.
+                      None = include all scopes.
+    Returns:
+        {scope_path: [port_signals]} mapping.
+    """
+    if isinstance(block_filter, str):
+        block_filter = [block_filter]
+
+    result: dict[str, list[str]] = {}
+
+    async def _recurse(scope: str, remaining: int) -> None:
+        if not _SCOPE_PATH_RE.fullmatch(scope):
+            return
+
+        # Extract ports for this scope
+        try:
+            desc = await bridge.execute(
+                f"scope -describe -sort kind {scope}", timeout=10.0
+            )
+            ports = _parse_describe_output(scope, desc)
+        except Exception:
+            ports = []
+
+        if ports:
+            if block_filter is None or any(
+                fnmatch.fnmatch(scope, pat) for pat in block_filter
+            ):
+                result[scope] = ports
+
+        if remaining <= 0:
+            return
+
+        # List child scopes
+        try:
+            show = await bridge.execute(f"scope show {scope}", timeout=10.0)
+        except Exception:
+            return
+
+        for token in show.split():
+            child = _parse_scope_item_local(token)
+            if not child:
+                continue
+            # Build absolute path: relative names lack dots
+            child_path = child if '.' in child else f"{scope}.{child}"
+            # Skip bit-select leaves (e.g. sig[0]) to avoid double bit-select recursion
+            if re.search(r'\[\d+\]$', child_path):
+                continue
+            if _SCOPE_PATH_RE.fullmatch(child_path):
+                await _recurse(child_path, remaining - 1)
+
+    await _recurse(top_scope, depth)
+    return result
+
+
+def _boundaries_from_json(
+    json_path,
+    top_module: str,
+    depth: int = 3,
+    block_filter: list[str] | str | None = None,
+) -> dict[str, list[str]]:
+    """Discover block boundary signals from a Yosys JSON netlist (Flow B).
+
+    Parses the modules/cells hierarchy starting from top_module and returns
+    port signals for each discovered sub-module instance.
+
+    Args:
+        json_path:    Path to the Yosys JSON netlist file.
+        top_module:   Top-level module name in the JSON (used as scope prefix).
+        depth:        Maximum recursion depth (1 = direct children of top).
+        block_filter: fnmatch pattern(s) to include only matching scope paths.
+                      None = include all.
+    Returns:
+        {instance_path: [port_signals]} mapping.
+    """
+    if isinstance(block_filter, str):
+        block_filter = [block_filter]
+
+    with open(json_path, encoding="utf-8") as f:
+        data = json.load(f)
+
+    modules = data.get("modules", {})
+    result: dict[str, list[str]] = {}
+
+    def _recurse(module_name: str, instance_path: str, remaining: int) -> None:
+        mod = modules.get(module_name)
+        if mod is None:
+            return
+
+        # Collect signals for this instance (skip the root itself)
+        if instance_path != top_module:
+            signals: list[str] = []
+            for port_name, port_info in mod.get("ports", {}).items():
+                if port_info.get("direction") in ("input", "output", "inout"):
+                    signals.append(f"{instance_path}.{port_name}")
+            if signals:
+                if block_filter is None or any(
+                    fnmatch.fnmatch(instance_path, pat) for pat in block_filter
+                ):
+                    result[instance_path] = signals
+
+        if remaining <= 0:
+            return
+
+        for cell_name, cell_info in mod.get("cells", {}).items():
+            cell_type = cell_info.get("type", "")
+            if cell_type in modules:
+                _recurse(cell_type, f"{instance_path}.{cell_name}", remaining - 1)
+
+    _recurse(top_module, top_module, depth)
+    return result
 
 # ---------------------------------------------------------------------------
 # TB type analysis
