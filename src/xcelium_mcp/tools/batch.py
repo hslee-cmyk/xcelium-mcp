@@ -65,6 +65,8 @@ def register(
         sdf_file: str = "",
         sdf_corner: str = "max",
         force: bool = False,
+        dump_scopes: dict | None = None,
+        use_dump_history: bool = False,
     ) -> str:
         """Run simulation for a single test.
 
@@ -89,6 +91,7 @@ def register(
             timeout: SSH wait timeout in seconds.
             force: Force re-run even if a completed job exists. Ignores previous results.
         """
+        import re as _re_ds
         if probe_signals is None:
             probe_signals = []
         if dump_signals is None:
@@ -104,6 +107,15 @@ def register(
             return f"Invalid dump_depth='{dump_depth}'. Must be 'boundary', 'all', or '' (auto)."
         if sdf_file and sdf_corner not in ("min", "max", "typ"):
             return f"Invalid sdf_corner='{sdf_corner}'. Must be 'min', 'max', or 'typ'."
+        # v5.2: dump_scopes validation
+        if dump_scopes is not None:
+            _valid_ds_values = {"all", "boundary", "skip"}
+            _key_re = _re_ds.compile(r'^[\w.*]+$')
+            for k, v in dump_scopes.items():
+                if not _key_re.fullmatch(k):
+                    return f"Invalid dump_scopes key: {k!r}. Only word chars, '.', '*' allowed."
+                if v not in _valid_ds_values:
+                    return f"Invalid dump_scopes value: {v!r}. Must be 'all', 'boundary', or 'skip'."
         # Cleanup stale logs (TTL 24h) before starting a new batch run
         from xcelium_mcp.shell_utils import get_user_tmp_dir
         from xcelium_mcp.tmp_cleanup import cleanup_old_logs
@@ -157,7 +169,7 @@ def register(
                 dump_window = _build_dump_window(dump_window_start_ms, dump_window_end_ms)
             except ValueError as e:
                 return str(e)
-            log = await run_batch_single(
+            log, dump_summary = await run_batch_single(
                 sim_dir=resolved_sim_dir,
                 test_name=test_name,
                 runner=runner,
@@ -172,6 +184,8 @@ def register(
                 sdf_file=sdf_file,
                 sdf_corner=sdf_corner,
                 force=force,
+                dump_scopes=dump_scopes,
+                use_dump_history=use_dump_history,
             )
         except (RuntimeError, ValueError, OSError, TimeoutError) as e:
             return f"ERROR running simulation: {e}"
@@ -190,11 +204,15 @@ def register(
             except Exception:
                 pass
 
-        return (
+        parts = [
             f"sim_batch_run {test_name} completed.\n\n"
             f"shm_path: {shm_path or '(not found in dump/)'}\n\n"
             f"{log}"
-        )
+        ]
+        if dump_summary is not None and dump_depth == "boundary":
+            import json as _json
+            parts.append(f"\ndump_summary:\n{_json.dumps(dump_summary, indent=2)}")
+        return "".join(parts)
 
     @mcp.tool()
     async def sim_regression(
@@ -211,6 +229,8 @@ def register(
         dump_window_end_ms: int = 0,
         sdf_file: str = "",
         sdf_corner: str = "max",
+        dump_scopes: dict | None = None,
+        use_dump_history: bool = False,
     ) -> str:
         """Run regression over a list of tests.
 
@@ -229,6 +249,7 @@ def register(
             save_checkpoints: Save L1/L2 checkpoints per test for later debugging.
             l1_time: Time for L1 checkpoint (default "500us"). e.g. "1ms".
         """
+        import re as _re_ds2
         # v4.3: enum validation
         if dump_depth and dump_depth not in ("boundary", "all"):
             return f"Invalid dump_depth='{dump_depth}'. Must be 'boundary', 'all', or '' (auto)."
@@ -236,6 +257,15 @@ def register(
             return f"Invalid sdf_corner='{sdf_corner}'. Must be 'min', 'max', or 'typ'."
         if dump_signals is None:
             dump_signals = []
+        # v5.2: dump_scopes validation
+        if dump_scopes is not None:
+            _valid_ds_values2 = {"all", "boundary", "skip"}
+            _key_re2 = _re_ds2.compile(r'^[\w.*]+$')
+            for k, v in dump_scopes.items():
+                if not _key_re2.fullmatch(k):
+                    return f"Invalid dump_scopes key: {k!r}. Only word chars, '.', '*' allowed."
+                if v not in _valid_ds_values2:
+                    return f"Invalid dump_scopes value: {v!r}. Must be 'all', 'boundary', or 'skip'."
 
         # Resolve sim_dir
         try:
@@ -278,7 +308,7 @@ def register(
                 dump_window = _build_dump_window(dump_window_start_ms, dump_window_end_ms)
             except ValueError as e:
                 return str(e)
-            summary = await run_batch_regression(
+            summary, dump_stats = await run_batch_regression(
                 sim_dir=resolved_sim_dir,
                 test_list=test_list,
                 runner=runner,
@@ -292,8 +322,14 @@ def register(
                 dump_window=dump_window,
                 sdf_file=sdf_file,
                 sdf_corner=sdf_corner,
+                dump_scopes=dump_scopes,
+                use_dump_history=use_dump_history,
             )
         except (RuntimeError, ValueError, OSError, TimeoutError) as e:
             return f"ERROR running regression: {e}"
 
-        return f"sim_regression completed.\n\n{summary}"
+        parts = [f"sim_regression completed.\n\n{summary}"]
+        if dump_stats is not None:
+            import json as _json
+            parts.append(f"\ndump_stats:\n{_json.dumps(dump_stats, indent=2)}")
+        return "".join(parts)

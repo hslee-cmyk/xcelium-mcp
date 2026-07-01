@@ -28,12 +28,14 @@ from xcelium_mcp.shell_utils import (
     shell_run,
     shell_run_fire_and_forget,
 )
+from xcelium_mcp.registry import load_sim_config, save_sim_config
 from xcelium_mcp.tcl_preprocessing import (
     _build_checkpoint_tcl,
     _handle_sdf_override,
     _parse_l1_time_ns,
     _preprocess_setup_tcl,
     extract_setup_lines,
+    get_dump_strategy,
     read_setup_tcl,
 )
 from xcelium_mcp.test_resolution import resolve_sim_params, resolve_test_name
@@ -219,14 +221,17 @@ async def build_batch_cmd(
     sdf_file: str,
     sdf_corner: str,
     sim_dir: str,
-) -> tuple[str, str, str | None]:
+    dump_scopes: dict | None = None,
+    dump_strategy: dict | None = None,
+) -> tuple[str, str, str | None, dict | None]:
     """Resolve params, build exec command, and preprocess setup tcl.
 
     Returns:
-        (env_prefix, cmd, preprocessed_tcl) tuple where:
+        (env_prefix, cmd, preprocessed_tcl, dump_summary) tuple where:
         - env_prefix: environment variable assignments for the shell command
         - cmd: the resolved simulation command string
         - preprocessed_tcl: path to preprocessed tcl file, or None
+        - dump_summary: dump summary dict (hierarchical mode only), or None
     """
     # Validate test_name at entry point — same regex as tcl_preprocessing
     if not _TEST_NAME_RE.fullmatch(test_name):
@@ -253,15 +258,17 @@ async def build_batch_cmd(
 
     # SHM naming + probe scope + dump window: preprocess setup_tcl
     env_prefix = f"TEST_NAME={shell_quote(test_name)} "
-    preprocessed_tcl = await _preprocess_setup_tcl(
+    preprocessed_tcl, dump_summary = await _preprocess_setup_tcl(
         sim_dir, runner, test_name, sim_mode,
         dump_depth=effective_dump_depth, dump_signals=dump_signals,
         dump_window=dump_window,
+        dump_scopes=dump_scopes,
+        dump_strategy=dump_strategy,
     )
     if preprocessed_tcl:
         env_prefix += f"MCP_INPUT_TCL={shell_quote(preprocessed_tcl)} "
 
-    return env_prefix, cmd, preprocessed_tcl
+    return env_prefix, cmd, preprocessed_tcl, dump_summary
 
 
 async def launch_nohup_job(
@@ -324,6 +331,25 @@ async def launch_nohup_job(
     return pid
 
 
+async def _update_dump_history(
+    sim_dir: str,
+    test_name: str,
+    dump_summary: dict,
+    dump_scopes: dict | None,
+) -> None:
+    """Persist dump_summary and effective dump_scopes into the sim config dump_history."""
+    try:
+        config = await load_sim_config(sim_dir) or {}
+        history = config.setdefault("dump_history", {})
+        history[test_name] = {
+            "dump_summary": dump_summary,
+            "dump_scopes": dump_scopes or {},
+        }
+        await save_sim_config(sim_dir, config)
+    except Exception:
+        pass  # dump_history write failure is non-fatal
+
+
 async def run_batch_single(
     sim_dir: str,
     test_name: str,
@@ -339,16 +365,40 @@ async def run_batch_single(
     sdf_file: str = "",
     sdf_corner: str = "max",
     force: bool = False,
-) -> str:
-    """Execute a single simulation test and return combined log output.
+    dump_scopes: dict | None = None,
+    use_dump_history: bool = False,
+) -> tuple[str, dict | None]:
+    """Execute a single simulation test and return (log, dump_summary).
 
     Orchestrator that delegates to parse_existing_job, build_batch_cmd,
     launch_nohup_job, and watch_pid_and_poll.
 
     Strategy: nohup + PID watcher + adaptive log polling (P6-1/P6-2/P6-5).
+    Returns:
+        (result_log, dump_summary) where dump_summary is None unless
+        dump_depth="boundary" with hierarchical scopes was used.
     """
     user_tmp = await get_user_tmp_dir()
     job_file = f"{user_tmp}/batch_job.json"
+
+    # Load dump_scopes from history if use_dump_history and no explicit scopes given
+    effective_dump_scopes = dump_scopes
+    if use_dump_history and effective_dump_scopes is None:
+        try:
+            config = await load_sim_config(sim_dir) or {}
+            history = config.get("dump_history", {})
+            effective_dump_scopes = history.get(test_name, {}).get("dump_scopes") or None
+        except Exception:
+            pass
+
+    # Load dump_strategy from config for hierarchical mode
+    dump_strategy: dict | None = None
+    if effective_dump_scopes is not None or (dump_depth == "boundary"):
+        try:
+            config = await load_sim_config(sim_dir) or {}
+            dump_strategy = get_dump_strategy(config, sim_mode)
+        except Exception:
+            pass
 
     # Resume existing job if alive (skip if force=True)
     params = resolve_sim_params(runner, sim_mode, extra_args, timeout, dump_depth=dump_depth)
@@ -366,12 +416,14 @@ async def run_batch_single(
     else:
         resumed = await parse_existing_job(job_file, effective_timeout, test_name)
         if resumed is not None:
-            return resumed
+            return resumed, None
 
     # Build command
-    env_prefix, cmd, preprocessed_tcl = await build_batch_cmd(
+    env_prefix, cmd, preprocessed_tcl, dump_summary = await build_batch_cmd(
         runner, test_name, sim_mode, extra_args, timeout,
         dump_depth, dump_signals, dump_window, sdf_file, sdf_corner, sim_dir,
+        dump_scopes=effective_dump_scopes,
+        dump_strategy=dump_strategy,
     )
 
     # Launch
@@ -382,6 +434,10 @@ async def run_batch_single(
     # Poll + cleanup
     result = await watch_pid_and_poll(pid, log_file, job_file, effective_timeout)
 
+    # Persist dump_summary to history if hierarchical mode was used
+    if dump_summary is not None:
+        await _update_dump_history(sim_dir, test_name, dump_summary, effective_dump_scopes)
+
     # Method 6-B fallback (deprecated — kept for backward compat)
     if rename_dump and not preprocessed_tcl:
         mv_cmd = (
@@ -391,7 +447,7 @@ async def run_batch_single(
         )
         await shell_run(mv_cmd, timeout=30.0)
 
-    return result
+    return result, dump_summary
 
 
 def _should_resume_regression(job: dict, test_list: list[str]) -> bool:
@@ -418,7 +474,9 @@ async def run_batch_regression(
     dump_window: dict | None = None,
     sdf_file: str = "",
     sdf_corner: str = "max",
-) -> str:
+    dump_scopes: dict | None = None,
+    use_dump_history: bool = False,
+) -> tuple[str, dict | None]:
     """Execute regression tests via nohup batch with job resume.
 
     nohup + PID watcher + adaptive log polling (P6-1/P6-2/P6-5).
@@ -450,6 +508,18 @@ async def run_batch_regression(
     effective_sim_mode = sim_mode or runner.get("default_mode", "rtl")
     params = resolve_sim_params(runner, effective_sim_mode, extra_args=extra_args, dump_depth=dump_depth)
     info = _resolve_exec_cmd(runner, regression=True)
+
+    # v5.2: load dump_strategy for hierarchical dump mode
+    dump_strategy: dict | None = None
+    if dump_scopes is not None or dump_depth == "boundary":
+        try:
+            cfg = await load_sim_config(sim_dir) or {}
+            dump_strategy = get_dump_strategy(cfg, effective_sim_mode)
+        except Exception:
+            pass
+
+    # v5.2: per-test dump_summary accumulator for dump_stats
+    per_test_dump_summaries: dict[str, dict] = {}
 
     # Phase 4: prepare checkpoint setup (read + strip run/exit once)
     chk_dir = f"{sim_dir}/checkpoints"
@@ -545,14 +615,30 @@ async def run_batch_regression(
             # NOTE: dump_depth/dump_window are ignored when save_checkpoints=True.
             # Checkpoints need full probe scope for later restore+debug.
             if not (save_checkpoints and setup_lines):
-                preprocessed_tcl = await _preprocess_setup_tcl(
+                # v5.2: resolve per-test dump_scopes (from history or param)
+                effective_test_scopes = dump_scopes
+                if use_dump_history and effective_test_scopes is None:
+                    try:
+                        cfg = await load_sim_config(sim_dir) or {}
+                        history = cfg.get("dump_history", {})
+                        effective_test_scopes = (
+                            history.get(test_name, {}).get("dump_scopes") or None
+                        )
+                    except Exception:
+                        pass
+
+                preprocessed_tcl, test_dump_summary = await _preprocess_setup_tcl(
                     sim_dir, runner, test_name, effective_sim_mode,
                     dump_depth=params.get("dump_depth", "all"),
                     dump_signals=dump_signals,
                     dump_window=dump_window,
+                    dump_scopes=effective_test_scopes,
+                    dump_strategy=dump_strategy,
                 )
                 if preprocessed_tcl:
                     env_prefix += f"MCP_INPUT_TCL={shell_quote(preprocessed_tcl)} "
+                if test_dump_summary is not None:
+                    per_test_dump_summaries[test_name] = test_dump_summary
 
             # Phase 4: inject checkpoint save commands into xmsim Tcl
             if save_checkpoints and setup_lines:
@@ -727,4 +813,32 @@ async def run_batch_regression(
         summary_lines.append(f"0/{total} tests classified")
     summary = "\n".join(summary_lines)
     details = raw[:4000] if raw.strip() else "(no PASS/FAIL/$finish lines found in per-test logs)"
-    return f"{summary}\n\nLog ({log_file}):\n{details}"
+    log_str = f"{summary}\n\nLog ({log_file}):\n{details}"
+
+    # v5.2: aggregate dump_stats across per-test summaries
+    dump_stats: dict | None = None
+    if per_test_dump_summaries:
+        all_totals = [s.get("total_signals", 0) for s in per_test_dump_summaries.values()]
+        per_test_entry: dict[str, dict] = {}
+        for tn, s in per_test_dump_summaries.items():
+            per_test_entry[tn] = {
+                "total_signals": s.get("total_signals", 0),
+                "top_boundary_count": s.get("top_boundary_count", 0),
+                "block_boundaries": s.get("block_boundaries", {}),
+                "scope_overrides": s.get("scope_overrides", {}),
+            }
+        suggestions: list[str] = []
+        max_total = max(all_totals) if all_totals else 0
+        min_total = min(all_totals) if all_totals else 0
+        if max_total > 0 and (max_total - min_total) / max_total > 0.5:
+            suggestions.append(
+                "Signal count varies significantly across tests — consider per-test dump_scopes tuning"
+            )
+        dump_stats = {
+            "per_test": per_test_entry,
+            "max_total_signals": max_total,
+            "min_total_signals": min_total,
+            "suggestions": suggestions,
+        }
+
+    return log_str, dump_stats

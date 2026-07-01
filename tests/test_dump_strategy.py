@@ -24,31 +24,34 @@ from xcelium_mcp.tcl_preprocessing import (
 
 
 def test_resolve_probe_signals_all() -> None:
-    probe_type, signals = _resolve_probe_signals(None, "all")
+    probe_type, signals, summary = _resolve_probe_signals(None, "all")
     assert probe_type == "depth_all"
     assert signals is None
+    assert summary is None
 
 
 def test_resolve_probe_signals_boundary() -> None:
-    probe_type, signals = _resolve_probe_signals(None, "boundary")
+    probe_type, signals, summary = _resolve_probe_signals(None, "boundary")
     assert probe_type == "signals"
     assert signals == sorted(BOUNDARY_SIGNALS)
     assert len(signals) == 28
+    assert summary is None
 
 
 def test_resolve_probe_signals_union() -> None:
     extra = ["top.hw.u_ext.debug_signal"]
-    probe_type, signals = _resolve_probe_signals(extra, "boundary")
+    probe_type, signals, summary = _resolve_probe_signals(extra, "boundary")
     assert probe_type == "signals"
     assert "top.hw.u_ext.debug_signal" in signals
     assert "top.hw.i_mainClk" in signals
     assert len(signals) == 29  # 28 boundary + 1 extra
+    assert summary is None
 
 
 def test_resolve_probe_signals_union_dedup() -> None:
     """dump_signals that overlap with BOUNDARY_SIGNALS should not duplicate."""
     extra = ["top.hw.i_mainClk", "top.hw.u_ext.debug_signal"]
-    _, signals = _resolve_probe_signals(extra, "boundary")
+    _, signals, _ = _resolve_probe_signals(extra, "boundary")
     assert signals.count("top.hw.i_mainClk") == 1
     assert len(signals) == 29  # 28 + 1 new
 

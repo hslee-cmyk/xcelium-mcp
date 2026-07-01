@@ -3,6 +3,7 @@
 Extracted from batch_runner.py (v4.4 code review refactoring).
 Contains: SHM stem replacement, probe line management, dump window injection,
 SDF override, checkpoint Tcl generation, setup Tcl preprocessing.
+v5.2: Hierarchical dump strategy (dump_scopes, block_boundaries, dump_summary).
 """
 from __future__ import annotations
 
@@ -10,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import base64 as _b64
 import re as _re
+from fnmatch import fnmatch
 from pathlib import Path
 
 from xcelium_mcp.shell_utils import shell_quote, shell_run, validate_path
@@ -115,7 +117,24 @@ def _replace_shm_stems(content: str, test_name: str) -> str:
 
 # ---------------------------------------------------------------------------
 # v4.3: Dump depth — boundary signals + probe line management
+# v5.2: Hierarchical dump strategy helpers
 # ---------------------------------------------------------------------------
+
+def get_dump_strategy(config: dict, sim_mode: str) -> dict:
+    """Return the dump_strategy sub-dict for the given sim_mode.
+
+    Supports mode-keyed format (v5.2) and flat format (v5.1 fallback).
+    AMS modes delegate to their base mode (ams_rtl→rtl, ams_gate→gate).
+    """
+    strategy = config.get("dump_strategy", {})
+    base_mode = "gate" if "gate" in sim_mode else "rtl"
+    if base_mode in strategy:
+        return strategy[base_mode]
+    # v5.1 flat format fallback
+    if "top_boundary" in strategy or "block_boundaries" in strategy:
+        return strategy
+    return {}
+
 
 BOUNDARY_SIGNALS = [
     "top.hw.i_mainClk", "top.hw.i_rst_n",
@@ -137,35 +156,111 @@ BOUNDARY_SIGNALS = [
 def _resolve_probe_signals(
     dump_signals: list[str] | None,
     dump_depth: str,
-) -> tuple[str, list[str] | None]:
-    """Resolve final probe signal set based on dump_depth and dump_signals.
+    dump_scopes: dict[str, str] | None = None,
+    dump_strategy: dict | None = None,
+    sim_mode: str = "",
+) -> tuple[str, dict | list | None, dict | None]:
+    """Resolve final probe signal set based on dump_depth, dump_signals, and dump_scopes.
 
-    dump_depth="all" -> probe -create top -depth all (dump_signals ignored).
-    dump_depth="boundary" -> BOUNDARY_SIGNALS union dump_signals (deduped).
+    v5.2: Extended to support hierarchical block-boundary dump strategy.
+    dump_scopes values: "all" | "boundary" | "skip".
+    fnmatch glob matching: * matches any character including dot.
 
-    Returns:
-        ("depth_all", None)              — probe -create top -depth all
-        ("signals", [sig1, sig2, ...])   — probe -create {each} individually
+    Returns (probe_type, probe_info, dump_summary):
+        ("depth_all", None, None)              — probe -create top -depth all
+        ("signals", [sig1, ...], None)         — v5.1 compat (no block_boundaries)
+        ("hierarchical", {                     — v5.2 block-boundary mode
+            "signals": [...],
+            "scope_probes": [{"scope": ..., "depth": "all"}, ...]
+        }, dump_summary)
     """
     if dump_depth == "all":
-        return ("depth_all", None)
+        return ("depth_all", None, None)
 
-    base = set(BOUNDARY_SIGNALS)
+    strategy = dump_strategy or {}
+    top_signals = strategy.get("top_boundary") or BOUNDARY_SIGNALS
+    signals: set[str] = set(top_signals)
+    block_bounds: dict[str, list[str]] = strategy.get("block_boundaries", {})
+    default_policy = strategy.get("default_block_policy", "skip")
+    included_scopes: set[str] = set()
+
+    # opt-out model: include all block boundaries upfront
+    if default_policy == "boundary":
+        for scope, sigs in block_bounds.items():
+            signals |= set(sigs)
+        included_scopes = set(block_bounds.keys())
+
+    # Process dump_scopes overrides
+    scope_probes: list[dict] = []
+    for pattern, strat in (dump_scopes or {}).items():
+        matched = [s for s in block_bounds if fnmatch(s, pattern)]
+        if strat == "all":
+            # xmsim native glob — pass pattern directly to TCL
+            scope_probes.append({"scope": pattern, "depth": "all"})
+            # Remove boundary signals for matched scopes to avoid duplication
+            for sc in matched:
+                signals -= set(block_bounds[sc])
+                included_scopes.discard(sc)
+        elif strat == "skip":
+            for sc in matched:
+                signals -= set(block_bounds[sc])
+                included_scopes.discard(sc)
+        elif strat == "boundary":
+            # opt-in: add matched block boundaries
+            for sc in matched:
+                signals |= set(block_bounds[sc])
+                included_scopes.add(sc)
+        else:
+            raise ValueError(
+                f"Invalid dump_scopes value {strat!r} for {pattern!r}. "
+                "Must be 'all', 'boundary', or 'skip'."
+            )
+
     if dump_signals:
-        base |= set(dump_signals)
+        signals |= set(dump_signals)
 
-    return ("signals", sorted(base))
+    # Backward compat: no block_boundaries defined + no new features used → v5.1 behavior
+    if (not block_bounds and not scope_probes
+            and not any(v == "boundary" for v in (dump_scopes or {}).values())):
+        return ("signals", sorted(signals), None)
+
+    # Build dump_summary for dump_history recording
+    block_counts = {
+        sc: (len(sigs) if sc in included_scopes else 0)
+        for sc, sigs in block_bounds.items()
+    }
+    dump_summary = {
+        "dump_depth": "boundary",
+        "sim_mode": sim_mode,
+        "top_boundary_count": len(top_signals),
+        "block_boundaries": block_counts,
+        "scope_overrides": dump_scopes or {},
+        "total_signals": len(signals),
+    }
+
+    return ("hierarchical", {
+        "signals": sorted(signals),
+        "scope_probes": scope_probes,
+    }, dump_summary)
 
 
-def _generate_probe_reset_tcl(probe_type: str, probe_signals: list[str] | None) -> str:
+def _generate_probe_reset_tcl(
+    probe_type: str,
+    probe_info: dict | list | None,
+) -> str:
     """Generate Tcl commands to reset probe configuration after checkpoint restore."""
-    lines = []
-    lines.append("probe -disable")
+    lines = ["probe -disable"]
 
     if probe_type == "depth_all":
         lines.append("probe -create top -depth all -shm")
-    elif probe_signals:
-        for sig in probe_signals:
+    elif probe_type == "hierarchical" and probe_info:
+        for sig in probe_info["signals"]:  # type: ignore[index]
+            lines.append(f"probe -create {sig} -shm")
+        for sp in probe_info["scope_probes"]:  # type: ignore[index]
+            lines.append(f"probe -create {sp['scope']} -depth {sp['depth']} -shm")
+    elif probe_info:
+        # "signals" type — probe_info is a list
+        for sig in probe_info:
             lines.append(f"probe -create {sig} -shm")
 
     lines.append("probe -enable")
@@ -173,9 +268,14 @@ def _generate_probe_reset_tcl(probe_type: str, probe_signals: list[str] | None) 
 
 
 def _replace_probe_lines(
-    content: str, probe_type: str, probe_signals: list[str] | None,
+    content: str,
+    probe_type: str,
+    probe_info: dict | list | None,
 ) -> str:
-    """Adjust probe lines in setup tcl based on dump_depth."""
+    """Adjust probe lines in setup tcl based on dump_depth.
+
+    v5.2: probe_info accepts dict (hierarchical) or list (signals) or None.
+    """
     lines = content.splitlines()
 
     filtered = []
@@ -201,10 +301,18 @@ def _replace_probe_lines(
 
     if probe_type == "depth_all":
         new_probes = [f"probe -create top -depth all{db_opt}"]
+    elif probe_type == "hierarchical":
+        new_probes = []
+        for sig in probe_info["signals"]:  # type: ignore[index]
+            if sig not in existing_signals:
+                new_probes.append(f"probe -create {sig}{db_opt}")
+        for sp in probe_info["scope_probes"]:  # type: ignore[index]
+            new_probes.append(f"probe -create {sp['scope']} -depth {sp['depth']}{db_opt}")
     else:
+        # "signals" type (v5.1 compat) — probe_info is a list
         new_probes = [
             f"probe -create {sig}{db_opt}"
-            for sig in (probe_signals or [])
+            for sig in (probe_info or [])
             if sig not in existing_signals
         ]
 
@@ -332,14 +440,23 @@ async def _preprocess_setup_tcl(
     dump_depth: str = "all",
     dump_signals: list[str] | None = None,
     dump_window: dict | None = None,
-) -> str:
-    """Preprocess setup_tcl: SHM naming + probe scope + dump window (v4.3)."""
+    dump_scopes: dict[str, str] | None = None,
+    dump_strategy: dict | None = None,
+) -> tuple[str, dict | None]:
+    """Preprocess setup_tcl: SHM naming + probe scope + dump window.
+
+    v5.2: Added dump_scopes and dump_strategy for hierarchical block-boundary mode.
+
+    Returns:
+        (out_path, dump_summary) — out_path is "" if no changes made.
+        dump_summary is non-None only when probe_type == "hierarchical".
+    """
     if not _re.fullmatch(r"[A-Za-z0-9_\-]+", test_name):
-        return ""
+        return "", None
 
     content = await read_setup_tcl_async(runner, sim_dir)
     if not content:
-        return ""
+        return "", None
 
     changed = False
 
@@ -349,8 +466,13 @@ async def _preprocess_setup_tcl(
             content = new_content
             changed = True
 
-    probe_type, probe_signals = _resolve_probe_signals(dump_signals, dump_depth)
-    new_content = _replace_probe_lines(content, probe_type, probe_signals)
+    probe_type, probe_info, dump_summary = _resolve_probe_signals(
+        dump_signals, dump_depth,
+        dump_scopes=dump_scopes,
+        dump_strategy=dump_strategy,
+        sim_mode=sim_mode,
+    )
+    new_content = _replace_probe_lines(content, probe_type, probe_info)
     if new_content != content:
         content = new_content
         changed = True
@@ -362,14 +484,14 @@ async def _preprocess_setup_tcl(
             changed = True
 
     if not changed:
-        return ""
+        return "", None
 
     from xcelium_mcp.shell_utils import get_user_tmp_dir
     user_tmp = await get_user_tmp_dir()
     out_path = f"{user_tmp}/setup_batch_{test_name}.tcl"
     await asyncio.to_thread(Path(out_path).write_text, content)
 
-    return out_path
+    return out_path, dump_summary
 
 
 def _build_checkpoint_tcl(

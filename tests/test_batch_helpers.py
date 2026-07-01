@@ -210,14 +210,14 @@ async def test_parse_existing_job_zero_pid() -> None:
 
 @pytest.mark.asyncio
 async def test_build_batch_cmd_basic() -> None:
-    """Verify returns (env_prefix, cmd, preprocessed_tcl) tuple."""
+    """Verify returns (env_prefix, cmd, preprocessed_tcl, dump_summary) tuple."""
     runner = _make_runner()
     with patch(
         "xcelium_mcp.batch_runner._preprocess_setup_tcl",
         new_callable=AsyncMock,
-        return_value=None,
+        return_value=(None, None),
     ):
-        env_prefix, cmd, preprocessed_tcl = await build_batch_cmd(
+        env_prefix, cmd, preprocessed_tcl, dump_summary = await build_batch_cmd(
             runner=runner,
             test_name="TEST001",
             sim_mode="rtl",
@@ -235,6 +235,7 @@ async def test_build_batch_cmd_basic() -> None:
         assert "TEST_NAME=" in env_prefix
         assert "TEST001" in env_prefix or "TEST001" in cmd
         assert preprocessed_tcl is None
+        assert dump_summary is None
 
 
 @pytest.mark.asyncio
@@ -244,9 +245,9 @@ async def test_build_batch_cmd_with_preprocessed_tcl() -> None:
     with patch(
         "xcelium_mcp.batch_runner._preprocess_setup_tcl",
         new_callable=AsyncMock,
-        return_value="/tmp/setup_modified.tcl",
+        return_value=("/tmp/setup_modified.tcl", None),
     ):
-        env_prefix, cmd, preprocessed_tcl = await build_batch_cmd(
+        env_prefix, cmd, preprocessed_tcl, dump_summary = await build_batch_cmd(
             runner=runner,
             test_name="TEST002",
             sim_mode="rtl",
@@ -261,6 +262,7 @@ async def test_build_batch_cmd_with_preprocessed_tcl() -> None:
         )
         assert "MCP_INPUT_TCL=" in env_prefix
         assert preprocessed_tcl == "/tmp/setup_modified.tcl"
+        assert dump_summary is None
 
 
 @pytest.mark.asyncio
@@ -270,9 +272,9 @@ async def test_build_batch_cmd_with_extra_args() -> None:
     with patch(
         "xcelium_mcp.batch_runner._preprocess_setup_tcl",
         new_callable=AsyncMock,
-        return_value=None,
+        return_value=(None, None),
     ):
-        _, cmd, _ = await build_batch_cmd(
+        _, cmd, _, _ = await build_batch_cmd(
             runner=runner,
             test_name="TEST003",
             sim_mode="rtl",
@@ -296,7 +298,7 @@ async def test_build_batch_cmd_with_sdf() -> None:
         patch(
             "xcelium_mcp.batch_runner._preprocess_setup_tcl",
             new_callable=AsyncMock,
-            return_value=None,
+            return_value=(None, None),
         ),
         patch(
             "xcelium_mcp.batch_runner._handle_sdf_override",
@@ -304,7 +306,7 @@ async def test_build_batch_cmd_with_sdf() -> None:
             return_value="-sdf_extra_flag",
         ),
     ):
-        _, cmd, _ = await build_batch_cmd(
+        _, cmd, _, _ = await build_batch_cmd(
             runner=runner,
             test_name="TEST004",
             sim_mode="gate",
