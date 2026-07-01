@@ -1,6 +1,32 @@
 
 ---
 
+## 2026-07-01 - F-138: v5.2 Phase 2 Auto-detection
+
+### 구현 내용
+- `sim_env_detection.py`: Phase 2 함수 3개 추가
+  - `_parse_describe_output(scope, output)` — TCL `scope -describe -sort kind` 파싱, 비트범위 제거
+  - `_boundaries_from_tcl(bridge, top_scope, depth, block_filter)` async — SimVision bridge 재귀 scope describe+show, `_SCOPE_PATH_RE` whitelist로 TCL injection 방지
+  - `_boundaries_from_json(json_path, top_module, depth, block_filter)` — Yosys JSON modules/cells 계층 파싱, fnmatch block_filter 지원 (str도 자동 리스트 변환)
+- `batch_runner.py`: `_lazy_discover_boundaries(sim_dir, dump_strategy, sim_mode)` 추가
+  - `netlist_info.{mode}.boundary_json` → `_boundaries_from_json` Flow B 자동 호출
+  - `run_batch_single`: `block_boundaries` 비어있고 `default_block_policy` 설정 시 자동 발동
+- `tools/sim_lifecycle.py`:
+  - `sim_bridge_run(auto_boundaries=False)`: SimVision 연결 후 `_boundaries_from_tcl` 호출 (Flow A)
+  - `sim_discover(boundary_depth=3)`: config의 `dump_strategy.{rtl,gate}.boundary_depth` 저장
+
+### 테스트
+- `tests/test_hierarchical_dump.py`: 10개 신규 (Phase 1: 16 + Phase 2: 10 = 26개)
+- **318/318 PASS**, ruff clean
+
+### 학습
+- `_parse_scope_item`은 `tools/signal_inspection.py`에 정의됨 — 순환 임포트 방지를 위해 `sim_env_detection.py`에 local copy `_parse_scope_item_local` 작성
+- block_filter는 str 또는 list 모두 허용 (str → [str] 자동 변환)
+- `_boundaries_from_json`에서 top_module 자체는 result에서 제외 (sub-block만 수집)
+- `sim_discover` boundary_depth 저장: discovery 성공 후 update (result가 "ERROR"/"USER INPUT" 미시작 시)
+
+---
+
 ## 2026-04-22 - F-136 + F-137
 
 ### F-136: checkpoint.py restore_checkpoint_impl /tmp fallback 제거
