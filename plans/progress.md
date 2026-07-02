@@ -1,7 +1,19 @@
 
 ---
 
-## 2026-07-02 - F-160 보류 결정 + F-162: 캐시 격리 (registry._config_cache)
+## 2026-07-02 - Verbosity 코드 리뷰 → F-163~173 (11건) 백로그 추가 + F-163 구현
+
+code-analyzer를 "코드가 불필요하게 길게/장황하게 작성되었는가"에만 집중하는 렌즈로 실행(23개 파일, High 2 / Medium 4 / Low 5). High-Impact #2(batch.py 검증 중복), Low #7(`_write_json` 죽은 코드), Low #9(중복 `import re`), Medium #4(`read_setup_tcl` pass-through 래퍼)는 Claude가 직접 코드를 읽어 재확인 완료. 사용자가 "모두 prd로 추가하고 고치자" 지시 → F-163~173 전부 `passes:false`로 추가, 순차적으로 `/ralph-loop --next`로 구현 시작.
+
+### F-163: test_pure_helpers.py의 debug_snapshot 테스트 5개 보일러플레이트 → fixture 통합
+
+`tests/test_pure_helpers.py:531-713`의 `debug_snapshot` 관련 테스트 5개(에이전트 보고는 6개라 했으나 실제로는 5개)가 각각 mock_mcp/mock_bridges 생성 + `_fake_execute` 정의 + `register()` 호출 + 결과 언랩까지 거의 동일한 ~20줄 보일러플레이트를 반복하고 있었음.
+
+**구현**: `run_snapshot` pytest fixture 추가 — `responses: dict[cmd, str|Exception]`를 받아 `_MockMCP`+`MagicMock` 브릿지를 구성하고 `debug_snapshot` 툴을 등록·호출해 report 문자열을 반환. `call_log` 옵션으로 호출된 Tcl 커맨드 순서도 필요 시 캡처 가능(첫 테스트가 `describe`/`value` 별도 호출이 없음을 검증하는 데 필요). 5개 테스트 모두 fixture를 사용하도록 축소 — 각 테스트는 이제 입력(`responses`)과 기대 assert만 남음.
+
+**검증**: `pytest tests/test_pure_helpers.py -k debug_snapshot` 5 passed. 전체 `pytest` 461 passed(테스트 개수 불변, 순수 리팩터), `ruff check src/` clean.
+
+**남은 작업**: F-164(batch.py 검증 로직 중복 제거)로 진행.
 
 ### F-160 보류 (사용자 결정)
 code-analyzer 아키텍처 리뷰 Major #6(`BOUNDARY_SIGNALS` 프로젝트별 하드코딩)은 F-155~159와 달리 **순수 리팩터가 아니라 기본 동작을 바꾸는 breaking change**임을 재확인 — `_resolve_probe_signals`의 `dump_strategy.top_boundary` 미설정 시 폴백이 v5.1 backward-compat의 핵심 경로이자 venezia 프로젝트의 실사용 경로(`tests/test_dump_strategy.py`, `tests/test_hierarchical_dump.py`가 이 폴백을 명시적으로 테스트). 원안대로 "빈 리스트+에러"로 바꾸면 venezia의 `.mcp_sim_config.json`에 `top_boundary`가 먼저 마이그레이션돼 있지 않은 한 기존 `dump_depth="boundary"` 호출이 전부 깨짐. 사용자에게 확인 결과 **보류** 결정 — `plans/prd.json`에 `skip:true` + 결정 근거 기록, ralph-loop 자동 진행 대상에서 제외. 재개 시 마이그레이션 전략부터 별도 논의 필요.

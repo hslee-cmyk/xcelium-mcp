@@ -528,37 +528,58 @@ class _MockMCP:
         return decorator
 
 
-@pytest.mark.asyncio
-async def test_debug_snapshot_uses_absolute_describe_path() -> None:
-    """__DEBUG_SNAPSHOT_BULK__ is used; signal names appear clean in the report (F-125)."""
+@pytest.fixture
+def run_snapshot():
+    """Register debug_snapshot with a mocked bridge and return its report text.
+
+    `responses` maps a Tcl command string to either its return value, or an
+    Exception instance to raise when that command is executed. Any command
+    not present in `responses` raises RuntimeError("unexpected: <cmd>").
+    """
     from unittest.mock import AsyncMock, MagicMock
-    from xcelium_mcp.tools.debug import register
 
-    mock_mcp = _MockMCP()
-    mock_bridges = MagicMock()
+    async def _run(responses: dict, mode: str = "snapshot", target: str = "auto",
+                    call_log: list | None = None):
+        from xcelium_mcp.tools.debug import register
 
+        mock_mcp = _MockMCP()
+        mock_bridges = MagicMock()
+
+        async def _fake_execute(cmd, **kwargs):
+            if call_log is not None:
+                call_log.append(cmd)
+            resp = responses.get(cmd, RuntimeError(f"unexpected: {cmd}"))
+            if isinstance(resp, BaseException):
+                raise resp
+            return resp
+
+        mock_bridges.get_bridge.return_value.execute = AsyncMock(side_effect=_fake_execute)
+        mock_bridges.get_bridge.return_value.screenshot = AsyncMock(side_effect=RuntimeError("no ss"))
+
+        register(mock_mcp, mock_bridges)
+        result = await mock_mcp.tools["debug_snapshot"](mode=mode, target=target)
+        return result[0] if isinstance(result, list) else result
+
+    return _run
+
+
+@pytest.mark.asyncio
+async def test_debug_snapshot_uses_absolute_describe_path(run_snapshot) -> None:
+    """__DEBUG_SNAPSHOT_BULK__ is used; signal names appear clean in the report (F-125)."""
     call_log: list[str] = []
-
-    async def _fake_execute(cmd, **kwargs):
-        call_log.append(cmd)
-        if cmd == "__DEBUG_SNAPSHOT_BULK__":
-            return (
+    report = await run_snapshot(
+        {
+            "__DEBUG_SNAPSHOT_BULK__": (
                 "POSITION:Time: 100 NS\nSCOPE:/tb/dut\nSTOPS:\n"
                 "SIGNALS_COUNT:2\n"
                 "SIGNAL:r_rst=1'h0\n"
                 "SIGNAL:clk=1'h1"
-            )
-        if cmd == "__SCREENSHOT__":
-            raise Exception("no screenshot")
-        raise RuntimeError(f"unexpected: {cmd}")
+            ),
+            "__SCREENSHOT__": Exception("no screenshot"),
+        },
+        call_log=call_log,
+    )
 
-    mock_bridges.get_bridge.return_value.execute = AsyncMock(side_effect=_fake_execute)
-    mock_bridges.get_bridge.return_value.screenshot = AsyncMock(side_effect=RuntimeError("no ss"))
-
-    register(mock_mcp, mock_bridges)
-    result = await mock_mcp.tools["debug_snapshot"](mode="snapshot", target="auto")
-
-    report = result[0] if isinstance(result, list) else result
     # __DEBUG_SNAPSHOT_BULK__ should be the only Tcl call (no separate describe/value)
     assert any(c == "__DEBUG_SNAPSHOT_BULK__" for c in call_log), (
         f"Expected __DEBUG_SNAPSHOT_BULK__ call, got: {call_log}"
@@ -574,34 +595,18 @@ async def test_debug_snapshot_uses_absolute_describe_path() -> None:
 
 
 @pytest.mark.asyncio
-async def test_debug_snapshot_strips_dot_padding_from_signal_names() -> None:
+async def test_debug_snapshot_strips_dot_padding_from_signal_names(run_snapshot) -> None:
     """Signal names from __DEBUG_SNAPSHOT_BULK__ appear clean (no dot-padding) in report (F-125)."""
-    from unittest.mock import AsyncMock, MagicMock
-    from xcelium_mcp.tools.debug import register
+    # Tcl bridge strips dot-padding before returning SIGNAL: lines
+    report = await run_snapshot({
+        "__DEBUG_SNAPSHOT_BULK__": (
+            "POSITION:Time: 200 NS\nSCOPE:/tb\nSTOPS:\n"
+            "SIGNALS_COUNT:2\n"
+            "SIGNAL:data_out[7:0]=8'h00\n"
+            "SIGNAL:r_rst=1'h0"
+        ),
+    })
 
-    mock_mcp = _MockMCP()
-    mock_bridges = MagicMock()
-
-    async def _fake_execute(cmd, **kwargs):
-        if cmd == "__DEBUG_SNAPSHOT_BULK__":
-            # Tcl bridge strips dot-padding before returning SIGNAL: lines
-            return (
-                "POSITION:Time: 200 NS\nSCOPE:/tb\nSTOPS:\n"
-                "SIGNALS_COUNT:2\n"
-                "SIGNAL:data_out[7:0]=8'h00\n"
-                "SIGNAL:r_rst=1'h0"
-            )
-        if cmd == "__SCREENSHOT__":
-            raise RuntimeError("no screenshot")
-        raise RuntimeError(f"unexpected: {cmd}")
-
-    mock_bridges.get_bridge.return_value.execute = AsyncMock(side_effect=_fake_execute)
-    mock_bridges.get_bridge.return_value.screenshot = AsyncMock(side_effect=RuntimeError("no ss"))
-
-    register(mock_mcp, mock_bridges)
-    result = await mock_mcp.tools["debug_snapshot"](mode="snapshot", target="auto")
-
-    report = result[0] if isinstance(result, list) else result
     assert "data_out[7:0]" in report, f"Signal data_out[7:0] should appear: {report!r}"
     assert "r_rst" in report, f"Signal r_rst should appear: {report!r}"
     # Dot-padding must not leak into the output
@@ -609,29 +614,13 @@ async def test_debug_snapshot_strips_dot_padding_from_signal_names() -> None:
 
 
 @pytest.mark.asyncio
-async def test_debug_snapshot_graceful_fallback_on_pnoobj() -> None:
+async def test_debug_snapshot_graceful_fallback_on_pnoobj(run_snapshot) -> None:
     """When __DEBUG_SNAPSHOT_BULK__ returns SIGNALS_COUNT:0, report shows graceful message (F-125)."""
-    from unittest.mock import AsyncMock, MagicMock
-    from xcelium_mcp.tools.debug import register
+    # Tcl bridge returns count:0 when describe fails (e.g. PNOOBJ)
+    report = await run_snapshot({
+        "__DEBUG_SNAPSHOT_BULK__": "POSITION:Time: 0 NS\nSCOPE:top\nSTOPS:\nSIGNALS_COUNT:0",
+    })
 
-    mock_mcp = _MockMCP()
-    mock_bridges = MagicMock()
-
-    async def _fake_execute(cmd, **kwargs):
-        if cmd == "__DEBUG_SNAPSHOT_BULK__":
-            # Tcl bridge returns count:0 when describe fails (e.g. PNOOBJ)
-            return "POSITION:Time: 0 NS\nSCOPE:top\nSTOPS:\nSIGNALS_COUNT:0"
-        if cmd == "__SCREENSHOT__":
-            raise RuntimeError("no screenshot")
-        raise RuntimeError(f"unexpected: {cmd}")
-
-    mock_bridges.get_bridge.return_value.execute = AsyncMock(side_effect=_fake_execute)
-    mock_bridges.get_bridge.return_value.screenshot = AsyncMock(side_effect=RuntimeError("no ss"))
-
-    register(mock_mcp, mock_bridges)
-    result = await mock_mcp.tools["debug_snapshot"](mode="snapshot", target="auto")
-
-    report = result[0] if isinstance(result, list) else result
     assert "no signals in current scope" in report.lower(), (
         f"Expected graceful PNOOBJ message, got: {report!r}"
     )
@@ -643,34 +632,18 @@ async def test_debug_snapshot_graceful_fallback_on_pnoobj() -> None:
 
 
 @pytest.mark.asyncio
-async def test_debug_snapshot_skips_bit_select_expansion_lines() -> None:
+async def test_debug_snapshot_skips_bit_select_expansion_lines(run_snapshot) -> None:
     """Bit-select child signals are filtered by Tcl bridge; only parents appear in report (F-125)."""
-    from unittest.mock import AsyncMock, MagicMock
-    from xcelium_mcp.tools.debug import register
+    # Tcl do_debug_snapshot_bulk skips indented child lines — only parents returned
+    report = await run_snapshot({
+        "__DEBUG_SNAPSHOT_BULK__": (
+            "POSITION:Time: 0 NS\nSCOPE:top\nSTOPS:\n"
+            "SIGNALS_COUNT:2\n"
+            "SIGNAL:w_bus=1'h1\n"
+            "SIGNAL:r_en=1'h1"
+        ),
+    })
 
-    mock_mcp = _MockMCP()
-    mock_bridges = MagicMock()
-
-    async def _fake_execute(cmd, **kwargs):
-        if cmd == "__DEBUG_SNAPSHOT_BULK__":
-            # Tcl do_debug_snapshot_bulk skips indented child lines — only parents returned
-            return (
-                "POSITION:Time: 0 NS\nSCOPE:top\nSTOPS:\n"
-                "SIGNALS_COUNT:2\n"
-                "SIGNAL:w_bus=1'h1\n"
-                "SIGNAL:r_en=1'h1"
-            )
-        if cmd == "__SCREENSHOT__":
-            raise RuntimeError("no screenshot")
-        raise RuntimeError(f"unexpected: {cmd}")
-
-    mock_bridges.get_bridge.return_value.execute = AsyncMock(side_effect=_fake_execute)
-    mock_bridges.get_bridge.return_value.screenshot = AsyncMock(side_effect=RuntimeError("no ss"))
-
-    register(mock_mcp, mock_bridges)
-    result = await mock_mcp.tools["debug_snapshot"](mode="snapshot", target="auto")
-
-    report = result[0] if isinstance(result, list) else result
     # Bit-select children (w_bus[1], w_bus[0]) must not appear — only parent w_bus
     assert "- `w_bus[1]`" not in report, f"bit-select child must not appear: {report!r}"
     assert "- `w_bus[0]`" not in report, f"bit-select child must not appear: {report!r}"
@@ -678,33 +651,17 @@ async def test_debug_snapshot_skips_bit_select_expansion_lines() -> None:
 
 
 @pytest.mark.asyncio
-async def test_debug_snapshot_skips_named_event_lines() -> None:
+async def test_debug_snapshot_skips_named_event_lines(run_snapshot) -> None:
     """Named event signals are filtered by Tcl bridge; only valid signals appear in report (F-125)."""
-    from unittest.mock import AsyncMock, MagicMock
-    from xcelium_mcp.tools.debug import register
+    # Tcl do_debug_snapshot_bulk skips named event lines — only r_clk returned
+    report = await run_snapshot({
+        "__DEBUG_SNAPSHOT_BULK__": (
+            "POSITION:Time: 0 NS\nSCOPE:top\nSTOPS:\n"
+            "SIGNALS_COUNT:1\n"
+            "SIGNAL:r_clk=1'h0"
+        ),
+    })
 
-    mock_mcp = _MockMCP()
-    mock_bridges = MagicMock()
-
-    async def _fake_execute(cmd, **kwargs):
-        if cmd == "__DEBUG_SNAPSHOT_BULK__":
-            # Tcl do_debug_snapshot_bulk skips named event lines — only r_clk returned
-            return (
-                "POSITION:Time: 0 NS\nSCOPE:top\nSTOPS:\n"
-                "SIGNALS_COUNT:1\n"
-                "SIGNAL:r_clk=1'h0"
-            )
-        if cmd == "__SCREENSHOT__":
-            raise RuntimeError("no screenshot")
-        raise RuntimeError(f"unexpected: {cmd}")
-
-    mock_bridges.get_bridge.return_value.execute = AsyncMock(side_effect=_fake_execute)
-    mock_bridges.get_bridge.return_value.screenshot = AsyncMock(side_effect=RuntimeError("no ss"))
-
-    register(mock_mcp, mock_bridges)
-    result = await mock_mcp.tools["debug_snapshot"](mode="snapshot", target="auto")
-
-    report = result[0] if isinstance(result, list) else result
     # Named events must not appear as signal value entries
     assert "- `sim_run` =" not in report, f"named event 'sim_run' must not be a signal entry: {report!r}"
     assert "- `vector_start` =" not in report, f"named event must not be a signal entry: {report!r}"
