@@ -10,8 +10,7 @@ from mcp.server.fastmcp import FastMCP
 import xcelium_mcp.csv_cache as _csv_cache
 from xcelium_mcp.batch_runner import run_batch_regression, run_batch_single
 from xcelium_mcp.bridge_manager import BridgeManager
-from xcelium_mcp.discovery import resolve_sim_dir
-from xcelium_mcp.registry import load_sim_config
+from xcelium_mcp.registry import load_sim_config, resolve_sim_dir
 from xcelium_mcp.runner_detection import load_or_detect_runner
 from xcelium_mcp.shell_utils import UserInputRequired, find_shm, validate_path
 from xcelium_mcp.tcl_bridge import TclError

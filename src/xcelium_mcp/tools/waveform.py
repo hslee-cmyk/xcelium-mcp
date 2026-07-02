@@ -8,6 +8,7 @@ import re
 from mcp.server.fastmcp import FastMCP, Image
 
 from xcelium_mcp.bridge_manager import BridgeManager
+from xcelium_mcp.registry import resolve_sim_dir
 from xcelium_mcp.screenshot import ps_to_png
 from xcelium_mcp.shell_utils import sanitize_signal_name
 from xcelium_mcp.tcl_bridge import TclBridge, TclError
@@ -168,7 +169,6 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
 
         Returns the screenshot as a PNG image that Claude can analyze.
         """
-        from xcelium_mcp.discovery import resolve_sim_dir
         from xcelium_mcp.registry import load_sim_config
         cfg = None
         try:

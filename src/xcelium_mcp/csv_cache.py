@@ -18,7 +18,14 @@ import re
 from collections import OrderedDict, deque
 from pathlib import Path
 
-from xcelium_mcp.shell_utils import get_user_tmp_dir, sanitize_signal_name, shell_quote, shell_run
+from xcelium_mcp.registry import load_sim_config, resolve_sim_dir
+from xcelium_mcp.shell_utils import (
+    build_eda_command,
+    get_user_tmp_dir,
+    sanitize_signal_name,
+    shell_quote,
+    shell_run,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +53,6 @@ async def _resolve_simvisdbutil() -> str:
             return _simvisdbutil_path
 
         # Try registry first
-        from xcelium_mcp.discovery import resolve_sim_dir
-        from xcelium_mcp.registry import load_sim_config
         try:
             sim_dir = await resolve_sim_dir()
         except ValueError as e:
@@ -168,9 +173,6 @@ async def extract(
 
     # simvisdbutil is a wrapper script that needs EDA env (cds_root in PATH).
     # Source env from registry before execution.
-    from xcelium_mcp.discovery import resolve_sim_dir
-    from xcelium_mcp.registry import load_sim_config
-    from xcelium_mcp.shell_utils import build_eda_command
     try:
         sim_dir = await resolve_sim_dir()
     except ValueError as e:

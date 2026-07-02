@@ -10,7 +10,7 @@ from mcp.server.fastmcp import FastMCP
 
 import xcelium_mcp.checkpoint_manager as checkpoint_manager
 from xcelium_mcp.bridge_manager import BridgeManager
-from xcelium_mcp.discovery import resolve_sim_dir
+from xcelium_mcp.registry import resolve_sim_dir
 from xcelium_mcp.shell_utils import get_user_tmp_dir, shell_quote, shell_run
 from xcelium_mcp.tcl_bridge import TclError
 

@@ -15,8 +15,7 @@ from typing import Any
 
 from xcelium_mcp.bridge_manager import BridgeManager, scan_ready_files
 from xcelium_mcp.csv_cache import _parse_sim_time_ns
-from xcelium_mcp.discovery import resolve_sim_dir
-from xcelium_mcp.registry import load_sim_config
+from xcelium_mcp.registry import load_sim_config, resolve_sim_dir
 from xcelium_mcp.shell_utils import (
     _parse_shm_path,
     _parse_time_ns,

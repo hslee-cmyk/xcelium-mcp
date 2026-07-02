@@ -1,8 +1,11 @@
 """discovery.py — Simulation environment discovery and SDF analysis.
 
-Extracted from sim_runner.py. Contains: run_full_discovery, resolve_sim_dir,
-get_default_sim_dir, SDF annotation analysis, top module extraction,
-and legacy script patching.
+Extracted from sim_runner.py. Contains: run_full_discovery,
+SDF annotation analysis, top module extraction, and legacy script patching.
+
+resolve_sim_dir/get_default_sim_dir moved to registry.py (F-161) — they only
+ever read the registry, so they belong there rather than pulling in this
+module's heavier runner_detection/sim_env_detection dependencies.
 """
 from __future__ import annotations
 
@@ -15,7 +18,7 @@ from datetime import datetime
 
 from xcelium_mcp.registry import (
     _update_registry_from_config,
-    load_registry,
+    get_default_sim_dir,
     load_sim_config,
     save_sim_config,
 )
@@ -43,33 +46,6 @@ from xcelium_mcp.sim_env_detection import (
 from xcelium_mcp.tcl_bridge import DEFAULT_BRIDGE_PORT
 
 logger = logging.getLogger(__name__)
-
-
-# ===================================================================
-# sim_dir resolution
-# ===================================================================
-
-
-async def get_default_sim_dir() -> str:
-    """Return the default simulation directory from mcp_registry.json."""
-    registry = load_registry()
-    projects = registry.get("projects", {})
-    for proj_key, proj in projects.items():
-        for env_key, env in proj.get("environments", {}).items():
-            if env.get("is_default"):
-                return env_key
-    return ""
-
-
-async def resolve_sim_dir(sim_dir: str = "") -> str:
-    """Resolve sim_dir: use provided value or fall back to registry default.
-
-    Raises ValueError if no sim_dir available.
-    """
-    resolved = sim_dir if sim_dir else await get_default_sim_dir()
-    if not resolved:
-        raise ValueError("No sim_dir. Run sim_discover first.")
-    return resolved
 
 
 # ===================================================================

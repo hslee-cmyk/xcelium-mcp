@@ -47,6 +47,28 @@ def save_registry(registry: dict) -> None:
     _save_registry_sync(registry)
 
 
+async def get_default_sim_dir() -> str:
+    """Return the default simulation directory from mcp_registry.json."""
+    registry = load_registry()
+    projects = registry.get("projects", {})
+    for proj_key, proj in projects.items():
+        for env_key, env in proj.get("environments", {}).items():
+            if env.get("is_default"):
+                return env_key
+    return ""
+
+
+async def resolve_sim_dir(sim_dir: str = "") -> str:
+    """Resolve sim_dir: use provided value or fall back to registry default.
+
+    Raises ValueError if no sim_dir available.
+    """
+    resolved = sim_dir if sim_dir else await get_default_sim_dir()
+    if not resolved:
+        raise ValueError("No sim_dir. Run sim_discover first.")
+    return resolved
+
+
 _MAX_CONFIG_CACHE = 8
 _config_cache: dict[str, tuple[float, dict]] = {}  # sim_dir → (mtime, config)
 
@@ -201,9 +223,6 @@ def _parse_json_value(value: str) -> int | float | bool | str:
 
 async def config_action(action: str, file: str, key: str, value: str) -> str:
     """Execute mcp_config action."""
-    # Lazy import to avoid circular dependency (sim_runner imports from registry)
-    from xcelium_mcp.discovery import resolve_sim_dir
-
     # Load target file
     if file == "registry":
         data = await asyncio.to_thread(_load_registry_sync)

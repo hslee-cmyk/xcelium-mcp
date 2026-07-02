@@ -1971,6 +1971,305 @@
         "pytest passes"
       ],
       "notes": "docs/03-analysis/xcelium-mcp-v5.2-hierarchical-dump.analysis.md 'Coverage gap' 섹션 기반 — 순수 함수만 단위테스트되어 async wiring(_lazy_discover_boundaries, _update_dump_history, dump_stats 집계, regression 통합)이 미검증 상태였고 Gap #1-#3이 바로 이 영역에서 발생함. F-140 완료 후 새 스키마 기준으로 테스트 작성 권장."
+    },
+    {
+      "id": "F-142",
+      "title": "v5.2 gap-fix (Minor M2): datetime.utcnow() deprecation 해소",
+      "priority": 3,
+      "passes": false,
+      "plan_file": "docs/01-plan/features/xcelium-mcp-v5.2-hierarchical-dump.plan.md",
+      "design_file": "docs/02-design/features/xcelium-mcp-v5.2-hierarchical-dump.design.md",
+      "acceptanceCriteria": [
+        "batch_runner.py _update_dump_history()의 datetime.utcnow().isoformat(timespec=\"seconds\") 호출을 datetime.now(timezone.utc).isoformat(timespec=\"seconds\")로 교체",
+        "datetime import에 timezone 추가 (from datetime import datetime, timezone)",
+        "updated_at 값이 여전히 ISO 8601 형식이며 timespec=\"seconds\" 정밀도를 유지 (예: '+00:00' 오프셋이 붙는 점은 허용 — 기존 naive UTC 문자열과 포맷만 다름)",
+        "tests/test_dump_history_stats.py의 datetime.fromisoformat(entry['updated_at']) 파싱 검증이 여전히 통과",
+        "pytest 실행 시 DeprecationWarning: datetime.datetime.utcnow() ... 경고가 더 이상 발생하지 않음",
+        "pytest passes"
+      ],
+      "notes": "docs/03-analysis/xcelium-mcp-v5.2-hierarchical-dump.analysis.md (2026-07-02 재분석) Minor M2 기반. batch_runner.py:398. Python 3.12+에서 datetime.utcnow()가 deprecated — 현재 pytest 스위트에서 DeprecationWarning 2건 발생 중(3.14 환경). design.md §7 pseudocode 자체가 utcnow()를 쓰고 있어 스펙에서 물려받은 것이지 구현 드리프트는 아님. 사용자 확인: M2를 prd.json에 추가."
+    },
+    {
+      "id": "F-143",
+      "title": "v5.2 gap-fix (Minor M4): _update_dump_history의 load_sim_config force=True 미사용",
+      "priority": 3,
+      "passes": false,
+      "plan_file": "docs/01-plan/features/xcelium-mcp-v5.2-hierarchical-dump.plan.md",
+      "design_file": "docs/02-design/features/xcelium-mcp-v5.2-hierarchical-dump.design.md",
+      "acceptanceCriteria": [
+        "batch_runner.py _update_dump_history()의 load_sim_config(sim_dir) 호출을 load_sim_config(sim_dir, force=True)로 변경 — design.md §7 pseudocode와 일치",
+        "force=True로 인해 캐시된 stale config가 아닌 디스크 최신 상태를 읽고 dump_history를 갱신함을 보장",
+        "기존 tests/test_dump_history_stats.py의 _update_dump_history 관련 테스트(mock 기반)가 force 파라미터 전달 여부와 무관하게 계속 통과 — 필요 시 load_sim_config mock 호출에 force=True가 전달되는지 검증하는 assertion 추가",
+        "run_batch_regression의 per-test 루프에서 반복 호출 시에도 정상 동작 (순차 실행이라 회귀 없음 확인)",
+        "pytest passes"
+      ],
+      "notes": "docs/03-analysis/xcelium-mcp-v5.2-hierarchical-dump.analysis.md (2026-07-02 재분석) Minor M4 기반. batch_runner.py:391 vs Design §7. 현재는 save_sim_config의 캐시 무효화에 의존해 순차 regression 루프 안에서는 문제없이 동작하지만, 이론적으로 다른 프로세스/세션이 동시에 config를 갱신한 경우 stale 캐시를 읽을 가능성이 있음 — 저위험이지만 design.md 스펙과 정합시키기 위해 백로그 추가. 사용자 확인: M4를 prd.json에 추가."
+    },
+    {
+      "id": "F-144",
+      "title": "버그: bisect CSV 처리 시 소수점 값 미지원 (SimTime 크래시 + 신호값 gt/lt/eq/ne 실패)",
+      "priority": 1,
+      "passes": false,
+      "acceptanceCriteria": [
+        "csv_cache.py bisect_csv()의 SimTime 파싱(라인 246 raw_time, 라인 266 raw_t)이 소수점 포함 문자열(예: '1500.5')에서 ValueError로 크래시하지 않음 — int(raw_time)/int(raw_t) 대신 안전한 시간 변환 헬퍼(예: 소수점 허용 float 파싱 후 반올림 int 변환, 파싱 실패 시 해당 row skip 또는 명확한 error 반환) 사용",
+        "csv_cache.py _eval_condition()의 숫자 비교(cur_n = int(cur_val, 0), tgt_n = int(target, 0))가 소수점 값(예: '3.3', '1.234e-05')에 대해 gt/lt/eq/ne 4개 op 전부 정상 동작 — int(x, 0) 실패 시 float(x)로 폴백하는 숫자 변환 헬퍼 도입",
+        "기존 hex/oct/dec 정수 리터럴 지원(int(x, 0), 예: '0x1A', '0o17')과 tristate/문자열 fallback 동작(eq/ne on 'x'/'z' 등 비숫자 값)은 회귀 없이 그대로 유지",
+        "tests/test_bisect.py에 소수점 SimTime 케이스 추가 (bisect_csv가 크래시 없이 동작 확인)",
+        "tests/test_bisect.py에 소수점 신호값 케이스 추가 — gt/lt/eq/ne 4개 op 전부 (현재 gt/lt는 정수값에 대해서도 테스트가 전무했으므로 함께 보강)",
+        "pytest passes"
+      ],
+      "notes": "사용자 버그 리포트: 'bisect를 csv 파일로 처리할 때 소수점 자리가 지원이 안 되는 문제'. Explore 에이전트 조사(2026-07-02) + 직접 코드 확인으로 원인 2곳 확정:\n1. csv_cache.py:246,266 — `ns = int(raw_time)` / `s_ns = int(raw_t)`가 simvisdbutil이 소수점 SimTime을 내보내는 경우 uncaught ValueError로 bisect_signal_dump 전체가 크래시.\n2. csv_cache.py:311-312 — `_eval_condition()`의 `int(cur_val, 0)`/`int(target, 0)`가 소수점 문자열을 거부(base-0 int parsing은 '3.3' 파싱 불가). except에서 조용히 삼켜지고(321-322) String fallback(325-329)으로 빠지는데, 이 fallback은 eq/ne만 구현되어 있어 gt/lt는 소수점 값에 대해 항상 False 반환 — AMS/analog 신호(실수값)에서 gt/lt bisect가 항상 '찾을 수 없음'으로 보고됨. 에러 메시지도 없이 조용히 실패해 사용자가 원인을 알기 어려움.\n테스트 갭: tests/test_bisect.py는 정수 SimTime/정수 값만 커버, gt/lt op 자체가 한 번도 테스트된 적 없음.\n관련이지만 범위 밖(별도 검토 필요): shell_utils.py _parse_time_ns(:369-383), tcl_preprocessing.py _parse_l1_time_ns(:20-31)도 \\d+-only 정규식이라 동일한 소수점 미지원 패턴이지만, 이건 bisect CSV 경로가 아니라 bridge/checkpoint 시간 파싱이라 이번 버그 리포트 범위 밖으로 분리함(F-146). waveform.py:15 _TIME_RE(`^\\d+(\\.\\d+)?...`)는 이미 소수점을 정상 지원하는 대조군.\n전체 코드 소수점 취약 지점 광범위 조사(2026-07-02) 결과 F-145/F-146/F-147로 분리 추가함 — 상세 내역은 각 태스크 notes 참조."
+    },
+    {
+      "id": "F-145",
+      "title": "버그: compare_waveforms/compare_csv_diff의 SimTime 파싱도 소수점에서 크래시 (bisect와 동일 버그 패턴)",
+      "priority": 1,
+      "passes": false,
+      "acceptanceCriteria": [
+        "simvision_ops.py _load_rows()의 SimTime 파싱(라인 401 rows[int(raw_time)] = row)이 소수점 포함 문자열에서 ValueError로 크래시하지 않음 — F-144에서 csv_cache.py bisect_csv에 도입하는 것과 동일한 안전한 시간 변환 헬퍼를 재사용 (가능하면 공용 헬퍼로 추출해 csv_cache.py/simvision_ops.py 양쪽에서 공유 — 코드 중복 방지)",
+        "compare_csv_diff()가 소수점 SimTime을 가진 CSV(BEFORE/AFTER 둘 중 하나 또는 양쪽)를 비교할 때 크래시 없이 정상 동작",
+        "dict 키로 쓰이는 시간 값의 타입 일관성 유지 — rows_b/rows_a의 키 타입이 정수 반올림된 ns든 float ns든 F-144와 동일한 규칙을 따라 all_times = sorted(set(rows_b) | set(rows_a)) 비교가 깨지지 않음",
+        "tests/에 소수점 SimTime을 가진 두 CSV를 비교하는 compare_csv_diff 테스트 추가 (기존엔 simvision_ops.py에 대한 단위 테스트 자체가 부족했을 가능성 — 확인 후 신규 테스트 파일 필요 시 생성)",
+        "pytest passes"
+      ],
+      "notes": "F-144 조사 중 사용자 요청으로 전체 코드 광범위 재조사(2026-07-02) — F-144와 완전히 독립적으로 구현된 두 번째 'SimTime → int()' 크래시 지점 발견. simvision_ops.py:395-402 `_load_rows()`가 compare_csv_diff()(→ compare_waveforms MCP tool)에서 사용되는데, csv_cache.py의 bisect_csv()와 똑같이 `int(raw_time)`을 try/except 없이 호출함 — 두 파일이 SimTime 파싱 로직을 독립적으로 각자 구현해서 같은 버그가 두 곳에 따로 존재하게 된 것. F-144 구현 시 공용 헬퍼(예: csv_cache.py에 `_parse_sim_time_ns(raw: str) -> int`)로 추출해 이 파일에서도 import해서 쓰면 재발 방지에 유리 — 구현 순서상 F-144를 먼저 하고 F-145에서 그 헬퍼를 재사용하는 것을 권장."
+    },
+    {
+      "id": "F-146",
+      "title": "버그: 시간 문자열 파싱 3곳(_parse_time_ns/_parse_l1_time_ns/_DURATION_RE)이 소수점 미지원",
+      "priority": 2,
+      "passes": false,
+      "acceptanceCriteria": [
+        "shell_utils.py _parse_time_ns()의 4개 정규식(라인 371,374,377,380)이 `\\d+` 대신 `\\d+(?:\\.\\d+)?`로 소수점 초 단위(MS/US/NS 접두 카운트 부분)까지 파싱 — bridge `where` 명령 출력에 소수점이 포함된 경우도 정상 변환",
+        "tcl_preprocessing.py _parse_l1_time_ns()의 정규식(라인 22, `r'(\\d+)\\s*(us|ms|ns)?'`)이 `l1_time` 파라미터에 소수점 값(예: '1.5ms')이 들어와도 정상 파싱해 ns로 환산",
+        "tools/sim_lifecycle.py _DURATION_RE(라인 77, `^[0-9]+\\s*(ns|us|ms|s|ps|fs)$`)가 소수점 duration(예: '100.5ns')을 허용하도록 `^[0-9]+(?:\\.[0-9]+)?\\s*(ns|us|ms|s|ps|fs)$`로 확장 — sim_run(duration=...) 파라미터에서 사용, 확장 후에도 F-013(Tcl injection 방지) 검증 특성은 그대로 유지되는지 확인 (regex가 여전히 metachar를 거부)",
+        "3곳 모두 변환 후 최종 ns 정수값 계산 로직(반올림/버림 정책)을 일관되게 적용 — 예: 소수점 이하는 반올림(round) 통일, 나노초 미만 정밀도는 버림",
+        "waveform.py:15 _TIME_RE(`^\\d+(\\.\\d+)?...`)를 레퍼런스 패턴으로 재사용해 3곳의 정규식 스타일 통일",
+        "각 파일에 대응하는 기존 단위 테스트(있는 경우)에 소수점 케이스 추가, 없으면 신규 테스트 추가",
+        "pytest passes"
+      ],
+      "notes": "F-144 notes에서 분리(사용자 지시, 2026-07-02) — bisect CSV 버그 리포트와는 다른 코드 경로(bridge where 응답 파싱 / checkpoint L1 저장 시각 / sim_run duration)지만 근본 원인은 동일한 클래스: 'N + 단위' 형태의 시간 문자열을 `\\d+`-only 정규식으로 파싱해 소수점(N.M단위)을 지원하지 않음. waveform.py의 _TIME_RE(`^\\d+(\\.\\d+)?...`)는 이미 이 패턴을 올바르게 구현해뒀으므로, 이번 수정은 그 패턴을 나머지 3곳에 맞춰 확장하는 작업. sim_lifecycle.py의 _DURATION_RE는 F-013(Tcl injection 방지)에서 도입된 보안 검증 정규식이기도 하므로, 소수점을 추가할 때 metachar를 다시 허용하지 않도록 주의 필요."
+    },
+    {
+      "id": "F-147",
+      "title": "버그: deposit_signal 값 검증 정규식이 소수점(real/wreal analog 값) 미지원",
+      "priority": 2,
+      "passes": false,
+      "acceptanceCriteria": [
+        "tools/signal_inspection.py _DEPOSIT_VALUE_RE(라인 16, `^[\\d'bhBHdDoOxXzZ_]+$`)가 소수점 실수값(예: '3.3')을 허용하도록 확장 — real/wreal(AMS analog) 신호에 deposit_signal(signal=..., value='3.3') 호출 시 'Invalid deposit value' 에러 없이 통과",
+        "음수(-1.5)와 과학적 표기법(1.2e-05) 지원 여부를 결정하고 반영 — AMS 테스트벤치에서 실제로 필요한 값 형식인지 확인 후 정규식에 반영 (불필요하면 명시적으로 범위 밖으로 문서화)",
+        "정규식 확장이 기존 injection 방지 목적(F-012)을 훼손하지 않음 — 여전히 Tcl 메타문자(세미콜론, 대괄호, 공백 등)는 거부, 숫자/소수점/부호/지수 표기만 추가 허용",
+        "기존 digital 값 포맷('1'b1', '8'hFF', '4'b1010' 등)은 회귀 없이 계속 동작",
+        "tests/에 deposit_signal 소수점 값 케이스(정상 케이스 + 여전히 거부돼야 하는 injection 페이로드 케이스) 추가",
+        "pytest passes"
+      ],
+      "notes": "F-144 조사 중 사용자 요청('analog 값을 probe하여 처리하는 로직들도 영향을 받을 수 있어')에 따른 광범위 재조사(2026-07-02)로 발견. deposit_signal은 bisect와 무관하게 signal_inspection.py에서 독립적으로 값 검증을 하는데, 정규식이 digital literal(비트폭'진법값 형식)만 상정하고 있어 real/wreal 타입 net에 소수점 값을 강제로 넣으려 하면 애초에 Tcl에 도달하기 전에 Python 레이어에서 거부됨. bisect(읽기 경로)의 소수점 미지원과 짝을 이루는 쓰기 경로(deposit) 문제 — 두 경로 모두 고쳐야 AMS/analog 디버깅 워크플로우에서 실수값을 온전히 다룰 수 있음. _DEPOSIT_VALUE_RE는 F-012(Tcl injection 방지)에서 도입된 보안 검증이므로 확장 시 주의."
+    },
+    {
+      "id": "F-148",
+      "title": "보안: sanitize_signal_name이 개행문자를 차단하지 않아 Tcl 명령 스머글링 가능",
+      "priority": 1,
+      "passes": false,
+      "acceptanceCriteria": [
+        "shell_utils.py sanitize_signal_name()이 개행(\\n)과 캐리지리턴(\\r)을 포함한 입력을 ValueError로 거부",
+        "기존 valid 테스트 케이스(top.hw.clk, top.hw.data[7:0], top.hw.bus[0] 등, tests/test_pure_helpers.py:280-286)는 전부 회귀 없이 그대로 통과",
+        "신규 테스트: 'top.a\\ndatabase close' 같은 개행 포함 payload가 ValueError로 거부되는지 검증 (tests/test_pure_helpers.py TestSanitizeSignalName에 추가)",
+        "tool 레벨 통합 테스트 최소 1개 — inspect_signal 또는 deposit_signal에 개행 포함 signal을 넘겼을 때 bridge.execute가 호출되지 않고 ERROR가 반환되는지 확인",
+        "pytest passes"
+      ],
+      "notes": "code-analyzer 에이전트의 광범위 코드 리뷰(2026-07-02)에서 발견, Claude가 직접 검증 완료. shell_utils.py:230-260의 sanitize_signal_name은 '[', '$', ';'만 거부하고 개행은 체크하지 않음. tcl_bridge.py:129의 self._writer.write((command + '\\n').encode(...))가 명령을 개행 1개로 프레이밍하고, tcl/mcp_bridge.tcl:162-186의 on_readable이 gets $channel line으로 한 줄씩 읽어 즉시 dispatch하는 것까지 직접 확인 — 신호명에 개행이 포함되면 두 개의 독립된 Tcl 명령으로 스플릿되어 두 번째 명령(예: 'database close')이 Python 클라이언트 모르게 실행됨. inspect_signal/deposit_signal/probe/bisect_signal/waveform 등 신호명을 받는 모든 tool이 영향권. 영향도 분석 결과 sanitize_signal_name의 모든 호출부(14곳)가 단일 신호명만 넘기고 있어 개행 거부 추가는 기존 기능에 영향 없음을 확인함."
+    },
+    {
+      "id": "F-149",
+      "title": "보안: reload_waveform의 shm_path가 검증 없이 Tcl에 직접 삽입됨",
+      "priority": 1,
+      "passes": false,
+      "acceptanceCriteria": [
+        "tools/simvision.py의 simvision(action='reload')가 reload_waveform(bridges, shm_path) 호출 전에 shm_path를 검증 — 최소 validate_path() 적용 (F-150에서 만들 Tcl-safe 검증 헬퍼가 있으면 그것도 함께 적용)",
+        "'/tmp/x[exec id].shm' 같은 Tcl command substitution injection payload가 ERROR로 거부되고 bridge.execute가 호출되지 않음을 테스트로 확인",
+        "정상 SHM 경로('/sim/run/dump/test.shm' 형태)는 회귀 없이 그대로 reload 동작",
+        "pytest passes"
+      ],
+      "notes": "code-analyzer 에이전트의 광범위 코드 리뷰(2026-07-02)에서 발견, Claude가 직접 검증 완료. simvision_ops.py:357의 await bridge.execute(f\"database open {shm_path}\")가 shm_path에 validate_path/sanitize 어느 것도 거치지 않은 상태로 도달함을 tools/simvision.py:134-135(호출부)부터 추적해 확인. 영향도 분석: 기존 테스트/코드의 SHM 경로 예시가 전부 평범한 Linux 경로뿐이라 검증 추가로 인한 기존 기능 회귀 없음."
+    },
+    {
+      "id": "F-150",
+      "title": "보안: validate_path가 Tcl 메타문자를 걸러내지 못해 open_database/compare_simvision 등에서 injection 가능",
+      "priority": 1,
+      "passes": false,
+      "acceptanceCriteria": [
+        "shell_utils.py에 Tcl 바인딩 전용 경로 검증 함수 신설(예: validate_tcl_path()) — 기존 validate_path(파일시스템 전용: null byte, '..')와 별개로 '[', ']', '$', 공백, 개행, ';' 등 Tcl 메타문자를 allowlist 방식(re.fullmatch)으로 거부",
+        "simvision_ops.py open_database()(라인 66, 74)와 compare_simvision()(라인 558)가 Tcl로 넘기기 전에 신규 함수로 shm_path를 검증",
+        "F-149(reload_waveform)도 가능하면 이 공용 헬퍼를 재사용하도록 정리",
+        "기존 정상 경로(tests/의 SHM 경로 예시 전체)는 회귀 없이 통과",
+        "csv_diff 모드(shell_quote 기반, 이미 안전)는 이 변경의 영향을 받지 않음을 확인",
+        "pytest passes"
+      ],
+      "notes": "code-analyzer 에이전트의 광범위 코드 리뷰(2026-07-02)에서 발견. F-148/F-149와 같은 근본 원인(denylist 검증의 구조적 우회 가능성) — validate_path는 파일시스템 안전성만 보장하고 Tcl 안전성은 보장하지 않는데도 Tcl 바인딩 지점에서 그대로 사용됨. 영향도 분석: Tcl로 가는 지점에만 추가 검증을 얹는 구조라 CSV 추출(shell 경로, 이미 shell_quote로 안전) 경로는 전혀 영향받지 않음을 확인."
+    },
+    {
+      "id": "F-151",
+      "title": "보안: compare_simvision의 signals가 다른 tool과 달리 sanitize_signal_name을 거치지 않음",
+      "priority": 1,
+      "passes": false,
+      "acceptanceCriteria": [
+        "simvision_ops.py compare_simvision()이 signals를 bridge에 넘기기 전(BEFORE 그룹, AFTER 그룹 둘 다 — 라인 565, 575)에 각 항목에 sanitize_signal_name() 적용",
+        "compare_waveforms(output_mode='simvision')이 output_mode='csv_diff'와 동일한 수준의 신호명 검증을 갖도록 일관성 확보",
+        "injection payload(예: 'top.a[exec id]')가 ERROR로 거부되는 테스트 추가",
+        "정상 signal 목록은 회귀 없이 그대로 BEFORE/AFTER 그룹에 추가됨",
+        "pytest passes"
+      ],
+      "notes": "code-analyzer 에이전트의 광범위 코드 리뷰(2026-07-02)에서 발견, Claude가 직접 검증 완료. compare_waveforms의 signals 파라미터는 csv_diff 모드(default)에서 이미 csv_cache.extract() → sanitize_signal_name을 거치고 있음(csv_cache.py:163) — simvision 모드만 이 검증이 빠져있는 비일관 상태. 이 사실 자체가 회귀 위험이 낮음을 뒷받침 — 지금 존재하는 어떤 정당한 signal 값도 이미 default 경로에서 sanitize를 통과하고 있는 것들이므로, simvision 모드에 동일 검증을 추가해도 깨질 입력이 있다면 이미 csv_diff 모드에서도 깨지고 있었을 것."
+    },
+    {
+      "id": "F-152",
+      "title": "성능: batch_runner.py regression 결과 파싱이 테스트당 4회 순차 subprocess (N+1)",
+      "priority": 2,
+      "passes": false,
+      "acceptanceCriteria": [
+        "batch_runner.py run_batch_regression()의 'Parse final results' 루프(test -f, ls -t fallback, grep 2회 — 약 815-833라인)를 asyncio.gather로 테스트별 병렬 실행하도록 변경",
+        "각 테스트의 결과 수집이 서로 독립적임을 확인(공유 상태 없음) — per_test_results/per_test_errors dict에 대한 쓰기가 race condition 없이 안전한지 확인",
+        "병렬화 후에도 결과 순서/내용이 기존 순차 실행과 동일함을 테스트로 확인",
+        "pytest passes"
+      ],
+      "notes": "code-analyzer 에이전트의 광범위 코드 리뷰(2026-07-02)에서 발견. 이미 완료된 시뮬레이션의 로그 파일을 읽기만 하는 순수 read-only, per-test 독립 작업이라 병렬화해도 순서 의존성 없음(Claude 검증). 대규모 regression에서 4·N회 순차 subprocess round-trip이 결과 수집 단계에서만 발생 — 병렬화 시 상당한 시간 단축 예상."
+    },
+    {
+      "id": "F-153",
+      "title": "성능: discovery.py SDF 분석이 인스턴스별 순차 grep (N+1)",
+      "priority": 2,
+      "passes": false,
+      "acceptanceCriteria": [
+        "discovery.py _analyze_sdf_annotate()(약 242-251라인)의 인스턴스별 순차 grep -rl 호출을 asyncio.gather로 병렬 실행하거나, 단일 grep -rlE 'module\\s+(a|b|c)\\b' 형태로 병합",
+        "기존 동작(인스턴스→모듈 매핑 결과)이 회귀 없이 동일함을 테스트로 확인",
+        "pytest passes"
+      ],
+      "notes": "code-analyzer 에이전트의 광범위 코드 리뷰(2026-07-02)에서 발견. sim_discover 시 1회성 실행이라 영향 범위는 top module의 인스턴스 수에 비례 — top module이 넓을수록 체감 지연 발생."
+    },
+    {
+      "id": "F-154",
+      "title": "버그: cleanup_stale_csv의 mtime 탐지 휴리스틱이 SHM stem에 9자리 이상 숫자가 있으면 오작동 가능",
+      "priority": 3,
+      "passes": false,
+      "acceptanceCriteria": [
+        "csv_cache.py cleanup_stale_csv()의 mtime 후보 탐지(약 460-463라인, `[p for p in parts if p.isdigit() and len(p) >= 9]`)를 '첫 9자리 이상 숫자 토큰' 대신 파일명 내 고정 위치(8자리 sig hash 다음 필드)로 앵커링",
+        "SHM stem 자체에 9자리 이상 숫자가 포함된 케이스(예: 테스트명에 타임스탬프 유사 숫자가 들어간 경우)에 대한 회귀 테스트 추가 — 캐시 파일이 잘못 삭제되거나 stale 파일이 잘못 보존되지 않는지 확인",
+        "기존 정상 케이스(숫자 없는 stem)는 회귀 없이 그대로 동작",
+        "pytest passes"
+      ],
+      "notes": "code-analyzer 에이전트의 광범위 코드 리뷰(2026-07-02)에서 발견. 도달 가능성은 낮음(stem은 보통 테스트명이라 9자리 이상 연속 숫자가 흔치 않음)이나 휴리스틱 자체가 fragile. Minor로 분류, 낮은 priority."
+    },
+    {
+      "id": "F-155",
+      "title": "아키텍처: run_batch_regression이 5개 이상 책임 혼재 — 순수 로직(verdict 분류/dump_stats 집계) 추출",
+      "priority": 2,
+      "passes": false,
+      "acceptanceCriteria": [
+        "batch_runner.py에 classify_regression_results(test_list, per_test_results, per_test_errors) -> str 순수 함수 추출 — 기존 5-way verdict 분류 로직(약 841-891라인) 이전, mock 없이 직접 단위 테스트 가능",
+        "batch_runner.py에 aggregate_dump_stats(per_test_dump_summaries) -> dict | None 순수 함수 추출 — 기존 dump_stats 집계 로직(약 893-919라인) 이전",
+        "run_batch_regression()이 두 함수를 호출하도록 리팩터링, 기존 동작(반환값 log_str/dump_stats 형식) 완전히 동일하게 유지",
+        "추출된 두 함수에 대한 신규 단위 테스트 추가 — 전체 regression 흐름 mock 없이 verdict 분류(5-way: pass/fail/complete/error)와 dump_stats 집계(max/min/suggestions) 각각 독립 검증",
+        "기존 tests/test_regression_summary.py, tests/test_dump_history_stats.py, tests/test_regression_result_collection.py 전부 회귀 없이 통과",
+        "pytest passes"
+      ],
+      "notes": "code-analyzer 아키텍처 리뷰(2026-07-02) Critical #1. run_batch_regression(batch_runner.py:527-921, 921줄 파일 중 400줄)이 job-resume 파싱, per-test 실행 루프, nohup/PID/watcher 플러밍, checkpoint Tcl 주입, dump_history 동기화, 결과 수집, 그리고 순수 로직(verdict 분류/dump_stats 집계)까지 전부 한 함수에 혼재. 순수 로직만 추출해도 F-140~152에서 반복됐던 '전체 regression을 무겁게 mock해야 테스트 가능' 문제가 부분적으로 해소됨. F-156/F-157과 함께 batch_runner.py 리팩터링의 첫 단계로 권장(agent 우선순위 2위)."
+    },
+    {
+      "id": "F-156",
+      "title": "아키텍처: run_batch_single/run_batch_regression의 job-resume 로직이 두 곳에 따로 구현되어 서로 어긋남",
+      "priority": 2,
+      "passes": false,
+      "acceptanceCriteria": [
+        "parse_existing_job()(batch_runner.py:148-205, run_batch_single이 사용)과 run_batch_regression 내부 인라인 resume 로직(약 596-647라인, test_list 매칭 + _should_resume_regression 사용)을 공용 helper로 통합 — match predicate(단일 test_name 동등 비교 vs test_list 집합 비교)를 파라미터화",
+        "통합 후에도 두 caller(run_batch_single, run_batch_regression)의 기존 동작(alive/dead PID 판별, _kill_stale_sim 호출 조건) 회귀 없음",
+        "batch_job.json/regression_job.json 읽기/파싱/kill 로직의 중복 코드 제거",
+        "기존 tests/test_batch_helpers.py의 parse_existing_job 관련 테스트 전부 통과",
+        "pytest passes"
+      ],
+      "notes": "code-analyzer 아키텍처 리뷰(2026-07-02) Major #2. 두 구현이 이미 'test_list 매칭' 기능 유무 등으로 drift됨 — 이런 drift가 중복이 위험한 이유의 실증 사례. F-155와 함께 batch_runner.py 리팩터링 단계."
+    },
+    {
+      "id": "F-157",
+      "title": "아키텍처: launch_nohup_job 헬퍼가 있는데 regression 경로가 동일 로직을 인라인 재구현",
+      "priority": 2,
+      "passes": false,
+      "acceptanceCriteria": [
+        "run_batch_single이 사용하는 launch_nohup_job()(batch_runner.py:275-332)을 run_batch_regression의 인라인 nohup-subshell + echo $! > pid_file + PID 읽기 + job-file 쓰기 + fire-and-forget watcher 시퀀스(약 730-761라인)에서도 재사용하도록 파라미터화 또는 공용 launch primitive로 추출",
+        "regression 경로에서 job-file payload 구성(test_list, completed, current 등 regression 전용 필드)은 caller가 조립해 launch_nohup_job에 전달하는 형태로 정리",
+        "기존 동작(F-020 SSH 호출 수 절감 특성 포함) 회귀 없음",
+        "pytest passes"
+      ],
+      "notes": "code-analyzer 아키텍처 리뷰(2026-07-02) Major #3. 두 nohup-launch 블록이 이미 다른 커밋 태그(P6-5b, F-020) 주석을 달고 각자 진화 중 — F-155/F-156과 함께 batch_runner.py의 job-lifecycle 관심사를 하나로 모으는 작업의 마지막 조각."
+    },
+    {
+      "id": "F-158",
+      "title": "아키텍처: build_eda_command 공용 헬퍼가 있는데 3곳이 인라인 재구현 + 이미 서로 어긋남(join 구분자 drift)",
+      "priority": 2,
+      "passes": false,
+      "acceptanceCriteria": [
+        "batch_runner._resolve_exec_cmd()(약 123-128라인)의 source_separately 인라인 분기를 shell_utils.build_eda_command() 호출로 교체 — 기존엔 '; '가 아닌 ' && '로 join하는 drift가 있었음, build_eda_command의 '; ' join으로 통일(동작 의미 변경이므로 관련 테스트 확인 필요)",
+        "simvision_ops.py에 _launch_simvision(runner, display, shm_path, log_name) 공용 함수 신설 — start_simvision()과 compare_simvision()의 거의 동일한 env-source + setenv DISPLAY + cd + simvision <shm> + nohup 시퀀스를 통합, 내부적으로 build_eda_command 사용",
+        "start_simvision()과 compare_simvision() 둘 다 신설 헬퍼를 사용하도록 리팩터링",
+        "기존 tests/test_pure_helpers.py의 start_simvision 관련 테스트, tests/test_validate_tcl_path.py의 compare_simvision 관련 테스트 전부 회귀 없이 통과 (join 구분자 변경으로 인한 의도된 동작 차이는 테스트 갱신)",
+        "pytest passes"
+      ],
+      "notes": "code-analyzer 아키텍처 리뷰(2026-07-02) Major #4, Claude가 직접 코드 확인 완료. F-017(2026-04-10 완료 처리, 'sim_runner.py/env_detection.py/simvision.py/checkpoint.py 5곳 중복 제거')이 있었음에도, 이후 새로 추가/리팩터링된 코드(_resolve_exec_cmd, compare_simvision)가 build_eda_command를 안 쓰고 다시 인라인 복붙 — 중복이 재발하는 실제 사례. join 구분자(';' vs '&&') 차이는 실제 동작 차이이므로 통일 시 신중히 검증 필요."
+    },
+    {
+      "id": "F-159",
+      "title": "아키텍처: checkpoints/manifest.json에 writer가 2곳 — registry.config_action이 스키마 모른 채 직접 씀",
+      "priority": 2,
+      "passes": false,
+      "acceptanceCriteria": [
+        "registry.py config_action()의 file=='checkpoint' 분기(약 211-224, 252, 257라인)가 raw Path 읽기/_write_json_sync 대신 checkpoint_manager._read_manifest()/_write_manifest()를 호출하도록 변경 — manifest 스키마(compile_hash, checkpoints, tb_analysis_cache)에 대한 지식 없이 직접 파일을 만지지 않음",
+        "mcp_config(file='checkpoint', action='set'/'delete', ...)의 기존 동작(dot-path get/set/delete)은 그대로 유지 — 데이터 접근 방식(_dot_get/_dot_set/_dot_delete)은 유지하되 read/write I/O만 checkpoint_manager를 경유",
+        "checkpoint_manager가 필요 시 이 용도로 쓸 수 있는 generic get/set 진입점을 노출하거나, registry.py에서 _read_manifest/_write_manifest를 직접 import해 사용",
+        "checkpoint_manager.py의 다른 함수(register_checkpoint 등)와의 동시 사용 시 매니페스트 스키마가 깨지지 않음을 확인하는 회귀 테스트 추가",
+        "pytest passes"
+      ],
+      "notes": "code-analyzer 아키텍처 리뷰(2026-07-02) Major #5, Claude가 직접 코드 확인 완료(registry.py:211-224, checkpoint_manager.py:66-81). mcp_config tool을 통해 AI가 checkpoint manifest를 checkpoint_manager가 기대하지 않는 형태로 손상시킬 수 있는 실질적 데이터 무결성 리스크."
+    },
+    {
+      "id": "F-160",
+      "title": "아키텍처: BOUNDARY_SIGNALS가 프로젝트별 신호명을 범용 기본값으로 하드코딩 — 다른 프로젝트에서 조용히 틀린 신호를 probe",
+      "priority": 2,
+      "passes": false,
+      "acceptanceCriteria": [
+        "tcl_preprocessing.py의 BOUNDARY_SIGNALS(139-153라인, top.hw.i_mainClk/io_sda/o_askData/i_backTel_p 등 venezia 프로젝트 전용 포트명)를 범용 모듈에서 제거",
+        "_resolve_probe_signals()의 fallback(181라인, `strategy.get('top_boundary') or BOUNDARY_SIGNALS`)을 dump_strategy.top_boundary 미설정 시 빈 리스트 + 명시적 경고/에러로 변경 — 다른 프로젝트가 자기 칩 포트명을 모른 채 조용히 venezia 신호를 probe하는 실패 모드 제거",
+        "기존 venezia 프로젝트는 dump_strategy.{mode}.top_boundary가 config에 설정되어 있으면(discovery.run_full_discovery가 기록) 영향 없음 — BOUNDARY_SIGNALS 값 자체는 필요 시 venezia 프로젝트의 .mcp_sim_config.json 또는 별도 fixture/문서로 이전",
+        "backward compat: top_boundary 미설정 + dump_depth='boundary' 호출 시 명확한 에러 메시지로 안내(예: 'top_boundary가 설정되지 않았습니다 — sim_discover 또는 config_action으로 설정하세요')",
+        "기존 tests/test_hierarchical_dump.py의 BOUNDARY_SIGNALS 관련 테스트(v5.1 backward compat 케이스 포함)를 새 fallback 동작에 맞게 갱신",
+        "pytest passes"
+      ],
+      "notes": "code-analyzer 아키텍처 리뷰(2026-07-02) Major #6, Claude가 직접 코드 확인 완료 — 명백히 특정 칩(cochlear implant SoC 계열, backTel/askData/pcmIn 등) 전용 포트명. 에러 없이 틀린 결과가 나오는 최악의 실패 모드(silent wrong result). xcelium-mcp가 범용 도구를 표방한다면 가장 시급한 정확성 이슈. 기존 v5.1 backward-compat 테스트(F-138 등)가 이 fallback 값에 의존하고 있을 수 있어 테스트 갱신 범위가 클 수 있음 — 구현 시 주의."
+    },
+    {
+      "id": "F-161",
+      "title": "아키텍처: resolve_sim_dir가 잘못된 모듈(discovery.py)에 있어 lazy import 4곳 유발",
+      "priority": 3,
+      "passes": false,
+      "acceptanceCriteria": [
+        "discovery.py의 get_default_sim_dir()/resolve_sim_dir()(53-72라인, load_registry만 사용)를 registry.py로 이동",
+        "registry.py:205, test_resolution.py:85, csv_cache.py:49,171의 'from xcelium_mcp.discovery import resolve_sim_dir' lazy import 4곳을 module-level 직접 import로 변경",
+        "discovery.py 내부에서 resolve_sim_dir/get_default_sim_dir을 쓰는 곳(있다면)은 registry에서 import하도록 갱신",
+        "python -c 'import xcelium_mcp.server' 성공 (순환 임포트 없음 확인)",
+        "pytest passes"
+      ],
+      "notes": "code-analyzer 아키텍처 리뷰(2026-07-02) Minor #7, Claude가 직접 코드 확인 완료(discovery.py:53-72이 load_registry 외 다른 discovery 전용 의존성 없음을 확인, lazy import 4곳 grep으로 확인). 리스크 낮고 효과 확실 — agent가 다른 리팩터(F-155~159)보다 먼저 하라고 권장한 선행 작업."
+    },
+    {
+      "id": "F-162",
+      "title": "아키텍처: 모듈 레벨 싱글턴 캐시가 테스트 격리를 방해 + config_action이 캐시 무효화를 mtime 우연에 의존",
+      "priority": 3,
+      "passes": false,
+      "acceptanceCriteria": [
+        "registry.py에 reset_caches() 함수 추가 — _config_cache 등 모듈 레벨 캐시를 초기화, 테스트에서 fixture로 사용 가능하게 함",
+        "registry.py config_action()의 set/delete 분기(약 252, 257라인)가 _write_json_sync 직접 호출 대신 save_sim_config()를 경유하도록 변경(file != 'registry'/'checkpoint'인 경우) — save_sim_config가 이미 하는 _config_cache.pop() 캐시 무효화를 명시적으로 타도록 함, mtime 우연 일치에 의존하지 않음",
+        "캐시 무효화가 mtime 비교 없이도 정상 동작함을 확인하는 회귀 테스트 추가 (예: 같은 mtime 내에 set 후 즉시 get 시 최신 값 반환 확인)",
+        "pytest passes"
+      ],
+      "notes": "code-analyzer 아키텍처 리뷰(2026-07-02) Minor #8. registry._config_cache, shell_utils._USER_TMP, csv_cache._simvisdbutil_path 등 프로세스 전역 mutable 캐시에 리셋 훅이 없음 — 427개 테스트 스위트가 현재는 우회하며 동작 중이나 명시적 seam이 없는 상태. 이번 태스크는 registry._config_cache + config_action 캐시 무효화 문제만 범위로 하고, shell_utils/csv_cache의 다른 캐시는 별도 검토(범위 밖)."
     }
   ]
 }

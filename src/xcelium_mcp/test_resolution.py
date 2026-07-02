@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from xcelium_mcp.registry import load_sim_config, save_sim_config
+from xcelium_mcp.registry import load_sim_config, resolve_sim_dir, save_sim_config
 from xcelium_mcp.shell_utils import (
     shell_quote,
     shell_run,
@@ -81,8 +81,6 @@ async def resolve_test_name(short_name: str, sim_dir: str = "") -> str:
     Exact match → return. 1 substring match → return. 0 → error. 2+ → candidates.
     Cache miss → triggers list_tests (mcp_config 경유 캐시 저장).
     """
-    # Lazy import to avoid circular dependency (sim_runner → batch_runner → sim_runner)
-    from xcelium_mcp.discovery import resolve_sim_dir
     try:
         resolved_dir = await resolve_sim_dir(sim_dir)
     except ValueError:

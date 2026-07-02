@@ -10,8 +10,8 @@ import logging
 
 from xcelium_mcp.batch_runner import validate_extra_args
 from xcelium_mcp.bridge_manager import BridgeManager, scan_ready_files
-from xcelium_mcp.discovery import resolve_sim_dir, run_full_discovery
-from xcelium_mcp.registry import load_sim_config
+from xcelium_mcp.discovery import run_full_discovery
+from xcelium_mcp.registry import load_sim_config, resolve_sim_dir
 from xcelium_mcp.shell_utils import (
     build_redirect,
     find_shm,

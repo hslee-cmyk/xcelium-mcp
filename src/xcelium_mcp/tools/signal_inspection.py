@@ -9,6 +9,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from xcelium_mcp.bridge_manager import BridgeManager
+from xcelium_mcp.registry import resolve_sim_dir
 from xcelium_mcp.shell_utils import find_shm, sanitize_signal_name
 from xcelium_mcp.tcl_bridge import TclError
 
@@ -212,7 +213,6 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
                 return "ERROR: 'signals' list is required for action='check_dump'."
 
             from xcelium_mcp.csv_cache import _resolve_simvisdbutil
-            from xcelium_mcp.discovery import resolve_sim_dir
             from xcelium_mcp.registry import load_sim_config
             from xcelium_mcp.shell_utils import (
                 get_user_tmp_dir,

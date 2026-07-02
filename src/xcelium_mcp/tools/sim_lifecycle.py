@@ -10,8 +10,8 @@ from mcp.server.fastmcp import FastMCP
 
 from xcelium_mcp.bridge_lifecycle import _get_pid_for_port, start_bridge_simulation
 from xcelium_mcp.bridge_manager import BridgeManager, scan_ready_files
-from xcelium_mcp.discovery import resolve_sim_dir, run_full_discovery
-from xcelium_mcp.registry import config_action, load_sim_config, save_sim_config
+from xcelium_mcp.discovery import run_full_discovery
+from xcelium_mcp.registry import config_action, load_sim_config, resolve_sim_dir, save_sim_config
 from xcelium_mcp.shell_utils import UserInputRequired, get_user_tmp_dir, shell_run
 from xcelium_mcp.tcl_bridge import BRIDGE_ERRORS, TclBridge, TclError
 from xcelium_mcp.test_resolution import resolve_test_name
