@@ -91,6 +91,54 @@ async def test_open_database_accepts_normal_path() -> None:
 
 
 @pytest.mark.asyncio
+async def test_reload_waveform_rejects_injection_shm_path() -> None:
+    """F-149: reload_waveform had NO validation at all on shm_path before this fix."""
+    from xcelium_mcp.simvision_ops import reload_waveform
+
+    fake_bridge = MagicMock()
+    fake_bridge.execute = AsyncMock(return_value="ok")
+    fake_bridges = MagicMock()
+    fake_bridges.simvision = fake_bridge
+
+    result = await reload_waveform(fake_bridges, "/tmp/x[exec id].shm")
+
+    assert "ERROR" in result
+    fake_bridge.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reload_waveform_accepts_normal_path() -> None:
+    from xcelium_mcp.simvision_ops import reload_waveform
+
+    fake_bridge = MagicMock()
+    fake_bridge.execute = AsyncMock(return_value="ok")
+    fake_bridges = MagicMock()
+    fake_bridges.simvision = fake_bridge
+
+    result = await reload_waveform(fake_bridges, "/sim/run/dump/test.shm")
+
+    assert "ERROR" not in result
+    assert fake_bridge.execute.called
+
+
+@pytest.mark.asyncio
+async def test_reload_waveform_empty_shm_path_reloads_same_db() -> None:
+    """Empty shm_path means 'reload the current SHM' — not subject to path
+    validation (no path is interpolated in this branch)."""
+    from xcelium_mcp.simvision_ops import reload_waveform
+
+    fake_bridge = MagicMock()
+    fake_bridge.execute = AsyncMock(return_value="ok")
+    fake_bridges = MagicMock()
+    fake_bridges.simvision = fake_bridge
+
+    result = await reload_waveform(fake_bridges, "")
+
+    assert "ERROR" not in result
+    assert fake_bridge.execute.called
+
+
+@pytest.mark.asyncio
 async def test_compare_simvision_rejects_injection_shm_after() -> None:
     """F-150: compare_simvision must reject a malicious shm_after before the
     Tcl `database open` call, even though the caller's validate_path() (in

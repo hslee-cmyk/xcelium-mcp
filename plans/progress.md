@@ -1,6 +1,27 @@
 
 ---
 
+## 2026-07-02 - F-149: 보안 수정 — reload_waveform shm_path 무검증 수정
+
+### 배경
+code-analyzer 에이전트의 광범위 코드 리뷰(Critical #2)에서 발견, Claude가 직접 검증. `simvision(action='reload')` → `reload_waveform`이 `shm_path`를 `validate_path`조차 거치지 않고 바로 `f"database open {shm_path}"`에 삽입 — F-148/F-150과 같은 계열이지만 검증이 아예 없었던 가장 심각한 지점.
+
+### 구현 내용
+- `simvision_ops.py reload_waveform()` 최상단에 `if shm_path: err = validate_tcl_path(shm_path, "shm_path")` 추가 — F-150에서 만든 공용 헬퍼 재사용. 빈 `shm_path`(= 현재 SHM 그대로 reload, 경로 보간 없음)는 검증 대상에서 제외.
+
+### 검증
+`tests/test_validate_tcl_path.py`에 3개 추가 — injection 거부, 정상 경로 통과, 빈 shm_path(같은 DB reload) 케이스.
+`python -m pytest` 419 passed (416→419) / `python -m ruff check src/` all checks passed.
+
+### F-148~F-150 정리 — Tcl injection 3형제 마무리
+- F-148: `sanitize_signal_name` 개행 미차단 → Tcl 명령 스머글링
+- F-150: `validate_tcl_path` 공용 헬퍼 + `open_database`/`compare_simvision`
+- F-149: `reload_waveform` (F-150 헬퍼 재사용)
+
+남은 건 **F-151**(`compare_simvision`의 `signals` sanitize 누락) 하나. Minor 성능 항목(F-152/F-153)과 F-154도 미착수.
+
+---
+
 ## 2026-07-02 - F-150: 보안 수정 — Tcl-safe path validator 신설 (open_database/compare_simvision)
 
 ### 배경

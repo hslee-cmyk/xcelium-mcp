@@ -320,6 +320,12 @@ async def live_start(
 
 async def reload_waveform(bridges: BridgeManager, shm_path: str) -> str:
     """Reload current or new SHM, preserving waveform context."""
+    # F-149: shm_path reaches raw Tcl interpolation ("database open {shm_path}")
+    # with no validation elsewhere on this path — validate before any bridge call.
+    if shm_path:
+        err = validate_tcl_path(shm_path, "shm_path")
+        if err:
+            return err
     bridge = bridges.simvision
     results = []
 
