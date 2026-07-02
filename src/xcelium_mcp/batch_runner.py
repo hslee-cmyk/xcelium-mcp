@@ -391,8 +391,11 @@ async def _update_dump_history(
         config = await load_sim_config(sim_dir) or {}
         history = config.setdefault("dump_history", {})
         history[test_name] = {
-            "dump_summary": dump_summary,
+            "last_dump_summary": {
+                k: v for k, v in dump_summary.items() if k != "scope_overrides"
+            },
             "dump_scopes": dump_scopes or {},
+            "updated_at": datetime.utcnow().isoformat(timespec="seconds"),
         }
         await save_sim_config(sim_dir, config)
     except Exception:
@@ -700,6 +703,11 @@ async def run_batch_regression(
                     env_prefix += f"MCP_INPUT_TCL={shell_quote(preprocessed_tcl)} "
                 if test_dump_summary is not None:
                     per_test_dump_summaries[test_name] = test_dump_summary
+                    # v5.2: keep dump_history in sync on the regression path too
+                    # (Plan §3.2 "항상 갱신" — was previously only updated by run_batch_single)
+                    await _update_dump_history(
+                        sim_dir, test_name, test_dump_summary, effective_test_scopes
+                    )
 
             # Phase 4: inject checkpoint save commands into xmsim Tcl
             if save_checkpoints and setup_lines:
@@ -879,26 +887,28 @@ async def run_batch_regression(
     # v5.2: aggregate dump_stats across per-test summaries
     dump_stats: dict | None = None
     if per_test_dump_summaries:
-        all_totals = [s.get("total_signals", 0) for s in per_test_dump_summaries.values()]
         per_test_entry: dict[str, dict] = {}
         for tn, s in per_test_dump_summaries.items():
             per_test_entry[tn] = {
-                "total_signals": s.get("total_signals", 0),
-                "top_boundary_count": s.get("top_boundary_count", 0),
-                "block_boundaries": s.get("block_boundaries", {}),
-                "scope_overrides": s.get("scope_overrides", {}),
+                "total": s.get("total_signals", 0),
+                "top_boundary": s.get("top_boundary_count", 0),
+                "block_count": sum(
+                    1 for c in s.get("block_boundaries", {}).values() if c > 0
+                ),
             }
-        suggestions: list[str] = []
-        max_total = max(all_totals) if all_totals else 0
-        min_total = min(all_totals) if all_totals else 0
-        if max_total > 0 and (max_total - min_total) / max_total > 0.5:
-            suggestions.append(
-                "Signal count varies significantly across tests — consider per-test dump_scopes tuning"
-            )
+        totals = [v["total"] for v in per_test_entry.values()]
+        avg = sum(totals) / len(totals) if totals else 0
+        max_test = max(per_test_entry, key=lambda t: per_test_entry[t]["total"])
+        min_test = min(per_test_entry, key=lambda t: per_test_entry[t]["total"])
+        suggestions = [
+            f"{t} total={per_test_entry[t]['total']} (max): dump_scopes로 heavy block skip 검토"
+            for t in per_test_entry
+            if per_test_entry[t]["total"] > avg * 2
+        ]
         dump_stats = {
             "per_test": per_test_entry,
-            "max_total_signals": max_total,
-            "min_total_signals": min_total,
+            "max": {"test": max_test, "total": per_test_entry[max_test]["total"]},
+            "min": {"test": min_test, "total": per_test_entry[min_test]["total"]},
             "suggestions": suggestions,
         }
 

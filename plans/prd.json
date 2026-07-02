@@ -1918,6 +1918,59 @@
         "pytest passes (기존 308개 + 신규 _parse_describe_output / _boundaries_from_json 단위 테스트 최소 5개)"
       ],
       "notes": "## 구현 참조\n\n설계 문서 §10 (Phase 2 Auto-detection) 기준 구현.\n\n### Flow A — sim_bridge_run(auto_boundaries=True)\n```python\nif auto_boundaries:\n    from xcelium_mcp.sim_env_detection import _boundaries_from_tcl\n    base_mode = 'gate' if 'gate' in sim_mode else 'rtl'\n    strategy = get_dump_strategy(config or {}, sim_mode)\n    depth = strategy.get('boundary_depth', 3)\n    boundaries = await _boundaries_from_tcl(bridge, top_module or 'top', depth)\n    await config_action('set', 'config',\n                        f'dump_strategy.{base_mode}.block_boundaries',\n                        json.dumps(boundaries))\n```\n\n### Flow B — _lazy_discover_boundaries (batch_runner.py)\n```python\nasync def _lazy_discover_boundaries(sim_dir, dump_strategy, sim_mode):\n    from xcelium_mcp.sim_env_detection import _boundaries_from_json\n    config = await load_sim_config(sim_dir) or {}\n    base_mode = 'gate' if 'gate' in sim_mode else 'rtl'\n    json_rel = config.get('netlist_info', {}).get(base_mode, {}).get('boundary_json', '')\n    if not json_rel: return None\n    json_path = Path(sim_dir) / json_rel\n    if not json_path.exists(): return None\n    boundaries = _boundaries_from_json(\n        json_path, 'top',\n        depth=dump_strategy.get('boundary_depth', 3),\n        block_filter=dump_strategy.get('block_filter'),\n    )\n    if dump_strategy.get('write_discovered_boundaries') and boundaries:\n        config.setdefault('dump_strategy', {}).setdefault(base_mode, {})\n        config['dump_strategy'][base_mode]['block_boundaries'] = boundaries\n        await save_sim_config(sim_dir, config)\n    return boundaries\n```\n\n### _boundaries_from_tcl 재귀 구조\n- `scope -describe {scope}` → port 목록 파싱\n- 자식 scope 재귀 탐색 (depth < boundary_depth)\n- block_filter: fnmatch 패턴 리스트, 매칭된 scope만 수집\n- 반환: {scope_path: [port_signals]} dict\n\n### _boundaries_from_json (Yosys JSON)\n- JSON 구조: {\"modules\": {\"module_name\": {\"cells\": {...}, \"ports\": {...}}}}\n- top_module 기준으로 cells 재귀 순회 (depth 제한)\n- cell의 type이 modules에 존재하면 sub-module로 인식\n- 각 module의 ports에서 direction=input/output/inout 추출\n- block_filter: fnmatch로 scope 경로 필터링\n\n### sim_discover boundary_depth 변경\n```python\nasync def sim_discover(sim_dir='', force=False, top_module='', boundary_depth=3) -> str:\n    # ... 기존 로직 ...\n    if config:\n        for mode in ('rtl', 'gate'):\n            if 'dump_strategy' in config and mode in config['dump_strategy']:\n                config['dump_strategy'][mode]['boundary_depth'] = boundary_depth\n        await save_sim_config(sim_dir, config)\n    # netlist_info 검사: boundary_json 없으면 Yosys 실행 안내 출력\n```\n\n### 수정 대상 파일\n- `src/xcelium_mcp/sim_env_detection.py` — 함수 3개 추가\n- `src/xcelium_mcp/batch_runner.py` — _lazy_discover_boundaries 추가 + run_batch_single 호출\n- `src/xcelium_mcp/tools/sim_lifecycle.py` — sim_bridge_run/sim_discover 확장\n- `tests/test_hierarchical_dump.py` — Phase 2 단위 테스트 추가 (최소 5개)"
+    },
+    {
+      "id": "F-139",
+      "title": "v5.2 Phase 2 후속 — Flow A/B 수동 검증 + release 단위 확정",
+      "priority": 2,
+      "passes": false,
+      "skip": true,
+      "skip_reason": "verifyCommand(pytest+ruff)로 검증 불가 — cloud0 실제 시뮬레이터 연결 상태에서의 수동 검증 + 릴리스 단위 결정(사람 판단 사안)이라 ralph-loop 자동화 대상 아님. 사람이 직접 진행.",
+      "plan_file": "docs/01-plan/features/xcelium-mcp-v5.2-hierarchical-dump.plan.md",
+      "design_file": "docs/02-design/features/xcelium-mcp-v5.2-hierarchical-dump.design.md",
+      "acceptanceCriteria": [
+        "Flow A (sim_bridge_run auto_boundaries=True): cloud0 실제 시뮬레이터 연결 상태에서 1회 수동 실행 — _boundaries_from_tcl 결과가 dump_strategy.{base_mode}.block_boundaries에 정상 저장되는지 확인",
+        "Flow B (sim_batch_run lazy discovery): netlist_info.{base_mode}.boundary_json 존재하는 프로젝트에서 1회 수동 실행 — _lazy_discover_boundaries가 Yosys JSON을 파싱해 block_boundaries를 채우는지 확인",
+        "두 Flow 모두 boundary_depth 제한과 block_filter(fnmatch)가 의도대로 동작하는지 실측",
+        "설계문서 §15 Open Question 1: v5.2 릴리스 단위를 v5.2.0(Phase 1)/v5.2.1(Phase 2) 분리할지, 단일 v5.2로 묶을지 결정",
+        "검증 결과와 릴리스 단위 결정을 design.md §14 Session 3 및 §15에 갱신"
+      ],
+      "notes": "## 배경\nF-138(v5.2 Phase 2 Auto-detection)은 유닛테스트(pytest)만으로 passes:true 처리됨.\n설계문서(`xcelium-mcp-v5.2-hierarchical-dump.design.md`) §14 Session 3 step 11 'Flow A/B 각 1회 수동 검증'은 아직 수행 이력이 없음 — F-138 notes에도 수동 검증 결과 기록 없음.\n\n또한 §15 Open Questions #1 (v5.2 릴리스 단위: v5.2.0/v5.2.1 분리 여부)이 미결정 상태로 남아있음.\n\n### 수정 대상 파일\n- (코드 변경 없음 — 검증 + 문서 갱신)\n- `docs/02-design/features/xcelium-mcp-v5.2-hierarchical-dump.design.md`: §14 Session 3 체크 반영, §15 Open Question 1 결정 기록"
+    },
+    {
+      "id": "F-140",
+      "title": "v5.2 gap-fix: dump_history/dump_stats 영속 스키마 정합 + regression 경로 dump_history 누락 수정",
+      "priority": 2,
+      "passes": false,
+      "plan_file": "docs/01-plan/features/xcelium-mcp-v5.2-hierarchical-dump.plan.md",
+      "design_file": "docs/02-design/features/xcelium-mcp-v5.2-hierarchical-dump.design.md",
+      "acceptanceCriteria": [
+        "batch_runner.py _update_dump_history()가 저장하는 키를 dump_summary → last_dump_summary로 변경",
+        "_update_dump_history() 저장 시 updated_at(ISO timestamp) 필드 추가",
+        "_update_dump_history() 저장 시 scope_overrides는 strip하여 저장하지 않음",
+        "batch_runner.py dump_stats 집계에서 max/min을 bare int(max_total_signals/min_total_signals) 대신 spec대로 {\"test\": str, \"total\": int} dict 형태로 변경",
+        "dump_stats.suggestions를 generic 'variance>0.5' 메시지 대신 per-test total > avg×2 케이스에 대해 테스트명을 포함한 named suggestion으로 복원",
+        "run_batch_regression이 per-test 루프 내에서 _update_dump_history를 호출하도록 수정 — Plan §3.2 '항상 갱신' 정책 준수, use_dump_history=True 재사용 가능하게 함",
+        "기존 read path(dump_scopes 사용)와의 하위 호환 유지 — 스키마 변경이 config 읽기 동작에 영향 없음",
+        "pytest passes"
+      ],
+      "notes": "docs/03-analysis/xcelium-mcp-v5.2-hierarchical-dump.analysis.md Gap #1-#3 (Important) 기반. batch_runner.py:392-396(dump_history 스키마), batch_runner.py:883-903(dump_stats 집계), run_batch_regression(dump_history 미영속). Match Rate 85% → API Contract 78%를 끌어내린 두 스키마 편차 + regression 경로 누락 수정. 코드 변경 범위 ~30 LOC로 추정(분석서 Recommended Actions #1-#3)."
+    },
+    {
+      "id": "F-141",
+      "title": "v5.2 async wiring 단위 테스트 추가 — _lazy_discover_boundaries / _update_dump_history / dump_stats",
+      "priority": 3,
+      "passes": false,
+      "plan_file": "docs/01-plan/features/xcelium-mcp-v5.2-hierarchical-dump.plan.md",
+      "design_file": "docs/02-design/features/xcelium-mcp-v5.2-hierarchical-dump.design.md",
+      "acceptanceCriteria": [
+        "_lazy_discover_boundaries에 대한 단위 테스트 추가 (load_sim_config/save_sim_config mock)",
+        "_update_dump_history에 대한 단위 테스트 추가 — last_dump_summary/updated_at/scope_overrides strip 스키마(F-140 반영 후 기준) 검증",
+        "dump_stats 집계 로직에 대한 단위 테스트 추가 — max/min이 {test,total} dict 형태인지, per-test named suggestion이 생성되는지 검증",
+        "run_batch_regression이 per-test 루프에서 dump_history를 실제로 갱신하는지 검증하는 테스트 추가",
+        "pytest passes"
+      ],
+      "notes": "docs/03-analysis/xcelium-mcp-v5.2-hierarchical-dump.analysis.md 'Coverage gap' 섹션 기반 — 순수 함수만 단위테스트되어 async wiring(_lazy_discover_boundaries, _update_dump_history, dump_stats 집계, regression 통합)이 미검증 상태였고 Gap #1-#3이 바로 이 영역에서 발생함. F-140 완료 후 새 스키마 기준으로 테스트 작성 권장."
     }
   ]
 }
