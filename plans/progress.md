@@ -1,6 +1,24 @@
 
 ---
 
+## 2026-07-02 - F-141: v5.2 async wiring 단위 테스트 추가
+
+### 구현 내용
+`tests/test_dump_history_stats.py` 신규 작성 (7 tests) — F-140에서 손댄 async wiring 영역을 직접 커버:
+- `_update_dump_history`: `load_sim_config`/`save_sim_config` mock — `last_dump_summary`/`updated_at`/`scope_overrides` strip/`dump_scopes` 기본값 검증
+- `_lazy_discover_boundaries`: `tmp_path`에 실제 Yosys JSON netlist 작성 + config mock 4 케이스 (정상 파싱, `write_discovered_boundaries=True` 시 영속, `netlist_info` 없음, JSON 파일 미존재)
+- `run_batch_regression` 3-test 케이스 (`T1=10, T2=5, T3=50` signal count) — `shell_run`/`poll_batch_log`/`_preprocess_setup_tcl`/`_update_dump_history`를 전부 mock하여 실제 함수를 end-to-end 구동:
+  - 3개 테스트 모두에서 `_update_dump_history`가 호출되는지 확인 (Gap #3 회귀 방지)
+  - `dump_stats`가 design.md §8 스펙(`max`/`min` = `{test,total}` dict, `per_test` = `total`/`top_boundary`/`block_count`, per-test named suggestion)과 정확히 일치하는지 확인 (Gap #2 회귀 방지)
+
+### 패턴
+`run_batch_regression`은 900줄 orchestrator라 실제 실행 경로를 태우려면 `shell_run` 호출 순서에 의존하지 않는 catch-all mock(`AsyncMock(return_value="")`)이 필요 — 정확한 call sequence를 하드코딩하는 대신 각 단계가 빈 문자열/성공 응답에도 안전하게 진행되도록 설계된 점을 활용함 (test_batch_helpers.py의 `_fake_shell` catch-all 패턴과 동일 계열, index 기반 대신 default-return 사용).
+
+### 검증
+`python -m pytest` 325 passed (318 → 325, 신규 7개) / `python -m ruff check src/` all checks passed.
+
+---
+
 ## 2026-07-02 - F-140: v5.2 gap-fix — dump_history/dump_stats 스키마 정합
 
 ### 배경
