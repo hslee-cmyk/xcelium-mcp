@@ -87,7 +87,19 @@ grep으로 재확인 결과 자기 정의 외 호출부 전혀 없음(`_write_js
 
 **검증**: `pytest` 472 passed(변화 없음, 생성 Tcl 콘텐츠 문자열은 그대로라 출력 동일), `ruff check src/` clean.
 
-**남은 작업**: F-173(registry.py `_dot_get`/`_dot_delete` 중복 로직 검토)로 진행.
+### F-173: registry.py `_dot_get`/`_dot_set`/`_dot_delete` — 검토 후 리팩터 안 함으로 결정
+
+acceptanceCriteria가 "추출하거나, 추출이 오히려 복잡도를 높인다면 현행 유지 사유를 notes에 기록"으로 양쪽 다 허용하는 형태라 코드를 직접 분석.
+
+**분석**: 세 함수가 표면적으로는 "dot-path 순회"를 공유하는 것처럼 보이지만, 실제로는 (1) 순회 범위(parts 전체 vs `parts[:-1]`), (2) 중간 노드 부재 시 동작(auto-vivify 생성 vs 실패), (3) 실패 시 반환값(`_MISSING` sentinel vs `bool`)이 모두 다름. 공용 헬퍼로 묶으려면 이 3축을 전부 파라미터화해야 하고, 그러면 호출부마다 플래그 조합을 시뮬레이션해야 이해 가능한 코드가 되어 현재의 독립된 7줄 내외 함수 3개보다 오히려 가독성이 떨어짐.
+
+**결정**: 리팩터하지 않음. `prd.json` F-173의 `notes`에 판단 근거 전문 기록.
+
+**검증**: 코드 변경 없음(문서만), `pytest` 472 passed(불변), `ruff check src/` clean.
+
+이것으로 verbosity 코드 리뷰(F-163~173, 11건) 전부 처리 완료 — 10건 구현 + 1건(F-173) 검토 후 현행 유지 결정. 전체 리팩터를 거치며 `pytest`는 461(리뷰 시작 시점) → 472로 증가(순수 리팩터가 대부분이었고, F-164/F-167에서만 신규 테스트 추가), `ruff check src/`는 매 커밋마다 clean 유지.
+
+**남은 작업**: 없음(11건 전부 처리). F-163~172(10건)는 `passes:false`로 사용자 확인 대기, F-173은 리팩터 없이 결론만 기록했으므로 별도 코드 검증 불필요.
 
 ### F-160 보류 (사용자 결정)
 code-analyzer 아키텍처 리뷰 Major #6(`BOUNDARY_SIGNALS` 프로젝트별 하드코딩)은 F-155~159와 달리 **순수 리팩터가 아니라 기본 동작을 바꾸는 breaking change**임을 재확인 — `_resolve_probe_signals`의 `dump_strategy.top_boundary` 미설정 시 폴백이 v5.1 backward-compat의 핵심 경로이자 venezia 프로젝트의 실사용 경로(`tests/test_dump_strategy.py`, `tests/test_hierarchical_dump.py`가 이 폴백을 명시적으로 테스트). 원안대로 "빈 리스트+에러"로 바꾸면 venezia의 `.mcp_sim_config.json`에 `top_boundary`가 먼저 마이그레이션돼 있지 않은 한 기존 `dump_depth="boundary"` 호출이 전부 깨짐. 사용자에게 확인 결과 **보류** 결정 — `plans/prd.json`에 `skip:true` + 결정 근거 기록, ralph-loop 자동 진행 대상에서 제외. 재개 시 마이그레이션 전략부터 별도 논의 필요.
