@@ -170,3 +170,73 @@ async def test_compare_simvision_rejects_injection_shm_after() -> None:
 
     assert "ERROR" in result
     fake_bridge.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_compare_simvision_rejects_injection_in_signals() -> None:
+    """F-151: compare_simvision must sanitize `signals` too — this was the one
+    bridge-facing tool that skipped sanitize_signal_name (unlike csv_diff mode,
+    which sanitizes the identical list via csv_cache.extract())."""
+    from xcelium_mcp.simvision_ops import compare_simvision
+
+    fake_bridge = MagicMock()
+    fake_bridge.execute = AsyncMock(return_value="ok")
+    fake_bridges = MagicMock()
+    fake_bridges.simvision = fake_bridge
+
+    with (
+        patch("xcelium_mcp.simvision_ops.detect_vnc_display", AsyncMock(return_value="")),
+        patch("xcelium_mcp.simvision_ops.shell_run", AsyncMock(return_value=":1 (active)")),
+        patch("xcelium_mcp.simvision_ops.resolve_sim_dir", AsyncMock(return_value="")),
+        patch("xcelium_mcp.simvision_ops.load_sim_config", AsyncMock(return_value=None)),
+        patch("xcelium_mcp.simvision_ops.get_user_tmp_dir", AsyncMock(return_value="/tmp/mcp")),
+        patch("xcelium_mcp.simvision_ops.scan_ready_files", AsyncMock(return_value=[(9877, "simvision")])),
+        patch("asyncio.sleep", AsyncMock(return_value=None)),
+    ):
+        connect_fn = AsyncMock(return_value="connected")
+        result = await compare_simvision(
+            fake_bridges, connect_fn,
+            shm_before="/sim/before.shm",
+            shm_after="/sim/after.shm",  # valid — must pass the shm_after gate
+            signals=["top.a[exec id]"],
+            display=":1",
+        )
+
+    assert "ERROR" in result
+    # database open (shm_after) is allowed to have happened; the WAVEFORM_ADD
+    # calls carrying the malicious signal must not.
+    assert not any("WAVEFORM_ADD" in str(c) for c in fake_bridge.execute.call_args_list)
+
+
+@pytest.mark.asyncio
+async def test_compare_simvision_accepts_normal_signals() -> None:
+    from xcelium_mcp.simvision_ops import compare_simvision
+
+    fake_bridge = MagicMock()
+    fake_bridge.execute = AsyncMock(return_value="ok")
+    fake_bridges = MagicMock()
+    fake_bridges.simvision = fake_bridge
+
+    with (
+        patch("xcelium_mcp.simvision_ops.detect_vnc_display", AsyncMock(return_value="")),
+        patch("xcelium_mcp.simvision_ops.shell_run", AsyncMock(return_value=":1 (active)")),
+        patch("xcelium_mcp.simvision_ops.resolve_sim_dir", AsyncMock(return_value="")),
+        patch("xcelium_mcp.simvision_ops.load_sim_config", AsyncMock(return_value=None)),
+        patch("xcelium_mcp.simvision_ops.get_user_tmp_dir", AsyncMock(return_value="/tmp/mcp")),
+        patch("xcelium_mcp.simvision_ops.scan_ready_files", AsyncMock(return_value=[(9877, "simvision")])),
+        patch("asyncio.sleep", AsyncMock(return_value=None)),
+    ):
+        connect_fn = AsyncMock(return_value="connected")
+        result = await compare_simvision(
+            fake_bridges, connect_fn,
+            shm_before="/sim/before.shm",
+            shm_after="/sim/after.shm",
+            signals=["top.hw.clk", "top.hw.data[7:0]"],
+            display=":1",
+        )
+
+    assert "ERROR" not in result
+    before_calls = [c for c in fake_bridge.execute.call_args_list if "BEFORE" in str(c)]
+    after_calls = [c for c in fake_bridge.execute.call_args_list if "AFTER" in str(c)]
+    assert before_calls and "top.hw.clk" in str(before_calls[0])
+    assert after_calls and "cmp_after.top.hw.clk" in str(after_calls[0])

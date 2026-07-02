@@ -1,6 +1,29 @@
 
 ---
 
+## 2026-07-02 - F-151: 보안 수정 — compare_simvision의 signals sanitize 누락 수정
+
+### 배경
+code-analyzer 에이전트의 광범위 코드 리뷰(Major #4)에서 발견, Claude가 직접 검증. `compare_waveforms`의 `signals` 파라미터는 default(`csv_diff`) 모드에서 이미 `csv_cache.extract()` → `sanitize_signal_name`을 거치는데, `simvision` 모드(`compare_simvision`)만 이 검증 없이 `" ".join(signals)`를 그대로 bridge에 넘기고 있었음 — 다른 신호명 관련 tool들과의 비일관.
+
+### 구현 내용
+- `simvision_ops.py compare_simvision()`: `shm_after` 검증(F-150) 직후, BEFORE/AFTER 그룹에 추가하기 전에 `signals = [sanitize_signal_name(s) for s in signals]` 추가 — 실패 시 `ERROR` 반환
+- import에 `sanitize_signal_name` 추가
+
+### 검증
+`tests/test_validate_tcl_path.py`에 2개 추가 — injection 신호명 거부(WAVEFORM_ADD 호출이 발생하지 않음 확인), 정상 신호명이 BEFORE/AFTER 그룹에 올바르게 추가되는지(AFTER는 `cmp_after.` 접두사 확인) 검증.
+`python -m pytest` 421 passed (419→421) / `python -m ruff check src/` all checks passed.
+
+### F-148~F-151 전체 마무리 — code-analyzer 리뷰 Critical/Major 보안 항목 완료
+- F-148: `sanitize_signal_name` 개행 미차단 (Tcl 명령 스머글링)
+- F-149: `reload_waveform` shm_path 무검증
+- F-150: `validate_tcl_path` 공용 헬퍼 + `open_database`/`compare_simvision`(경로)
+- F-151: `compare_simvision`의 signals sanitize 누락
+
+리뷰에서 발견된 Critical 2건 + Major 2건 전부 수정 완료(F-152/153/154는 성능/저위험 항목으로 미착수). execute_tcl(Major #5)과 `_list_signals_recursive` 삭제(Minor #8)는 사용자 지시로 수정 대상에서 제외됨.
+
+---
+
 ## 2026-07-02 - F-149: 보안 수정 — reload_waveform shm_path 무검증 수정
 
 ### 배경

@@ -24,6 +24,7 @@ from xcelium_mcp.shell_utils import (
     find_shm,
     get_user_tmp_dir,
     login_shell_cmd,
+    sanitize_signal_name,
     shell_quote,
     shell_run,
     validate_tcl_path,
@@ -564,6 +565,13 @@ async def compare_simvision(
     err = validate_tcl_path(shm_after, "shm_after")
     if err:
         return err
+    # F-151: signals reach raw Tcl interpolation too — every other bridge-facing
+    # tool sanitizes signal names; this path (unlike csv_diff mode, which goes
+    # through csv_cache.extract() -> sanitize_signal_name) was the one gap.
+    try:
+        signals = [sanitize_signal_name(s) for s in signals]
+    except ValueError as e:
+        return f"ERROR: {e}"
     try:
         await bridge.execute(
             f'database open {shm_after} -name cmp_after',
