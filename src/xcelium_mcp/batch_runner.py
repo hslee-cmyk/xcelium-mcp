@@ -35,9 +35,9 @@ from xcelium_mcp.tcl_preprocessing import (
     _handle_sdf_override,
     _parse_l1_time_ns,
     _preprocess_setup_tcl,
+    _read_setup_tcl_sync,
     extract_setup_lines,
     get_dump_strategy,
-    read_setup_tcl,
 )
 from xcelium_mcp.test_resolution import resolve_sim_params, resolve_test_name
 
@@ -726,7 +726,7 @@ async def run_batch_regression(
     setup_lines = ""
     if save_checkpoints:
         await shell_run(f"mkdir -p {shell_quote(chk_dir)}", timeout=5)
-        raw_tcl = read_setup_tcl(runner, sim_dir)
+        raw_tcl = _read_setup_tcl_sync(runner, sim_dir)
         setup_lines = extract_setup_lines(raw_tcl)
 
     # Check for existing regression job (reconnection scenario)

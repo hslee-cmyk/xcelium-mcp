@@ -67,15 +67,6 @@ def _read_setup_tcl_sync(runner: dict, sim_dir: str) -> str:
     return ""
 
 
-def read_setup_tcl(runner: dict, sim_dir: str) -> str:
-    """Read the setup Tcl content for the current sim_mode.
-
-    Synchronous wrapper — use read_setup_tcl_async from async code.
-    Returns raw file content, or empty string if not found.
-    """
-    return _read_setup_tcl_sync(runner, sim_dir)
-
-
 async def read_setup_tcl_async(runner: dict, sim_dir: str) -> str:
     """Async version of read_setup_tcl — wraps file I/O in asyncio.to_thread."""
     return await asyncio.to_thread(_read_setup_tcl_sync, runner, sim_dir)
