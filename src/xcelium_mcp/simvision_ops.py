@@ -19,10 +19,10 @@ from xcelium_mcp.registry import load_sim_config, resolve_sim_dir
 from xcelium_mcp.shell_utils import (
     _parse_shm_path,
     _parse_time_ns,
+    build_eda_command,
     build_redirect,
     find_shm,
     get_user_tmp_dir,
-    login_shell_cmd,
     sanitize_signal_name,
     shell_quote,
     shell_run,
@@ -75,6 +75,45 @@ async def open_database(bridges: BridgeManager, shm_path: str, name: str = "") -
         return f"Database opened (xmsim): {result}"
     except (ConnectionError, TclError, TimeoutError) as e:
         return f"ERROR: Could not open database: {e}"
+
+
+async def _launch_simvision(
+    runner: dict, display: str, inner_cmd_parts: list[str], log_name: str,
+    launch_timeout: float = 15.0,
+) -> str:
+    """Build and fire-and-forget-launch a SimVision nohup command.
+
+    Returns the launch log_file path (callers use it for error-message log tails).
+
+    F-158: shared by start_simvision()/compare_simvision(), which previously
+    each re-implemented the env_shell/login_shell resolution + source_separately
+    branch + nohup wrapping inline (near-identical, already drifting). Routes
+    env-command construction through the single shared build_eda_command().
+
+    Note: this changes the command's clause order slightly — DISPLAY used to
+    be set before sourcing env files; build_eda_command() sources first, then
+    runs inner_cmd (which now starts with "setenv DISPLAY ..."). This is inert
+    in practice (X11 apps read DISPLAY at their own invocation time, not at
+    sourcing time; env setup scripts don't depend on DISPLAY being pre-set).
+
+    Args:
+        runner: Runner config dict (env_files/env_shell/login_shell/source_separately).
+        display: VNC display, e.g. ":1".
+        inner_cmd_parts: Caller-specific commands to run after DISPLAY is set
+            (e.g. ["cd <run_dir>", "simvision <shm>"]).
+        log_name: Log filename (under per-user tmp dir) for launch output.
+        launch_timeout: Timeout for the nohup-launch shell_run call.
+
+    Does not wait for the bridge to come up — callers poll scan_ready_files()
+    themselves afterward.
+    """
+    inner_cmd = "; ".join([f"setenv DISPLAY {shell_quote(display)}", *inner_cmd_parts])
+    shell_cmd = build_eda_command(runner, inner_cmd)
+    user_tmp = await get_user_tmp_dir()
+    log_file = f"{user_tmp}/{log_name}"
+    cmd = f"(nohup {shell_cmd} {build_redirect(log_file)} < /dev/null &)"
+    await shell_run(cmd, timeout=launch_timeout)
+    return log_file
 
 
 async def start_simvision(
@@ -135,29 +174,12 @@ async def start_simvision(
     if "YES" not in exists:
         return f"ERROR: run_dir not found: {run_dir_path}. Set via: mcp_config set runner.run_dir <path>"
 
-    # 6. Build + launch
-    env_files = runner.get("env_files", [])
-    env_shell = runner.get("env_shell", runner.get("login_shell", "/bin/csh"))
-    login_shell = runner.get("login_shell", "/bin/sh")
-
+    # 6. Build + launch (F-158: shared with compare_simvision via _launch_simvision)
     shm_arg = f" {shm_path}" if shm_path else ""
-    inner_parts = [f"setenv DISPLAY {shell_quote(display)}"]
-    if runner.get("source_separately") and env_files:
-        for ef in env_files:
-            inner_parts.append(f"source {shell_quote(ef)}")
-    inner_parts.append(f"cd {run_dir_path}")
-    inner_parts.append(f"simvision{shm_arg}")
-    inner_cmd = "; ".join(inner_parts)
-
-    if runner.get("source_separately") and env_files:
-        shell_cmd = f"{env_shell} -c '{inner_cmd}'"
-    else:
-        shell_cmd = login_shell_cmd(login_shell, inner_cmd)
-
-    user_tmp = await get_user_tmp_dir()
-    log_file = f"{user_tmp}/simvision_start.log"
-    cmd = f"(nohup {shell_cmd} {build_redirect(log_file)} < /dev/null &)"
-    await shell_run(cmd, timeout=15)
+    log_file = await _launch_simvision(
+        runner, display, [f"cd {run_dir_path}", f"simvision{shm_arg}"],
+        "simvision_start.log", launch_timeout=15,
+    )
 
     # 7. Wait for bridge ready + auto-connect
     for i in range(30):
@@ -519,26 +541,11 @@ async def compare_simvision(
     config = await load_sim_config(resolved_dir) if resolved_dir else None
     runner = config.get("runner", {}) if config else {}
 
-    login_shell = runner.get("login_shell", "/bin/sh")
-    env_files = runner.get("env_files", [])
-    env_shell = runner.get("env_shell", runner.get("login_shell", "/bin/csh"))
-
-    inner_parts = [f"setenv DISPLAY {shell_quote(display)}"]
-    if runner.get("source_separately") and env_files:
-        for ef in env_files:
-            inner_parts.append(f"source {shell_quote(ef)}")
-    inner_parts.append(f"simvision {shell_quote(shm_before)}")
-    inner_cmd = "; ".join(inner_parts)
-
-    if runner.get("source_separately") and env_files:
-        shell_cmd = f"{env_shell} -c '{inner_cmd}'"
-    else:
-        shell_cmd = login_shell_cmd(login_shell, inner_cmd)
-
-    user_tmp = await get_user_tmp_dir()
-    log_file = f"{user_tmp}/simvision_compare.log"
-    cmd = f"(nohup {shell_cmd} {build_redirect(log_file)} < /dev/null &)"
-    await shell_run(cmd, timeout=5.0)
+    # F-158: shared with start_simvision via _launch_simvision
+    await _launch_simvision(
+        runner, display, [f"simvision {shell_quote(shm_before)}"],
+        "simvision_compare.log", launch_timeout=5.0,
+    )
 
     # 3. Wait for SimVision bridge ready file (30s)
     bridge_ready = False

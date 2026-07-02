@@ -680,6 +680,45 @@ def test_resolve_exec_cmd_override() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Tests: _resolve_exec_cmd source_separately branch (F-158 — now delegates to
+# shell_utils.build_eda_command instead of an inline re-implementation)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_exec_cmd_source_separately_uses_build_eda_command() -> None:
+    """source_separately=True + env_files -> env_shell -c '...' wrapping,
+    matching build_eda_command's '; '-joined source commands."""
+    runner = _make_runner(
+        source_separately=True,
+        env_files=["/opt/cds/cshrc", "/opt/synopsys/cshrc"],
+        env_shell="/bin/tcsh",
+    )
+    info = _resolve_exec_cmd(runner, regression=False)
+    assert info.cmd.startswith("/bin/tcsh -c '")
+    assert "source /opt/cds/cshrc; source /opt/synopsys/cshrc; ./run_sim.sh {test_name}" in info.cmd
+
+
+def test_resolve_exec_cmd_source_separately_empty_env_files_falls_back() -> None:
+    """F-158 regression-safety: source_separately=True with an empty env_files
+    list must NOT produce a malformed leading '&&'/'; ' — build_eda_command
+    requires env_files to be non-empty before taking the source-wrapping path,
+    so this must fall back to the plain login_shell_cmd path."""
+    runner = _make_runner(source_separately=True, env_files=[])
+    info = _resolve_exec_cmd(runner, regression=False)
+    assert "&&" not in info.cmd
+    assert not info.cmd.lstrip().startswith(";")
+    assert "/bin/tcsh" in info.cmd  # login_shell from _make_runner default
+    assert "./run_sim.sh {test_name}" in info.cmd
+
+
+def test_resolve_exec_cmd_source_separately_default_env_shell() -> None:
+    """env_shell defaults to login_shell when not explicitly set."""
+    runner = _make_runner(source_separately=True, env_files=["/opt/cds/cshrc"])
+    info = _resolve_exec_cmd(runner, regression=False)
+    assert info.cmd.startswith("/bin/tcsh -c '")  # falls back to login_shell
+
+
+# ---------------------------------------------------------------------------
 # Tests: _should_resume_regression
 # ---------------------------------------------------------------------------
 

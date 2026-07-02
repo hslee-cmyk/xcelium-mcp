@@ -23,9 +23,9 @@ from pathlib import Path
 from xcelium_mcp.batch_polling import poll_batch_log, watch_pid_and_poll
 from xcelium_mcp.registry import load_sim_config, save_sim_config
 from xcelium_mcp.shell_utils import (
+    build_eda_command,
     build_redirect,
     get_user_tmp_dir,
-    login_shell_cmd,
     shell_quote,
     shell_run,
     shell_run_fire_and_forget,
@@ -119,13 +119,11 @@ def _resolve_exec_cmd(runner: dict, regression: bool = False) -> ExecInfo:
     else:                                   # no shebang → invoke via login_shell
         script_run = f"{runner['login_shell']} ./{script}{suffix}"
 
-    # 4. build full cmd (env sourcing)
-    if runner.get("source_separately"):
-        sources = " && ".join(f"source {shell_quote(f)}" for f in runner.get("env_files", []))
-        env_shell = runner.get("env_shell", runner["login_shell"])
-        cmd = f"{env_shell} -c '{sources} && {script_run}'"
-    else:
-        cmd = login_shell_cmd(runner["login_shell"], script_run)
+    # 4. build full cmd (env sourcing) — F-158: use the shared build_eda_command
+    # instead of an inline re-implementation (was drifting: '&&' vs '; ' join
+    # separator, and didn't guard against source_separately=True with an
+    # empty env_files list, which produced a malformed leading '&&').
+    cmd = build_eda_command(runner, script_run)
 
     return ExecInfo(cmd=cmd, needs_test_name=needs_test_name)
 

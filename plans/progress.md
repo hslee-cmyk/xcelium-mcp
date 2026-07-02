@@ -1,6 +1,33 @@
 
 ---
 
+## 2026-07-02 - F-158: 아키텍처 리팩터 — build_eda_command 일원화 (batch_runner + simvision_ops)
+
+### 배경
+code-analyzer 아키텍처 리뷰(2026-07-02, Major #4). `shell_utils.build_eda_command`가 이미 있는데 `batch_runner._resolve_exec_cmd`, `simvision_ops.start_simvision`, `simvision_ops.compare_simvision` 3곳이 `source_separately` 분기를 각자 인라인 재구현 — F-017(2026-04-10, "5곳 중복 제거" 완료 처리)이 있었음에도 이후 코드에서 재발한 사례.
+
+### 구현 내용 — batch_runner.py
+- `_resolve_exec_cmd()`의 인라인 `source_separately` 분기(join 구분자 `' && '`)를 `build_eda_command()` 호출로 교체
+- 부수적으로 버그 1건 수정: 기존 인라인 코드는 `source_separately=True` + `env_files=[]`(빈 리스트)일 때 `sources=""`가 되어 `"{env_shell} -c ' && {script_run}'"` 같은 **선두 `&&`가 남는 malformed 명령**을 만들었음 — `build_eda_command`는 `source_separately and env_files` 둘 다 확인해 이 경우 정상적으로 login_shell_cmd 경로로 폴백
+
+### 구현 내용 — simvision_ops.py
+- `_launch_simvision(runner, display, inner_cmd_parts, log_name, launch_timeout)` 신설 — DISPLAY 설정 + `build_eda_command()` 래핑 + nohup 실행 + log_file 경로 반환을 캡슐화
+- `start_simvision()`/`compare_simvision()` 둘 다 신설 헬퍼 사용하도록 교체 (각각 ~20줄의 거의 동일한 인라인 블록 제거)
+- `start_simvision()`은 반환된 `log_file`을 에러 메시지(로그 tail)에 계속 사용 — 헬퍼가 값을 반환하도록 설계해 이 요구를 충족
+
+### 의도적 동작 변화 (검토 후 안전하다고 판단, 문서화)
+`build_eda_command`는 `{sources}; {inner_cmd}` 순서로 조립 — 기존 `simvision_ops`의 수동 조립은 `setenv DISPLAY`를 sourcing보다 먼저 실행했으나, 통합 후에는 sourcing이 먼저, `setenv DISPLAY`가 그 다음. X11 앱은 자기 실행 시점에 DISPLAY를 읽고, EDA env 스크립트는 DISPLAY에 의존하지 않으므로 실질적으로 무해하다고 판단 — `_launch_simvision` docstring에 명시.
+
+### 검증
+- `tests/test_batch_helpers.py`에 `_resolve_exec_cmd`의 `source_separately` 분기 테스트 3개 추가(기존엔 이 분기 테스트가 전무 — join 구분자 drift와 empty-env_files 버그가 발견 안 된 이유). 빈 env_files 케이스가 malformed 명령을 만들지 않는지 명시적으로 검증.
+- `tests/test_launch_simvision.py` 신규 작성(3 tests) — `_launch_simvision`이 source_separately 분기/일반 분기 모두 올바른 명령을 만드는지, DISPLAY가 sourcing 뒤에 오는지, 지정한 timeout이 전달되는지 검증.
+- `python -m pytest` 454 passed(448→454) / `python -m ruff check src/` all checks passed.
+
+### 남은 작업
+F-159(manifest 단일 writer), F-160(`BOUNDARY_SIGNALS` 이전), F-162(캐시 격리) — 미착수.
+
+---
+
 ## 2026-07-02 - F-157: 아키텍처 리팩터 — launch_nohup_job을 run_batch_regression 경로에서 재사용
 
 ### 배경
