@@ -1,6 +1,27 @@
 
 ---
 
+## 2026-07-02 - F-160 보류 결정 + F-162: 캐시 격리 (registry._config_cache)
+
+### F-160 보류 (사용자 결정)
+code-analyzer 아키텍처 리뷰 Major #6(`BOUNDARY_SIGNALS` 프로젝트별 하드코딩)은 F-155~159와 달리 **순수 리팩터가 아니라 기본 동작을 바꾸는 breaking change**임을 재확인 — `_resolve_probe_signals`의 `dump_strategy.top_boundary` 미설정 시 폴백이 v5.1 backward-compat의 핵심 경로이자 venezia 프로젝트의 실사용 경로(`tests/test_dump_strategy.py`, `tests/test_hierarchical_dump.py`가 이 폴백을 명시적으로 테스트). 원안대로 "빈 리스트+에러"로 바꾸면 venezia의 `.mcp_sim_config.json`에 `top_boundary`가 먼저 마이그레이션돼 있지 않은 한 기존 `dump_depth="boundary"` 호출이 전부 깨짐. 사용자에게 확인 결과 **보류** 결정 — `plans/prd.json`에 `skip:true` + 결정 근거 기록, ralph-loop 자동 진행 대상에서 제외. 재개 시 마이그레이션 전략부터 별도 논의 필요.
+
+### F-162: 아키텍처 리팩터 — registry._config_cache 격리 + config_action 캐시 무효화
+
+code-analyzer 아키텍처 리뷰 Minor #8. `registry._config_cache`(모듈 레벨 mutable 캐시, `sim_dir → (mtime, config)`)에 리셋 훅이 없어 테스트 격리가 암묵적이었고, `config_action`의 project-config(`file != "registry"/"checkpoint"`) 분기가 `save_sim_config()`를 거치지 않고 raw `_write_json_sync`로 직접 쓰던 것(F-159에서 만든 `_write` 클로저 구조의 "else" 분기)이 캐시 무효화를 mtime 우연 일치에 의존하게 만들었음.
+
+**구현 내용**:
+- `registry.py`에 `reset_caches()` 추가 — `_config_cache.clear()`, 테스트 fixture에서 사용
+- `config_action`의 "else" 분기 `_write(d)` 클로저를 `save_sim_config(sim_dir, d)` 경유로 변경 — `_config_cache.pop()`이 mtime 무관하게 명시적으로 실행됨
+
+**검증**: `tests/test_config_cache_invalidation.py` 신규 작성(3 tests) — 캐시에 stale 엔트리를 강제로 심어둔 뒤(실제 mtime 충돌을 기다리지 않고 버그 시나리오를 결정론적으로 재현) `config_action(set/delete)` 후 캐시가 실제로 무효화되고 다음 `load_sim_config`이 최신 값을 반환하는지 확인, `reset_caches()` 동작 확인.
+`python -m pytest` 461 passed(458→461) / `python -m ruff check src/` all checks passed.
+
+### 아키텍처 리뷰 백로그 마무리
+F-155~159, F-162 전부 완료. F-160만 breaking change라 사용자 결정으로 보류. F-161(선행)까지 포함해 이번 세션에서 아키텍처 리뷰 8건 중 7건 처리 완료.
+
+---
+
 ## 2026-07-02 - F-159: 아키텍처 리팩터 — checkpoints/manifest.json 단일 writer화
 
 ### 배경

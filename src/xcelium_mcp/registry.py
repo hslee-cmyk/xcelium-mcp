@@ -111,6 +111,14 @@ async def save_sim_config(sim_dir: str, config: dict) -> None:
     _config_cache.pop(sim_dir, None)
 
 
+def reset_caches() -> None:
+    """Clear the module-level _config_cache. F-162: test isolation seam —
+    tests exercising multiple sim_dirs/configs share this process-global
+    cache; call this (e.g. in a pytest fixture teardown) to avoid one test's
+    cached config leaking into another's assertions."""
+    _config_cache.clear()
+
+
 
 
 def _write_json_sync(path, data: dict) -> None:
@@ -254,10 +262,13 @@ async def config_action(action: str, file: str, key: str, value: str) -> str:
         if cfg is None:
             raise RuntimeError(f"No .mcp_sim_config.json in {sim_dir}. Run sim_discover first.")
         data = cfg
-        path = Path(sim_dir) / ".mcp_sim_config.json"
 
+        # F-162: write through save_sim_config() (not a raw _write_json_sync)
+        # so cache invalidation is explicit (_config_cache.pop()) rather than
+        # depending on the next read's mtime differing from the cached mtime
+        # — a same-second write/read pair could otherwise see a stale cache hit.
         async def _write(d: dict) -> None:
-            await asyncio.to_thread(_write_json_sync, path, d)
+            await save_sim_config(sim_dir, d)
 
     if action == "show":
         return json.dumps(data, indent=2)
