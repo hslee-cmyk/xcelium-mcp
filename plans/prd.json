@@ -2234,6 +2234,8 @@
       "title": "아키텍처: BOUNDARY_SIGNALS가 프로젝트별 신호명을 범용 기본값으로 하드코딩 — 다른 프로젝트에서 조용히 틀린 신호를 probe",
       "priority": 2,
       "passes": false,
+      "skip": true,
+      "skip_reason": "순수 리팩터가 아니라 기본 동작을 바꾸는 breaking change임 — dump_strategy.top_boundary 미설정 시 폴백을 BOUNDARY_SIGNALS(venezia 전용)에서 빈 리스트+에러로 바꾸면, venezia의 .mcp_sim_config.json에 top_boundary가 먼저 마이그레이션돼 있지 않은 이상 기존 dump_depth='boundary' 호출이 전부 깨짐. 사용자 확인(2026-07-02): 지금은 보류, ralph-loop 자동 진행 대상에서 제외. 재개 시 마이그레이션 계획(경고만 추가 vs 완전 breaking change + venezia config 선행 이전)부터 사용자와 결정 필요.",
       "acceptanceCriteria": [
         "tcl_preprocessing.py의 BOUNDARY_SIGNALS(139-153라인, top.hw.i_mainClk/io_sda/o_askData/i_backTel_p 등 venezia 프로젝트 전용 포트명)를 범용 모듈에서 제거",
         "_resolve_probe_signals()의 fallback(181라인, `strategy.get('top_boundary') or BOUNDARY_SIGNALS`)을 dump_strategy.top_boundary 미설정 시 빈 리스트 + 명시적 경고/에러로 변경 — 다른 프로젝트가 자기 칩 포트명을 모른 채 조용히 venezia 신호를 probe하는 실패 모드 제거",
