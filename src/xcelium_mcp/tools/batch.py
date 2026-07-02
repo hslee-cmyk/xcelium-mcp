@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Callable, Coroutine
 from typing import Any
 
@@ -18,6 +19,30 @@ from xcelium_mcp.test_resolution import resolve_test_name
 
 # Type alias for the restore_checkpoint callable passed from server.py
 RestoreCheckpointFn = Callable[..., Coroutine[Any, Any, str]]
+
+
+_DUMP_SCOPES_KEY_RE = re.compile(r'^[\w.*]+$')
+_VALID_DUMP_SCOPES_VALUES = {"all", "boundary", "skip"}
+
+
+def _validate_run_params(
+    dump_depth: str, sdf_file: str, sdf_corner: str, dump_scopes: dict | None
+) -> str | None:
+    """Validate dump_depth/sdf_corner/dump_scopes shared by sim_batch_run and sim_regression.
+
+    Returns an error message string if invalid, or None if all params are valid.
+    """
+    if dump_depth and dump_depth not in ("boundary", "all"):
+        return f"Invalid dump_depth='{dump_depth}'. Must be 'boundary', 'all', or '' (auto)."
+    if sdf_file and sdf_corner not in ("min", "max", "typ"):
+        return f"Invalid sdf_corner='{sdf_corner}'. Must be 'min', 'max', or 'typ'."
+    if dump_scopes is not None:
+        for k, v in dump_scopes.items():
+            if not _DUMP_SCOPES_KEY_RE.fullmatch(k):
+                return f"Invalid dump_scopes key: {k!r}. Only word chars, '.', '*' allowed."
+            if v not in _VALID_DUMP_SCOPES_VALUES:
+                return f"Invalid dump_scopes value: {v!r}. Must be 'all', 'boundary', or 'skip'."
+    return None
 
 
 def _build_dump_window(start_ms: int, end_ms: int) -> dict | None:
@@ -90,7 +115,6 @@ def register(
             timeout: SSH wait timeout in seconds.
             force: Force re-run even if a completed job exists. Ignores previous results.
         """
-        import re as _re_ds
         if probe_signals is None:
             probe_signals = []
         if dump_signals is None:
@@ -101,20 +125,10 @@ def register(
                 err = validate_path(p, label)
                 if err:
                     return err
-        # v4.3: enum validation
-        if dump_depth and dump_depth not in ("boundary", "all"):
-            return f"Invalid dump_depth='{dump_depth}'. Must be 'boundary', 'all', or '' (auto)."
-        if sdf_file and sdf_corner not in ("min", "max", "typ"):
-            return f"Invalid sdf_corner='{sdf_corner}'. Must be 'min', 'max', or 'typ'."
-        # v5.2: dump_scopes validation
-        if dump_scopes is not None:
-            _valid_ds_values = {"all", "boundary", "skip"}
-            _key_re = _re_ds.compile(r'^[\w.*]+$')
-            for k, v in dump_scopes.items():
-                if not _key_re.fullmatch(k):
-                    return f"Invalid dump_scopes key: {k!r}. Only word chars, '.', '*' allowed."
-                if v not in _valid_ds_values:
-                    return f"Invalid dump_scopes value: {v!r}. Must be 'all', 'boundary', or 'skip'."
+        # v4.3/v5.2: dump_depth/sdf_corner/dump_scopes enum validation
+        err = _validate_run_params(dump_depth, sdf_file, sdf_corner, dump_scopes)
+        if err:
+            return err
         # Cleanup stale logs (TTL 24h) before starting a new batch run
         from xcelium_mcp.shell_utils import get_user_tmp_dir
         from xcelium_mcp.tmp_cleanup import cleanup_old_logs
@@ -248,23 +262,12 @@ def register(
             save_checkpoints: Save L1/L2 checkpoints per test for later debugging.
             l1_time: Time for L1 checkpoint (default "500us"). e.g. "1ms".
         """
-        import re as _re_ds2
-        # v4.3: enum validation
-        if dump_depth and dump_depth not in ("boundary", "all"):
-            return f"Invalid dump_depth='{dump_depth}'. Must be 'boundary', 'all', or '' (auto)."
-        if sdf_file and sdf_corner not in ("min", "max", "typ"):
-            return f"Invalid sdf_corner='{sdf_corner}'. Must be 'min', 'max', or 'typ'."
+        # v4.3/v5.2: dump_depth/sdf_corner/dump_scopes enum validation
+        err = _validate_run_params(dump_depth, sdf_file, sdf_corner, dump_scopes)
+        if err:
+            return err
         if dump_signals is None:
             dump_signals = []
-        # v5.2: dump_scopes validation
-        if dump_scopes is not None:
-            _valid_ds_values2 = {"all", "boundary", "skip"}
-            _key_re2 = _re_ds2.compile(r'^[\w.*]+$')
-            for k, v in dump_scopes.items():
-                if not _key_re2.fullmatch(k):
-                    return f"Invalid dump_scopes key: {k!r}. Only word chars, '.', '*' allowed."
-                if v not in _valid_ds_values2:
-                    return f"Invalid dump_scopes value: {v!r}. Must be 'all', 'boundary', or 'skip'."
 
         # Resolve sim_dir
         try:
