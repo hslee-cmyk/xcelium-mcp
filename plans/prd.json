@@ -2272,6 +2272,141 @@
         "pytest passes"
       ],
       "notes": "code-analyzer 아키텍처 리뷰(2026-07-02) Minor #8. registry._config_cache, shell_utils._USER_TMP, csv_cache._simvisdbutil_path 등 프로세스 전역 mutable 캐시에 리셋 훅이 없음 — 427개 테스트 스위트가 현재는 우회하며 동작 중이나 명시적 seam이 없는 상태. 이번 태스크는 registry._config_cache + config_action 캐시 무효화 문제만 범위로 하고, shell_utils/csv_cache의 다른 캐시는 별도 검토(범위 밖)."
+    },
+    {
+      "id": "F-163",
+      "title": "Verbosity: test_pure_helpers.py의 debug_snapshot 테스트 6개가 ~20줄 보일러플레이트를 반복",
+      "priority": 2,
+      "passes": false,
+      "acceptanceCriteria": [
+        "tests/test_pure_helpers.py:531-713의 debug_snapshot 관련 테스트 6개(mock 구성 + register + 호출 패턴이 거의 동일)를 pytest fixture(예: run_snapshot)로 공통화",
+        "각 테스트는 fixture를 호출해 케이스별 차이(입력값/기대값)만 표현하도록 축소",
+        "테스트 커버리지(assert 대상)는 리팩터 전과 동일하게 유지 — 케이스 삭제/축소 금지",
+        "pytest passes (테스트 개수 동일 또는 fixture 분리로 인한 변화만 허용, 기존 assert 로직 손실 없음)"
+      ],
+      "notes": "code-analyzer verbosity 리뷰(2026-07-02) High-Impact #1. ~120줄을 ~45줄로 축소 가능하다고 에이전트가 추정."
+    },
+    {
+      "id": "F-164",
+      "title": "Verbosity: tools/batch.py의 sim_batch_run/sim_regression이 dump_depth/sdf_corner/dump_scopes 검증을 거의 그대로 중복",
+      "priority": 2,
+      "passes": false,
+      "acceptanceCriteria": [
+        "src/xcelium_mcp/tools/batch.py의 sim_batch_run(93-117라인 근방)과 sim_regression(251-267라인 근방)에 중복된 dump_depth/sdf_corner/dump_scopes 검증 로직을 공용 함수 _validate_run_params()로 추출",
+        "추출한 함수는 검증 실패 시 에러 메시지 문자열을 반환(성공 시 None), 두 호출부 모두 동일한 패턴(if err: return err)으로 사용",
+        "변수명 충돌 회피용으로 붙어있던 _re_ds/_re_ds2, _valid_ds_values/_valid_ds_values2, _key_re/_key_re2 같은 접미사 중복 변수 제거",
+        "기존 에러 메시지 문구/포맷은 그대로 유지 (호출자 입장에서 동작 변화 없음)",
+        "pytest passes, 기존 batch.py 관련 테스트 모두 통과 + 필요시 _validate_run_params 자체에 대한 단위 테스트 추가"
+      ],
+      "notes": "code-analyzer verbosity 리뷰(2026-07-02) High-Impact #2. Claude가 직접 코드 확인 완료 — 두 함수의 검증 블록이 사실상 동일하며, 변수명까지 접미사(2)로만 구분한 상태라 두 곳이 따로 진화하며 검증 로직이 어긋날 sync-drift 위험이 실질적으로 있음."
+    },
+    {
+      "id": "F-165",
+      "title": "Verbosity: simvision_ops.py compare_simvision의 try/except BRIDGE_ERRORS 블록 3개가 거의 동일",
+      "priority": 3,
+      "passes": false,
+      "acceptanceCriteria": [
+        "src/xcelium_mcp/simvision_ops.py:581-607 compare_simvision 내 반복되는 try/except BRIDGE_ERRORS 블록 3개를 로컬 클로저(예: async def _try(cmd, errmsg))로 통합",
+        "각 호출부는 _try(...)를 호출하는 형태로 축소, 에러 메시지 문구는 기존과 동일하게 유지",
+        "pytest passes, compare_simvision 관련 기존 테스트 모두 통과"
+      ],
+      "notes": "code-analyzer verbosity 리뷰(2026-07-02) Medium #3."
+    },
+    {
+      "id": "F-166",
+      "title": "Verbosity: tcl_preprocessing.py의 read_setup_tcl이 _read_setup_tcl_sync를 그대로 감싸기만 하는 불필요한 래퍼",
+      "priority": 4,
+      "passes": false,
+      "acceptanceCriteria": [
+        "src/xcelium_mcp/tcl_preprocessing.py:70-76의 read_setup_tcl() 함수를 삭제",
+        "유일한 호출부인 batch_runner.py:729의 read_setup_tcl(runner, sim_dir) 호출을 _read_setup_tcl_sync(runner, sim_dir) 직접 호출로 변경(import도 함께 수정)",
+        "read_setup_tcl_async는 그대로 유지 (asyncio.to_thread로 _read_setup_tcl_sync를 감싸는 실질적 역할이 있음)",
+        "pytest passes, python -c 'import xcelium_mcp.server' 성공"
+      ],
+      "notes": "code-analyzer verbosity 리뷰(2026-07-02) Medium #4. Claude가 직접 확인 — read_setup_tcl은 죽은 코드는 아니고(batch_runner.py:729에서 호출) 있으나 마나 한 3중 레이어 래퍼."
+    },
+    {
+      "id": "F-167",
+      "title": "Verbosity: batch_runner.py의 dump-history scope 로딩 로직이 run_batch_single/run_batch_regression 사이 중복",
+      "priority": 3,
+      "passes": false,
+      "acceptanceCriteria": [
+        "src/xcelium_mcp/batch_runner.py:469-475와 811-822의 dump-history scope 로딩 중복 로직을 공용 헬퍼 _history_scopes()로 추출",
+        "두 호출부 모두 추출한 헬퍼를 사용하도록 변경, 기존 동작(반환값/부작용) 동일하게 유지",
+        "pytest passes, batch_runner 관련 기존 테스트(F-140/F-155/F-156 등) 모두 통과"
+      ],
+      "notes": "code-analyzer verbosity 리뷰(2026-07-02) Medium #5."
+    },
+    {
+      "id": "F-168",
+      "title": "Verbosity: 테스트 헬퍼 _make_inspect_tool 미재사용 + shell_run_with_retry 테스트 2개의 mock-wiring 6줄 중복",
+      "priority": 4,
+      "passes": false,
+      "acceptanceCriteria": [
+        "기존 _make_inspect_tool 헬퍼를 재사용하지 않고 있는 인근 테스트 4개를 조사해 해당 헬퍼를 사용하도록 리팩터 (헬퍼가 부족하면 확장)",
+        "shell_run_with_retry 관련 테스트 2개에서 중복된 6줄짜리 mock-wiring 블록을 공용 fixture/헬퍼로 추출",
+        "pytest passes, 테스트 assert 내용은 리팩터 전후 동일"
+      ],
+      "notes": "code-analyzer verbosity 리뷰(2026-07-02) Medium #6."
+    },
+    {
+      "id": "F-169",
+      "title": "Verbosity: registry.py의 _write_json이 어디서도 호출되지 않는 죽은 코드",
+      "priority": 4,
+      "passes": false,
+      "acceptanceCriteria": [
+        "src/xcelium_mcp/registry.py:129-131의 _write_json() 함수를 삭제 (실사용은 _write_json_sync만 존재)",
+        "삭제 전 grep으로 다른 호출부가 정말 없는지 재확인",
+        "pytest passes, python -c 'import xcelium_mcp.server' 성공"
+      ],
+      "notes": "code-analyzer verbosity 리뷰(2026-07-02) Low #7. Claude가 grep으로 직접 재확인 완료 — 자기 정의 외 호출부 없음."
+    },
+    {
+      "id": "F-170",
+      "title": "Verbosity: batch_polling.py의 watch_pid_and_poll이 미사용 pid 파라미터 + 2줄 본문에 과도한 docstring 보유",
+      "priority": 4,
+      "passes": false,
+      "acceptanceCriteria": [
+        "src/xcelium_mcp/batch_polling.py:51-73 watch_pid_and_poll()의 사용되지 않는 pid 파라미터를 제거(호출부도 함께 수정) — 단, 실제로 미사용인지 먼저 grep/코드 확인 필수",
+        "함수 본문(2줄) 대비 과도하게 긴 docstring을 함수가 실제로 하는 일에 맞게 축약",
+        "pytest passes"
+      ],
+      "notes": "code-analyzer verbosity 리뷰(2026-07-02) Low #8. 이 항목은 Claude가 직접 재확인하지 않았으므로, 구현 착수 시 pid 파라미터가 정말 미사용인지 먼저 확인할 것."
+    },
+    {
+      "id": "F-171",
+      "title": "Verbosity: batch_runner.py 702라인의 로컬 'import re as _re2'가 이미 모듈 상단(17라인)에 있는 'import re as _re'와 중복",
+      "priority": 4,
+      "passes": false,
+      "acceptanceCriteria": [
+        "src/xcelium_mcp/batch_runner.py:702의 'import re as _re2' 및 703라인 _re2 사용을 제거하고 모듈 상단의 _re를 사용하도록 변경",
+        "pytest passes, ruff check src/ clean"
+      ],
+      "notes": "code-analyzer verbosity 리뷰(2026-07-02) Low #9. Claude가 직접 확인 완료."
+    },
+    {
+      "id": "F-172",
+      "title": "Verbosity: debug_tools.py 76-98라인의 주석이 CLAUDE.md 컨벤션(WHAT 재서술 금지)을 위반",
+      "priority": 4,
+      "passes": false,
+      "acceptanceCriteria": [
+        "src/xcelium_mcp/debug_tools.py:76-98의 코드가 이미 하는 일을 그대로 재서술하는 주석들을 제거",
+        "WHY(숨은 제약/이유)를 설명하는 주석만 필요시 남기고, 나머지는 삭제",
+        "pytest passes, ruff check src/ clean"
+      ],
+      "notes": "code-analyzer verbosity 리뷰(2026-07-02) Low #10."
+    },
+    {
+      "id": "F-173",
+      "title": "Verbosity: registry.py의 _dot_get/_dot_delete가 parts[:-1] 순회 로직을 중복 구현",
+      "priority": 4,
+      "passes": false,
+      "acceptanceCriteria": [
+        "src/xcelium_mcp/registry.py:172-207의 _dot_get/_dot_delete(및 필요시 _dot_set)이 공유하는 dict 순회 로직을 공용 헬퍼로 추출하거나, 추출이 오히려 복잡도를 높인다면 현행 유지 사유를 notes에 기록",
+        "리팩터할 경우 pytest passes 및 기존 _dot_get/_dot_set/_dot_delete 테스트 모두 통과",
+        "리팩터하지 않기로 결정한 경우 prd.json notes에 판단 근거 기록"
+      ],
+      "notes": "code-analyzer verbosity 리뷰(2026-07-02) Low #11 (경미). 에이전트도 marginal이라고 평가 — 실제 구현 시 추출이 가독성을 해치면 스킵도 허용."
     }
   ]
 }
