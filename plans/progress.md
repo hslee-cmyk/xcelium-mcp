@@ -1,6 +1,25 @@
 
 ---
 
+## 2026-07-02 - F-145: 버그 수정 — compare_waveforms/compare_csv_diff SimTime 소수점 크래시
+
+### 배경
+F-144 조사 중 발견한, 독립적으로 재구현된 동일 버그. `simvision_ops.py`의 `_load_rows()`가 `csv_cache.py`의 `bisect_csv()`와 완전히 별도로 SimTime 파싱을 구현하면서 똑같이 `int(raw_time)`을 무방비로 호출 — `compare_waveforms` MCP tool(`compare_csv_diff` 경유)이 소수점 SimTime CSV에서 크래시.
+
+### 구현 내용
+- `simvision_ops.py`가 `csv_cache.py`의 `_parse_sim_time_ns()` 헬퍼를 import해 재사용 (F-144에서 만든 공용 헬퍼) — 코드 중복 없이 동일한 반올림/예외 정책 적용
+- `_load_rows()`의 `rows[int(raw_time)] = row` → `_parse_sim_time_ns()` + try/except로 교체, 파싱 실패 row는 skip
+- dict 키 타입은 원래도 int였고 지금도 int(반올림)라 `compare_csv_diff()`의 `set(rows_b) | set(rows_a)` 비교는 자연히 그대로 정합
+
+### 검증
+`tests/test_compare_csv_diff.py` 신규 작성 (4 tests) — `_load_rows` 소수점 SimTime 크래시 방지, 정수/소수점 CSV 간 키 타입 일치, `compare_csv_diff()` end-to-end(fake csv_cache로 extract mock) 크래시 방지 확인.
+`python -m pytest` 351 passed (347→351) / `python -m ruff check src/` all checks passed. `python -c "import xcelium_mcp.server"` 순환 임포트 없음 확인.
+
+### 남은 작업
+F-146(시간 문자열 정규식 3곳), F-147(deposit_signal 값 검증) — priority 2, 아직 미착수.
+
+---
+
 ## 2026-07-02 - F-144: 버그 수정 — bisect CSV 소수점 값 미지원
 
 ### 배경

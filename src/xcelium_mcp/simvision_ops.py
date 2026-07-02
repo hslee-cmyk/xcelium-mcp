@@ -14,6 +14,7 @@ from collections.abc import Callable, Coroutine
 from typing import Any
 
 from xcelium_mcp.bridge_manager import BridgeManager, scan_ready_files
+from xcelium_mcp.csv_cache import _parse_sim_time_ns
 from xcelium_mcp.discovery import resolve_sim_dir
 from xcelium_mcp.registry import load_sim_config
 from xcelium_mcp.shell_utils import (
@@ -398,7 +399,11 @@ def _load_rows(path: str) -> dict[int, dict]:
     with open(path, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             raw_time = row.get("SimTime") or row.get("time") or "0"
-            rows[int(raw_time)] = row
+            try:
+                ns = _parse_sim_time_ns(raw_time)
+            except ValueError:
+                continue  # unparseable SimTime — skip row rather than crash
+            rows[ns] = row
     return rows
 
 
