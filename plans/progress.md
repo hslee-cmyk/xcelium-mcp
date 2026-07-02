@@ -1,6 +1,26 @@
 
 ---
 
+## 2026-07-02 - F-152: 성능 개선 — batch_runner.py regression 결과 파싱 N+1 병렬화
+
+### 배경
+code-analyzer 에이전트의 광범위 코드 리뷰(Minor #6)에서 발견. `run_batch_regression`의 "Parse final results" 루프가 테스트당 4회(`test -f`, `ls -t` fallback, grep 2회) 순차 `shell_run` subprocess를 실행 — 대규모 regression에서 `4·N`회 순차 round-trip.
+
+### 구현 내용
+- 루프 본문을 `_collect_test_result(tn) -> (tn, results, err)` 코루틴으로 추출
+- `for tn, results, err in await asyncio.gather(*(_collect_test_result(t) for t in test_list))`로 전체 테스트를 동시 실행 — 각 코루틴은 자기 자신의 로컬 변수만 다루고 튜플을 반환, dict 쓰기는 gather 완료 후 메인 코루틴에서 순차 수행하므로 race condition 없음
+- shell_run 호출 내용/순서는 테스트별로 완전히 동일 — 병렬화만 적용, 로직 변경 없음
+
+### 검증
+`tests/test_regression_result_collection.py` 신규 작성 (2 tests) — 동시 실행 시 결과가 테스트끼리 뒤섞이지 않는지(각 테스트의 PASS/FAIL이 자기 이름에 정확히 매핑되는지), 한 테스트에 로그가 없어도 다른 테스트에 영향 없는지 확인. 이런 검증이 병렬화의 핵심 리스크(cross-test 데이터 오염)를 직접 겨냥함.
+기존 `tests/test_dump_history_stats.py`의 회귀 테스트(`shell_run` 전부 `""` 반환)도 그대로 통과 — 동작 동일성 확인.
+`python -m pytest` 423 passed (421→423) / `python -m ruff check src/` all checks passed.
+
+### 남은 작업
+F-153(discovery.py SDF 분석 N+1), F-154(cleanup_stale_csv mtime 휴리스틱) — priority 2/3, 아직 미착수.
+
+---
+
 ## 2026-07-02 - F-151: 보안 수정 — compare_simvision의 signals sanitize 누락 수정
 
 ### 배경

@@ -810,10 +810,9 @@ async def run_batch_regression(
 
     # Parse final results from per-test logs
     # For each test, find its log file — current ts first, then most recent
-    per_test_results: dict[str, list[str]] = {tn: [] for tn in test_list}
-    per_test_errors: dict[str, str] = {tn: "" for tn in test_list}
-    for tn in test_list:
-        # Try current ts first, then find most recent log for this test
+    # F-152: per-test log collection is independent (each test reads/greps its
+    # own log file only) — run concurrently instead of N sequential round-trips.
+    async def _collect_test_result(tn: str) -> tuple[str, list[str], str]:
         test_log_path = f"{user_tmp}/regression_{ts}_{tn}.log"
         log_exists = await shell_run(f"test -f {shell_quote(test_log_path)} && echo Y || echo N")
         if "Y" not in log_exists:
@@ -821,16 +820,23 @@ async def run_batch_regression(
             test_log_path = (await shell_run(
                 f"ls -t {user_tmp}/regression_*_{shell_quote(tn)}.log 2>/dev/null | head -1"
             )).strip()
-        if test_log_path:
-            result_lines = await shell_run(
-                f"(grep -E 'PASS|FAIL|Errors:|COMPLETE|\\$finish' {shell_quote(test_log_path)} || true) | tail -30"
-            )
-            per_test_results[tn] = result_lines.strip().splitlines() if result_lines.strip() else []
-            # Collect error lines for waveform-only tests (NO_VERDICT classification)
-            err_lines = await shell_run(
-                f"(grep -iE '\\*E |^Error:|fatal error|Segmentation' {shell_quote(test_log_path)} || true) | head -3"
-            )
-            per_test_errors[tn] = err_lines.strip()
+        if not test_log_path:
+            return tn, [], ""
+        result_lines = await shell_run(
+            f"(grep -E 'PASS|FAIL|Errors:|COMPLETE|\\$finish' {shell_quote(test_log_path)} || true) | tail -30"
+        )
+        results = result_lines.strip().splitlines() if result_lines.strip() else []
+        # Collect error lines for waveform-only tests (NO_VERDICT classification)
+        err_lines = await shell_run(
+            f"(grep -iE '\\*E |^Error:|fatal error|Segmentation' {shell_quote(test_log_path)} || true) | head -3"
+        )
+        return tn, results, err_lines.strip()
+
+    per_test_results: dict[str, list[str]] = {tn: [] for tn in test_list}
+    per_test_errors: dict[str, str] = {tn: "" for tn in test_list}
+    for tn, results, err in await asyncio.gather(*(_collect_test_result(t) for t in test_list)):
+        per_test_results[tn] = results
+        per_test_errors[tn] = err
 
     all_parts: list[str] = []
     pass_count = 0       # HAS_VERDICT: COMPLETE. Errors: 0
