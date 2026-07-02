@@ -37,7 +37,15 @@ Claude가 직접 코드 확인 완료: `sim_batch_run`(93-117라인)과 `sim_reg
 
 **검증**: `pytest` 467 passed(변화 없음), `ruff check src/` clean, `python -c 'import xcelium_mcp.server'` 성공, grep으로 다른 참조 없음 재확인.
 
-**남은 작업**: F-167(batch_runner.py dump-history scope 로딩 중복 제거)로 진행.
+### F-167: batch_runner.py — dump-history scope 로딩 로직이 run_batch_single/run_batch_regression 사이 중복
+
+`run_batch_single`(469-475라인)과 `run_batch_regression`의 per-test 루프(811-822라인)가 "use_dump_history이고 명시적 dump_scopes가 없으면 config의 dump_history에서 조회" 로직을 거의 그대로 중복.
+
+**구현**: `_update_dump_history` 바로 아래에 `_history_scopes(sim_dir, test_name) -> dict | None` 추출(설정 로드 실패 시 None 반환하는 기존 non-fatal 동작 유지, 빈 dict `{}` → `or None`으로 falsy 처리하는 동작도 동일하게 유지). 두 호출부 모두 `effective_*_scopes = await _history_scopes(sim_dir, test_name)`로 축소.
+
+**검증**: `tests/test_batch_helpers.py`에 `TestHistoryScopes` 5 tests 추가(기록된 scopes 반환/기록 없음/빈 dict/config 로드 실패/None config). `pytest` 472 passed(467→472), `ruff check src/` clean.
+
+**남은 작업**: F-168(테스트 헬퍼 재사용 + mock-wiring 중복 제거)로 진행.
 
 ### F-160 보류 (사용자 결정)
 code-analyzer 아키텍처 리뷰 Major #6(`BOUNDARY_SIGNALS` 프로젝트별 하드코딩)은 F-155~159와 달리 **순수 리팩터가 아니라 기본 동작을 바꾸는 breaking change**임을 재확인 — `_resolve_probe_signals`의 `dump_strategy.top_boundary` 미설정 시 폴백이 v5.1 backward-compat의 핵심 경로이자 venezia 프로젝트의 실사용 경로(`tests/test_dump_strategy.py`, `tests/test_hierarchical_dump.py`가 이 폴백을 명시적으로 테스트). 원안대로 "빈 리스트+에러"로 바꾸면 venezia의 `.mcp_sim_config.json`에 `top_boundary`가 먼저 마이그레이션돼 있지 않은 한 기존 `dump_depth="boundary"` 호출이 전부 깨짐. 사용자에게 확인 결과 **보류** 결정 — `plans/prd.json`에 `skip:true` + 결정 근거 기록, ralph-loop 자동 진행 대상에서 제외. 재개 시 마이그레이션 전략부터 별도 논의 필요.

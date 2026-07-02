@@ -763,3 +763,54 @@ def test_should_resume_empty_saved_list() -> None:
     """Explicitly empty test_list in job → treated as legacy → resume."""
     job = {"test_list": []}
     assert _should_resume_regression(job, ["TOP015"]) is True
+
+
+# ---------------------------------------------------------------------------
+# F-167: _history_scopes — dump-history scope lookup shared by
+# run_batch_single and run_batch_regression's per-test loop
+# ---------------------------------------------------------------------------
+
+class TestHistoryScopes:
+    @pytest.mark.asyncio
+    async def test_returns_recorded_scopes(self) -> None:
+        from xcelium_mcp.batch_runner import _history_scopes
+
+        cfg = {"dump_history": {"TOP015": {"dump_scopes": {"tb.dut": "all"}}}}
+        with patch("xcelium_mcp.batch_runner.load_sim_config", AsyncMock(return_value=cfg)):
+            result = await _history_scopes("/sim", "TOP015")
+        assert result == {"tb.dut": "all"}
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_no_history_entry(self) -> None:
+        from xcelium_mcp.batch_runner import _history_scopes
+
+        cfg = {"dump_history": {}}
+        with patch("xcelium_mcp.batch_runner.load_sim_config", AsyncMock(return_value=cfg)):
+            result = await _history_scopes("/sim", "TOP015")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_dump_scopes_empty_dict(self) -> None:
+        """An empty dump_scopes ({}) is falsy — treated the same as absent (`or None`)."""
+        from xcelium_mcp.batch_runner import _history_scopes
+
+        cfg = {"dump_history": {"TOP015": {"dump_scopes": {}}}}
+        with patch("xcelium_mcp.batch_runner.load_sim_config", AsyncMock(return_value=cfg)):
+            result = await _history_scopes("/sim", "TOP015")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_config_load_failure_returns_none(self) -> None:
+        from xcelium_mcp.batch_runner import _history_scopes
+
+        with patch("xcelium_mcp.batch_runner.load_sim_config", AsyncMock(side_effect=OSError("boom"))):
+            result = await _history_scopes("/sim", "TOP015")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_none_config_returns_none(self) -> None:
+        from xcelium_mcp.batch_runner import _history_scopes
+
+        with patch("xcelium_mcp.batch_runner.load_sim_config", AsyncMock(return_value=None)):
+            result = await _history_scopes("/sim", "TOP015")
+        assert result is None

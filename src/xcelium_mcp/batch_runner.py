@@ -433,6 +433,20 @@ async def _update_dump_history(
         pass  # dump_history write failure is non-fatal
 
 
+async def _history_scopes(sim_dir: str, test_name: str) -> dict | None:
+    """Look up dump_scopes previously recorded for test_name in dump_history.
+
+    Returns None if there's no history entry, or the config can't be read
+    (config load failure here is non-fatal — caller falls back to auto mode).
+    """
+    try:
+        config = await load_sim_config(sim_dir) or {}
+        history = config.get("dump_history", {})
+        return history.get(test_name, {}).get("dump_scopes") or None
+    except Exception:
+        return None
+
+
 async def run_batch_single(
     sim_dir: str,
     test_name: str,
@@ -467,12 +481,7 @@ async def run_batch_single(
     # Load dump_scopes from history if use_dump_history and no explicit scopes given
     effective_dump_scopes = dump_scopes
     if use_dump_history and effective_dump_scopes is None:
-        try:
-            config = await load_sim_config(sim_dir) or {}
-            history = config.get("dump_history", {})
-            effective_dump_scopes = history.get(test_name, {}).get("dump_scopes") or None
-        except Exception:
-            pass
+        effective_dump_scopes = await _history_scopes(sim_dir, test_name)
 
     # Load dump_strategy from config for hierarchical mode
     dump_strategy: dict | None = None
@@ -812,14 +821,7 @@ async def run_batch_regression(
                 # v5.2: resolve per-test dump_scopes (from history or param)
                 effective_test_scopes = dump_scopes
                 if use_dump_history and effective_test_scopes is None:
-                    try:
-                        cfg = await load_sim_config(sim_dir) or {}
-                        history = cfg.get("dump_history", {})
-                        effective_test_scopes = (
-                            history.get(test_name, {}).get("dump_scopes") or None
-                        )
-                    except Exception:
-                        pass
+                    effective_test_scopes = await _history_scopes(sim_dir, test_name)
 
                 preprocessed_tcl, test_dump_summary = await _preprocess_setup_tcl(
                     sim_dir, runner, test_name, effective_sim_mode,
