@@ -1,6 +1,6 @@
 {
   "version": "3.0",
-  "lastUpdated": "2026-07-02T00:00:00.000Z",
+  "lastUpdated": "2026-07-02T01:00:00.000Z",
   "activeFeatures": [
     "tools",
     "xcelium_mcp",
@@ -144,7 +144,7 @@
       },
       "timestamps": {
         "started": "2026-04-09T00:00:00.000Z",
-        "lastUpdated": "2026-07-02T00:00:00.000Z"
+        "lastUpdated": "2026-07-02T01:00:00.000Z"
       },
       "lastFile": "C:\\Users\\HSLEE\\Documents\\Todoc\\fpga\\xcelium-mcp\\docs\\04-report\\xcelium-mcp-v5.2-hierarchical-dump.report.md",
       "stateMachine": {
