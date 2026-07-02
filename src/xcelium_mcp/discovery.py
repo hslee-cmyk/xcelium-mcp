@@ -239,16 +239,23 @@ async def _analyze_sdf_annotate(
         for inc in includes.strip().splitlines():
             if inc:
                 search_files.append(f"{sim_dir}/*/{inc}")
-        for line in instances.strip().splitlines():
-            inst_mod = line.strip().split()[0] if line.strip() else ""
-            if inst_mod:
-                f = await shell_run(
-                    f"grep -rl 'module\\s\\+{inst_mod}\\b' {shell_quote(sim_dir)} "
-                    f"--include='*.v' --include='*.sv' | head -1",
-                    timeout=10,
-                )
-                if f.strip():
-                    search_files.append(f.strip())
+        # F-153: one grep per instance was sequential (N+1) — instance lookups
+        # are independent, so run them concurrently. gather() preserves input
+        # order, so search_files ends up in the same order as before.
+        inst_mods = [
+            line.strip().split()[0] for line in instances.strip().splitlines() if line.strip()
+        ]
+        inst_files = await asyncio.gather(*(
+            shell_run(
+                f"grep -rl 'module\\s\\+{inst_mod}\\b' {shell_quote(sim_dir)} "
+                f"--include='*.v' --include='*.sv' | head -1",
+                timeout=10,
+            )
+            for inst_mod in inst_mods
+        ))
+        for f in inst_files:
+            if f.strip():
+                search_files.append(f.strip())
 
         # 3d. search collected files
         if search_files:

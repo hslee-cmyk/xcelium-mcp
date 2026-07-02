@@ -1,6 +1,24 @@
 
 ---
 
+## 2026-07-02 - F-153: 성능 개선 — discovery.py SDF 분석 인스턴스별 N+1 grep 병렬화
+
+### 배경
+code-analyzer 에이전트의 광범위 코드 리뷰(Minor #7)에서 발견. `_analyze_sdf_annotate`의 Step 3b(인스턴스별 모듈 정의 파일 탐색)가 인스턴스마다 순차 `grep -rl` 호출 — top module 산하 인스턴스가 많을수록 `sim_discover` 지연.
+
+### 구현 내용
+- 인스턴스 모듈명 리스트를 먼저 추출한 뒤, 각각의 grep 호출을 `asyncio.gather`로 동시 실행 — `gather()`가 입력 순서를 보존하므로 `search_files` 최종 순서는 기존 순차 버전과 동일
+- Step 3a(includes/instances 추출)가 이미 같은 파일 내 `asyncio.gather` 패턴을 쓰고 있어 스타일 일관성 유지
+
+### 검증
+`tests/test_sdf_instance_lookup.py` 신규 작성 (2 tests, 이전엔 이 함수의 Step 3 로직 테스트가 전무했음) — 3개 인스턴스 중 2개만 파일로 resolve되는 케이스에서 `search_files`/`sdf_source_file` 매핑이 정확한 순서로 유지되는지(병렬화의 핵심 리스크), 전부 미발견 시 `has_sdf_annotate=False`로 정상 처리되는지 확인.
+`python -m pytest` 425 passed (423→425) / `python -m ruff check src/` all checks passed.
+
+### 남은 작업
+F-154(cleanup_stale_csv mtime 휴리스틱, priority 3) — 유일하게 남은 항목.
+
+---
+
 ## 2026-07-02 - F-152: 성능 개선 — batch_runner.py regression 결과 파싱 N+1 병렬화
 
 ### 배경
