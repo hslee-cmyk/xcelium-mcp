@@ -227,6 +227,35 @@ def validate_path(
     return None
 
 
+# F-150: validate_path() only guards filesystem safety (null bytes, '..'
+# traversal) — it does NOT block Tcl metacharacters. Any path interpolated
+# into a raw Tcl command string (bridge.execute(f"database open {path}"))
+# must go through this stricter allowlist instead.
+_TCL_SAFE_PATH_RE = re.compile(r'^[\w./-]+$')
+
+
+def validate_tcl_path(path: str, label: str = "path") -> str | None:
+    """Reject paths unsafe to interpolate into a raw Tcl command string.
+
+    Runs validate_path() first (null byte / '..' traversal), then applies an
+    allowlist charset check that rejects Tcl command-substitution/injection
+    characters ('[', ']', '$', ';', '{', '}', whitespace, quotes, backslash,
+    newline — none of which appear in a legitimate SHM/database path).
+
+    Returns:
+        Error string if the path is invalid, or None if it is safe.
+    """
+    err = validate_path(path, label)
+    if err:
+        return err
+    if not _TCL_SAFE_PATH_RE.fullmatch(path):
+        return (
+            f"ERROR: {label} contains characters unsafe for Tcl interpolation: {path!r}. "
+            "Only alphanumeric, '.', '/', '-', '_' allowed."
+        )
+    return None
+
+
 def sanitize_signal_name(name: str) -> str:
     """Sanitize a signal name for safe Tcl command interpolation.
 

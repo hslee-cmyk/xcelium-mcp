@@ -26,7 +26,7 @@ from xcelium_mcp.shell_utils import (
     login_shell_cmd,
     shell_quote,
     shell_run,
-    validate_path,
+    validate_tcl_path,
 )
 from xcelium_mcp.sim_env_detection import detect_vnc_display
 from xcelium_mcp.tcl_bridge import BRIDGE_ERRORS, TclBridge, TclError
@@ -41,7 +41,7 @@ _DISPLAY_RE = re.compile(r'^:?[0-9]+(\.[0-9]+)?$')
 
 async def open_database(bridges: BridgeManager, shm_path: str, name: str = "") -> str:
     """Open SHM database. Uses correct syntax based on bridge type."""
-    err = validate_path(shm_path, "shm_path")
+    err = validate_tcl_path(shm_path, "shm_path")
     if err:
         return err
     # SimVision bridge first
@@ -553,6 +553,11 @@ async def compare_simvision(
     bridge = bridges.simvision
 
     # 5. Open shm_after as second database (SimVision syntax)
+    # F-150: shm_after reaches raw Tcl interpolation — the caller's validate_path()
+    # (compare_waveforms) doesn't block Tcl metachars, so validate again here.
+    err = validate_tcl_path(shm_after, "shm_after")
+    if err:
+        return err
     try:
         await bridge.execute(
             f'database open {shm_after} -name cmp_after',

@@ -1,6 +1,25 @@
 
 ---
 
+## 2026-07-02 - F-150: 보안 수정 — Tcl-safe path validator 신설 (open_database/compare_simvision)
+
+### 배경
+code-analyzer 에이전트의 광범위 코드 리뷰(Major #3)에서 발견. `validate_path`는 파일시스템 안전성(null byte, `..` traversal)만 보장하고 Tcl 메타문자(`[`, `]`, `$` 등)는 걸러내지 않는데, 이 함수가 Tcl로 넘어가는 SHM 경로(`open_database`, `compare_simvision`)의 유일한 검증이었음. F-149(reload_waveform)가 재사용할 공용 헬퍼가 필요해 순서를 바꿔 F-150을 먼저 구현.
+
+### 구현 내용
+- `shell_utils.py`에 `validate_tcl_path(path, label)` 신설 — `validate_path()`를 먼저 호출(null byte/traversal 위임)한 뒤, allowlist 정규식(`^[\w./-]+$`)으로 Tcl 메타문자·공백·개행·따옴표·백슬래시를 전부 거부
+- `simvision_ops.py open_database()`: `validate_path` → `validate_tcl_path`로 교체 (함수 진입부 1곳 — `name_opt`/`xmsim fallback` 등 하위 사용처는 같은 `shm_path` 변수를 그대로 쓰므로 자동으로 커버됨)
+- `simvision_ops.py compare_simvision()`: `shm_after`가 Tcl `database open`에 도달하기 직전에 `validate_tcl_path` 신규 추가 (기존엔 검증이 전혀 없었음 — 호출부 `compare_waveforms`의 `validate_path`는 Tcl 메타문자를 못 거름)
+
+### 검증
+`tests/test_validate_tcl_path.py` 신규 작성 (20 tests) — `validate_tcl_path` 단위 테스트(정상 경로, injection payload 9종, validate_path 위임 확인), `open_database`/`compare_simvision` end-to-end 통합 테스트(injection 시 bridge.execute 미호출 확인). `compare_simvision`은 VNC/launch/bridge-ready 폴링 전체를 mock(asyncio.sleep 포함)해 무거운 셋업 없이 검증.
+`python -m pytest` 416 passed (396→416) / `python -m ruff check src/` all checks passed.
+
+### 남은 작업
+F-149(reload_waveform — 이 헬퍼 재사용 예정), F-151(compare_simvision의 signals sanitize 누락) — priority 1, 아직 미착수.
+
+---
+
 ## 2026-07-02 - F-148: 보안 수정 — sanitize_signal_name 개행문자 미차단 (Tcl 명령 스머글링)
 
 ### 배경
