@@ -1,6 +1,28 @@
 
 ---
 
+## 2026-07-02 - F-156: 아키텍처 리팩터 — job-resume 로직 중복(parse_existing_job vs run_batch_regression) 통합
+
+### 배경
+code-analyzer 아키텍처 리뷰(2026-07-02, Major #2). `parse_existing_job()`(단일 테스트 resume)과 `run_batch_regression()`의 인라인 resume 블록이 `cat job_file → json.loads → kill -0 → ALIVE/DEAD` 시퀀스를 각자 따로 구현하고 있었음.
+
+### 설계 결정 — 부분 통합(원안에서 스코프 조정)
+당초 "match predicate를 파라미터화해 완전 통합"을 acceptance criteria로 썼으나, 실제 코드를 보니 두 함수의 **반환 형태 자체가 다름**: `parse_existing_job`은 "이 테스트 하나의 최종 결과 문자열"을 반환하고, regression 쪽은 "이미 완료된 테스트 목록 + log_file/ts 조정값"을 반환 — resume 판단 후의 처리(단일 결과 반환 vs 리스트 갱신)가 근본적으로 다른 반환 계약이라 억지로 하나의 함수로 합치면 오히려 가독성이 떨어짐. 대신 **진짜 중복된 부분만** — read+parse+PID-alive-check — `_read_job_status(job_file) -> tuple[dict, bool] | None`로 추출하고, 그 이후의 resume 판단/처리 로직은 각 caller에 그대로 유지. `_kill_stale_sim`은 애초에 이미 공유되고 있었음(변경 없음).
+
+### 구현 내용
+- `_read_job_status()` 신설 — `parse_existing_job` 직전에 배치
+- `parse_existing_job()`과 `run_batch_regression()`의 인라인 resume 블록 둘 다 `_read_job_status()` 호출로 교체, 이후 판단 로직은 그대로 유지
+- shell_run 호출 시퀀스/횟수는 기존과 완전히 동일 — 순수 리팩터
+
+### 검증
+`tests/test_batch_helpers.py`에 `_read_job_status` 직접 테스트 5개 추가(파일 없음/invalid JSON/alive/dead/PID=0가 kill -0 호출 없이 dead 처리되는지). 기존 `parse_existing_job` 테스트 전부(9개) 회귀 없이 통과.
+`python -m pytest` 447 passed(442→447) / `python -m ruff check src/` all checks passed.
+
+### 남은 작업
+F-157(`launch_nohup_job` regression 경로 재사용), F-158~160, F-162 — 미착수.
+
+---
+
 ## 2026-07-02 - F-155: 아키텍처 리팩터 — run_batch_regression에서 순수 로직(verdict 분류/dump_stats 집계) 추출
 
 ### 배경

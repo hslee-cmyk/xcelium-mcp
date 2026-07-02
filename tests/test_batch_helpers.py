@@ -16,6 +16,7 @@ import pytest
 
 from xcelium_mcp.batch_polling import watch_pid_and_poll
 from xcelium_mcp.batch_runner import (
+    _read_job_status,
     _resolve_exec_cmd,
     _should_resume_regression,
     build_batch_cmd,
@@ -201,6 +202,64 @@ async def test_parse_existing_job_zero_pid() -> None:
         ]
         result = await parse_existing_job("/tmp/batch_job.json", timeout=600)
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: _read_job_status (F-156 — shared read+parse+PID-check prefix
+# extracted from parse_existing_job / run_batch_regression's inline resume)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_read_job_status_no_file_returns_none() -> None:
+    with patch("xcelium_mcp.batch_runner.shell_run", new_callable=AsyncMock) as mock_ssh:
+        mock_ssh.return_value = ""
+        result = await _read_job_status("/tmp/batch_job.json")
+        assert result is None
+
+
+@pytest.mark.asyncio
+async def test_read_job_status_invalid_json_returns_none() -> None:
+    with patch("xcelium_mcp.batch_runner.shell_run", new_callable=AsyncMock) as mock_ssh:
+        mock_ssh.return_value = "not-valid-json"
+        result = await _read_job_status("/tmp/batch_job.json")
+        assert result is None
+
+
+@pytest.mark.asyncio
+async def test_read_job_status_alive_pid() -> None:
+    job_json = json.dumps({"pid": 99, "test_name": "T1"})
+    with patch("xcelium_mcp.batch_runner.shell_run", new_callable=AsyncMock) as mock_ssh:
+        mock_ssh.side_effect = [job_json, "ALIVE"]
+        result = await _read_job_status("/tmp/batch_job.json")
+        assert result is not None
+        job, is_alive = result
+        assert job == {"pid": 99, "test_name": "T1"}
+        assert is_alive is True
+
+
+@pytest.mark.asyncio
+async def test_read_job_status_dead_pid() -> None:
+    job_json = json.dumps({"pid": 99, "test_name": "T1"})
+    with patch("xcelium_mcp.batch_runner.shell_run", new_callable=AsyncMock) as mock_ssh:
+        mock_ssh.side_effect = [job_json, "DEAD"]
+        result = await _read_job_status("/tmp/batch_job.json")
+        assert result is not None
+        job, is_alive = result
+        assert is_alive is False
+
+
+@pytest.mark.asyncio
+async def test_read_job_status_zero_pid_is_dead_without_kill_check() -> None:
+    """PID=0 must be treated as dead WITHOUT calling kill -0 (own process group)."""
+    job_json = json.dumps({"pid": 0, "test_name": "T1"})
+    with patch("xcelium_mcp.batch_runner.shell_run", new_callable=AsyncMock) as mock_ssh:
+        mock_ssh.side_effect = [job_json]  # only the cat call — no kill -0 call
+        result = await _read_job_status("/tmp/batch_job.json")
+        assert result is not None
+        _job, is_alive = result
+        assert is_alive is False
+        assert mock_ssh.call_count == 1
 
 
 # ---------------------------------------------------------------------------

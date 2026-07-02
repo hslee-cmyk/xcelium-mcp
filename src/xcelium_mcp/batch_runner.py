@@ -145,6 +145,35 @@ async def _kill_stale_sim(pid: int, test_name: str = "") -> None:
         await shell_run(f"pkill -f 'xmsim.*{shell_quote(test_name)}' 2>/dev/null || true", timeout=5)
 
 
+async def _read_job_status(job_file: str) -> tuple[dict, bool] | None:
+    """Read a batch/regression job file and check whether its PID is alive.
+
+    F-156: this read+parse+PID-check prefix was duplicated between
+    parse_existing_job() and run_batch_regression()'s inline resume block.
+    Their resume DECISIONS (single-test result vs. regression completed_tests
+    list) differ enough in return shape/semantics that unifying past this
+    point would force an artificial common interface — this helper captures
+    exactly the shared, mechanical part.
+
+    Returns (job_dict, is_alive), or None if no valid job file exists /
+    the file content isn't valid JSON.
+    """
+    existing_job = await shell_run(f"cat {job_file} || true")
+    if not existing_job.strip():
+        return None
+    try:
+        job = json.loads(existing_job)
+    except (json.JSONDecodeError, KeyError):
+        return None
+    pid = job.get("pid", 0)
+    # Guard: pid must be > 0 (kill -0 0 signals own process group → always ALIVE)
+    if pid > 0:
+        pid_alive = await shell_run(f"(kill -0 {pid}) && echo ALIVE || echo DEAD")
+    else:
+        pid_alive = "DEAD"
+    return job, "ALIVE" in pid_alive
+
+
 async def parse_existing_job(job_file: str, timeout: int, test_name: str = "") -> str | None:
     """Check for an existing batch job file and resume if the process is alive.
 
@@ -161,20 +190,15 @@ async def parse_existing_job(job_file: str, timeout: int, test_name: str = "") -
     Returns:
         Result string if an alive job was resumed, None otherwise.
     """
-    existing_job = await shell_run(f"cat {job_file} || true")
-    if not existing_job.strip():
+    status = await _read_job_status(job_file)
+    if status is None:
         return None
     try:
-        job = json.loads(existing_job)
+        job, is_alive = status
         pid = job.get("pid", 0)
-        # Guard: pid must be > 0 (kill -0 0 signals own process group → always ALIVE)
-        if pid > 0:
-            pid_alive = await shell_run(f"(kill -0 {pid}) && echo ALIVE || echo DEAD")
-        else:
-            pid_alive = "DEAD"
         saved_test = job.get("test_name", "")
         saved_log = job.get("log_file", "")
-        if "ALIVE" in pid_alive:
+        if is_alive:
             if not test_name or not saved_test or saved_test == test_name:
                 # Same test, still running → resume polling
                 result, _ = await poll_batch_log(
@@ -699,21 +723,15 @@ async def run_batch_regression(
         setup_lines = extract_setup_lines(raw_tcl)
 
     # Check for existing regression job (reconnection scenario)
+    # F-156: read+parse+PID-check shared with parse_existing_job() via _read_job_status()
     completed_tests: list[str] = []
-    existing_job = await shell_run(f"cat {job_file} || true")
-    if existing_job.strip():
+    status = await _read_job_status(job_file)
+    if status is not None:
         try:
-            job = json.loads(existing_job)
+            job, is_alive = status
             if job.get("type") == "regression":
                 pid = job.get("pid", 0)
-                # Guard: pid must be > 0 (kill -0 0 signals own process group → always ALIVE)
-                if pid > 0:
-                    pid_alive = await shell_run(
-                        f"(kill -0 {pid}) && echo ALIVE || echo DEAD"
-                    )
-                else:
-                    pid_alive = "DEAD"
-                if "ALIVE" in pid_alive:
+                if is_alive:
                     if _should_resume_regression(job, test_list):
                         # Same test_list → resume polling
                         current = job.get("current", "")
