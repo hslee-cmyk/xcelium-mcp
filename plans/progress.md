@@ -79,7 +79,15 @@ grep으로 재확인 결과 자기 정의 외 호출부 전혀 없음(`_write_js
 
 **검증**: `pytest` 472 passed(변화 없음), `ruff check src/` clean.
 
-**남은 작업**: F-172(debug_tools.py 주석 컨벤션 위반 정리)로 진행.
+### F-172: debug_tools.py — 코드를 그대로 재서술하는 주석들이 CLAUDE.md 컨벤션 위반
+
+`generate_debug_tcl_content()`의 `# Validate shm_path`, `# Sanitize signals`, `# Open SHM waveform`, `# Add debug signals`, `# Zoom to bug region`, `# Main cursor at bug time`, `# Named markers`, `# AI context note` 등이 바로 다음 코드가 이미 하는 일을 그대로 재서술하고 있었음 — CLAUDE.md의 "WHAT을 설명하는 주석 금지" 컨벤션 위반. 주의: `lines.append("# Add debug signals")` 같은 문자열 리터럴은 **생성되는 Tcl 파일에 실제로 출력될 내용**(사용자가 나중에 SimVision에서 보는 주석)이라 이건 건드리지 않음 — 삭제 대상은 Python 소스 레벨 `#` 주석만.
+
+**구현**: 위 파이썬 소스 주석 8곳 삭제(생성 콘텐츠 문자열은 전혀 변경 없음). PRD 원 범위는 76-98라인이었으나, 같은 함수 내 101/110 근방의 동일 패턴(재서술 주석)도 일관성을 위해 함께 정리.
+
+**검증**: `pytest` 472 passed(변화 없음, 생성 Tcl 콘텐츠 문자열은 그대로라 출력 동일), `ruff check src/` clean.
+
+**남은 작업**: F-173(registry.py `_dot_get`/`_dot_delete` 중복 로직 검토)로 진행.
 
 ### F-160 보류 (사용자 결정)
 code-analyzer 아키텍처 리뷰 Major #6(`BOUNDARY_SIGNALS` 프로젝트별 하드코딩)은 F-155~159와 달리 **순수 리팩터가 아니라 기본 동작을 바꾸는 breaking change**임을 재확인 — `_resolve_probe_signals`의 `dump_strategy.top_boundary` 미설정 시 폴백이 v5.1 backward-compat의 핵심 경로이자 venezia 프로젝트의 실사용 경로(`tests/test_dump_strategy.py`, `tests/test_hierarchical_dump.py`가 이 폴백을 명시적으로 테스트). 원안대로 "빈 리스트+에러"로 바꾸면 venezia의 `.mcp_sim_config.json`에 `top_boundary`가 먼저 마이그레이션돼 있지 않은 한 기존 `dump_depth="boundary"` 호출이 전부 깨짐. 사용자에게 확인 결과 **보류** 결정 — `plans/prd.json`에 `skip:true` + 결정 근거 기록, ralph-loop 자동 진행 대상에서 제외. 재개 시 마이그레이션 전략부터 별도 논의 필요.
