@@ -1,11 +1,12 @@
 {
-  "version": "2.0",
-  "lastUpdated": "2026-04-22T04:02:55.930Z",
+  "version": "3.0",
+  "lastUpdated": "2026-07-02T00:00:00.000Z",
   "activeFeatures": [
     "tools",
     "xcelium_mcp",
     ".claude",
-    "tests"
+    "tests",
+    "xcelium-mcp-v5.2-hierarchical-dump"
   ],
   "primaryFeature": "tools",
   "features": {
@@ -20,7 +21,24 @@
         "started": "2026-04-10T04:12:44.863Z",
         "lastUpdated": "2026-04-22T04:00:36.094Z"
       },
-      "lastFile": "C:\\Users\\HSLEE\\Documents\\Todoc\\fpga\\xcelium-mcp\\src\\xcelium_mcp\\tools\\debug.py"
+      "lastFile": "C:\\Users\\HSLEE\\Documents\\Todoc\\fpga\\xcelium-mcp\\src\\xcelium_mcp\\tools\\debug.py",
+      "stateMachine": {
+        "currentState": "do",
+        "previousState": null,
+        "stateHistory": [],
+        "retryCount": 0,
+        "maxRetries": 5,
+        "circuitBreakerOpen": false
+      },
+      "metrics": {
+        "qualityScore": null,
+        "conventionCompliance": null,
+        "apiCompliance": null,
+        "cycleTimeMs": null,
+        "iterationEfficiency": null
+      },
+      "phaseTimestamps": {},
+      "automationLevel": 2
     },
     "xcelium_mcp": {
       "phase": "do",
@@ -33,7 +51,24 @@
         "started": "2026-04-10T04:14:20.513Z",
         "lastUpdated": "2026-04-22T04:02:55.929Z"
       },
-      "lastFile": "C:\\Users\\HSLEE\\Documents\\Todoc\\fpga\\xcelium-mcp\\src\\xcelium_mcp\\csv_cache.py"
+      "lastFile": "C:\\Users\\HSLEE\\Documents\\Todoc\\fpga\\xcelium-mcp\\src\\xcelium_mcp\\csv_cache.py",
+      "stateMachine": {
+        "currentState": "do",
+        "previousState": null,
+        "stateHistory": [],
+        "retryCount": 0,
+        "maxRetries": 5,
+        "circuitBreakerOpen": false
+      },
+      "metrics": {
+        "qualityScore": null,
+        "conventionCompliance": null,
+        "apiCompliance": null,
+        "cycleTimeMs": null,
+        "iterationEfficiency": null
+      },
+      "phaseTimestamps": {},
+      "automationLevel": 2
     },
     ".claude": {
       "phase": "do",
@@ -46,7 +81,24 @@
         "started": "2026-04-10T04:24:41.562Z",
         "lastUpdated": "2026-04-15T08:37:33.200Z"
       },
-      "lastFile": "C:\\Users\\HSLEE\\.claude\\statusline-command.sh"
+      "lastFile": "C:\\Users\\HSLEE\\.claude\\statusline-command.sh",
+      "stateMachine": {
+        "currentState": "do",
+        "previousState": null,
+        "stateHistory": [],
+        "retryCount": 0,
+        "maxRetries": 5,
+        "circuitBreakerOpen": false
+      },
+      "metrics": {
+        "qualityScore": null,
+        "conventionCompliance": null,
+        "apiCompliance": null,
+        "cycleTimeMs": null,
+        "iterationEfficiency": null
+      },
+      "phaseTimestamps": {},
+      "automationLevel": 2
     },
     "tests": {
       "phase": "do",
@@ -59,7 +111,59 @@
         "started": "2026-04-10T08:31:01.136Z",
         "lastUpdated": "2026-04-22T04:01:59.367Z"
       },
-      "lastFile": "C:\\Users\\HSLEE\\Documents\\Todoc\\fpga\\xcelium-mcp\\tests\\test_f136_f137.py"
+      "lastFile": "C:\\Users\\HSLEE\\Documents\\Todoc\\fpga\\xcelium-mcp\\tests\\test_f136_f137.py",
+      "stateMachine": {
+        "currentState": "do",
+        "previousState": null,
+        "stateHistory": [],
+        "retryCount": 0,
+        "maxRetries": 5,
+        "circuitBreakerOpen": false
+      },
+      "metrics": {
+        "qualityScore": null,
+        "conventionCompliance": null,
+        "apiCompliance": null,
+        "cycleTimeMs": null,
+        "iterationEfficiency": null
+      },
+      "phaseTimestamps": {},
+      "automationLevel": 2
+    },
+    "xcelium-mcp-v5.2-hierarchical-dump": {
+      "phase": "completed",
+      "phaseNumber": 9,
+      "matchRate": 93,
+      "iterationCount": 0,
+      "requirements": [],
+      "documents": {
+        "plan": "docs/01-plan/features/xcelium-mcp-v5.2-hierarchical-dump.plan.md",
+        "design": "docs/02-design/features/xcelium-mcp-v5.2-hierarchical-dump.design.md",
+        "analysis": "docs/03-analysis/xcelium-mcp-v5.2-hierarchical-dump.analysis.md",
+        "report": "docs/04-report/xcelium-mcp-v5.2-hierarchical-dump.report.md"
+      },
+      "timestamps": {
+        "started": "2026-04-09T00:00:00.000Z",
+        "lastUpdated": "2026-07-02T00:00:00.000Z"
+      },
+      "lastFile": "C:\\Users\\HSLEE\\Documents\\Todoc\\fpga\\xcelium-mcp\\docs\\04-report\\xcelium-mcp-v5.2-hierarchical-dump.report.md",
+      "stateMachine": {
+        "currentState": "completed",
+        "previousState": "check",
+        "stateHistory": [],
+        "retryCount": 0,
+        "maxRetries": 5,
+        "circuitBreakerOpen": false
+      },
+      "metrics": {
+        "qualityScore": null,
+        "conventionCompliance": null,
+        "apiCompliance": null,
+        "cycleTimeMs": null,
+        "iterationEfficiency": null
+      },
+      "phaseTimestamps": {},
+      "automationLevel": 2
     }
   },
   "pipeline": {
@@ -70,7 +174,7 @@
   "session": {
     "startedAt": "2026-04-10T04:10:48.003Z",
     "onboardingCompleted": false,
-    "lastActivity": "2026-04-22T04:02:55.930Z"
+    "lastActivity": "2026-06-29T02:41:05.274Z"
   },
   "history": [
     {
@@ -3679,5 +3783,21 @@
       "phase": "do",
       "action": "updated"
     }
-  ]
+  ],
+  "stateMachine": {
+    "defaultWorkflow": "default",
+    "activeWorkflows": {},
+    "totalTransitions": 0
+  },
+  "automation": {
+    "globalLevel": 2,
+    "trustScore": 38,
+    "pendingApprovals": 0,
+    "lastGateResult": null
+  },
+  "team": {
+    "enabled": true,
+    "stateFile": ".bkit/runtime/agent-state.json",
+    "eventsFile": ".bkit/runtime/agent-events.jsonl"
+  }
 }
