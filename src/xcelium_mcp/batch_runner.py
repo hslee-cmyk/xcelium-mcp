@@ -708,8 +708,7 @@ async def run_batch_regression(
 
     def _extract_ts_from_log(lf: str) -> int:
         """Extract timestamp from log filename: /tmp/.../regression_12345.log → 12345."""
-        import re as _re2
-        m = _re2.search(r'regression_(\d+)\.log', lf)
+        m = _re.search(r'regression_(\d+)\.log', lf)
         return int(m.group(1)) if m else ts
 
     # v4.1: resolve sim_mode/extra_args for regression

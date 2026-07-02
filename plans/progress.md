@@ -71,7 +71,15 @@ grep으로 재확인 결과 자기 정의 외 호출부 전혀 없음(`_write_js
 
 **검증**: `pytest` 472 passed(변화 없음), `ruff check src/` clean, `python -c 'import xcelium_mcp.server'` 성공.
 
-**남은 작업**: F-171(batch_runner.py 중복 `import re` 제거)로 진행.
+### F-171: batch_runner.py의 중복 'import re as _re2' 제거
+
+모듈이 이미 17라인에서 `import re as _re`를 하는데, `_extract_ts_from_log` 내부(구 711라인)에서 로컬로 `import re as _re2`를 또 하고 있었음.
+
+**구현**: 로컬 import 삭제, `_re2.search(...)` → `_re.search(...)`로 변경(모듈 상단 `_re` 재사용).
+
+**검증**: `pytest` 472 passed(변화 없음), `ruff check src/` clean.
+
+**남은 작업**: F-172(debug_tools.py 주석 컨벤션 위반 정리)로 진행.
 
 ### F-160 보류 (사용자 결정)
 code-analyzer 아키텍처 리뷰 Major #6(`BOUNDARY_SIGNALS` 프로젝트별 하드코딩)은 F-155~159와 달리 **순수 리팩터가 아니라 기본 동작을 바꾸는 breaking change**임을 재확인 — `_resolve_probe_signals`의 `dump_strategy.top_boundary` 미설정 시 폴백이 v5.1 backward-compat의 핵심 경로이자 venezia 프로젝트의 실사용 경로(`tests/test_dump_strategy.py`, `tests/test_hierarchical_dump.py`가 이 폴백을 명시적으로 테스트). 원안대로 "빈 리스트+에러"로 바꾸면 venezia의 `.mcp_sim_config.json`에 `top_boundary`가 먼저 마이그레이션돼 있지 않은 한 기존 `dump_depth="boundary"` 호출이 전부 깨짐. 사용자에게 확인 결과 **보류** 결정 — `plans/prd.json`에 `skip:true` + 결정 근거 기록, ralph-loop 자동 진행 대상에서 제외. 재개 시 마이그레이션 전략부터 별도 논의 필요.
