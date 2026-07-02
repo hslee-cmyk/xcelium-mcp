@@ -1,6 +1,22 @@
 
 ---
 
+## 2026-07-02 - F-143: v5.2 gap-fix (Minor M4) — _update_dump_history load_sim_config force=True
+
+### 배경
+`docs/03-analysis/xcelium-mcp-v5.2-hierarchical-dump.analysis.md` (2026-07-02 재분석) Minor M4.
+`_update_dump_history`가 `load_sim_config(sim_dir)`을 `force=True` 없이 호출 — design.md §7 pseudocode는 `force=True`를 사용. 기존엔 `save_sim_config`의 캐시 무효화에 의존해 순차 regression 루프 안에서는 문제없었지만, 다른 프로세스/세션이 동시에 config를 갱신한 경우 stale 캐시를 읽을 이론적 가능성이 있었음.
+
+### 구현 내용
+- `batch_runner.py` `_update_dump_history()`: `load_sim_config(sim_dir)` → `load_sim_config(sim_dir, force=True)` — design.md §7 스펙과 일치
+- `tests/test_dump_history_stats.py`: `test_update_dump_history_loads_config_with_force` 신규 추가 — `load_sim_config`가 `force=True`로 호출되는지 mock assertion으로 검증
+
+### 검증
+`python -m pytest` 326 passed (325→326, 신규 1개), 0 warnings / `python -m ruff check src/` all checks passed.
+`run_batch_regression` per-test 루프에서의 반복 호출도 순차 실행이라 회귀 없음 — `test_regression_updates_dump_history_and_dump_stats_shape`가 `_update_dump_history` 자체를 mock하므로 이번 변경의 영향을 받지 않고 그대로 통과.
+
+---
+
 ## 2026-07-02 - F-142: v5.2 gap-fix (Minor M2) — datetime.utcnow() deprecation 해소
 
 ### 배경

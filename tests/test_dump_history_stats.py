@@ -74,6 +74,18 @@ async def test_update_dump_history_writes_last_dump_summary_schema() -> None:
 
 
 @pytest.mark.asyncio
+async def test_update_dump_history_loads_config_with_force() -> None:
+    """load_sim_config is called with force=True (F-143) — bypass stale cache before writing history."""
+    with (
+        patch("xcelium_mcp.batch_runner.load_sim_config", new_callable=AsyncMock, return_value={}) as mock_load,
+        patch("xcelium_mcp.batch_runner.save_sim_config", new_callable=AsyncMock),
+    ):
+        await _update_dump_history("/sim", "T1", {"total_signals": 5}, None)
+
+    mock_load.assert_called_once_with("/sim", force=True)
+
+
+@pytest.mark.asyncio
 async def test_update_dump_history_defaults_dump_scopes_to_empty_dict() -> None:
     """dump_scopes=None persists as {} (existing read path expects a dict)."""
     saved_config: dict = {}

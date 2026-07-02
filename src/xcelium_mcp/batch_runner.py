@@ -388,7 +388,7 @@ async def _update_dump_history(
 ) -> None:
     """Persist dump_summary and effective dump_scopes into the sim config dump_history."""
     try:
-        config = await load_sim_config(sim_dir) or {}
+        config = await load_sim_config(sim_dir, force=True) or {}
         history = config.setdefault("dump_history", {})
         history[test_name] = {
             "last_dump_summary": {
