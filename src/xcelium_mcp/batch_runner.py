@@ -524,6 +524,111 @@ def _should_resume_regression(job: dict, test_list: list[str]) -> bool:
     return not saved_list or set(saved_list) == set(test_list)
 
 
+def classify_regression_results(
+    test_list: list[str],
+    per_test_results: dict[str, list[str]],
+    per_test_errors: dict[str, str],
+    log_file: str,
+) -> str:
+    """5-way classify each test's collected log lines and build the summary log string.
+
+    F-155: extracted from run_batch_regression's tail — pure function, no I/O,
+    directly unit-testable without mocking shell_run/the regression pipeline.
+
+    Classification (per test):
+      (1) HAS_VERDICT: "COMPLETE. Errors: 0" -> pass
+      (2) HAS_VERDICT: "COMPLETE. Errors: N>0", or "FAIL" without COMPLETE -> fail
+      (3) NO_VERDICT: "$finish" reached, no error lines -> complete (waveform-only)
+      (4) NO_VERDICT: "$finish" reached, with error lines -> error
+      (5) NO_VERDICT: no "$finish" (timeout/crash) -> error
+    """
+    all_parts: list[str] = []
+    pass_count = 0       # HAS_VERDICT: COMPLETE. Errors: 0
+    fail_count = 0       # HAS_VERDICT: COMPLETE. Errors: N>0, or FAIL without COMPLETE
+    complete_count = 0   # NO_VERDICT: $finish + no errors
+    error_count = 0      # NO_VERDICT: $finish + errors, or no $finish (timeout/crash)
+    check_pass = 0       # check-level substring count
+    check_fail = 0       # check-level substring count
+    for tn in test_list:
+        t_raw = "\n".join(per_test_results[tn])
+        all_parts.append(f"=== {tn} ===\n{t_raw}")
+        # 5-way classification
+        m = _COMPLETE_RE.search(t_raw)
+        if m:
+            # (1) HAS_VERDICT: COMPLETE. Errors: N
+            if int(m.group(1)) == 0:
+                pass_count += 1
+            else:
+                fail_count += 1
+        elif "FAIL" in t_raw:
+            # (2) HAS_VERDICT: crash/abort with FAIL but no COMPLETE
+            fail_count += 1
+        elif "$finish" in t_raw:
+            # (3)/(4) NO_VERDICT: $finish reached
+            if per_test_errors.get(tn):
+                error_count += 1  # $finish + errors
+            else:
+                complete_count += 1  # $finish, no errors → waveform complete
+        else:
+            # (5) NO_VERDICT: no $finish → timeout or crash
+            error_count += 1
+        # Check-level counts (individual assertion lines)
+        check_pass += t_raw.count("PASS")
+        check_fail += t_raw.count("FAIL")
+
+    total = len(test_list)
+    raw = "\n".join(all_parts)
+    verdict_total = pass_count + fail_count
+    waveform_total = complete_count + error_count
+    summary_lines: list[str] = []
+    if verdict_total > 0:
+        summary_lines.append(
+            f"{pass_count}/{verdict_total} verdict tests PASS "
+            f"({check_pass} checks passed, {check_fail} failed)"
+        )
+    if waveform_total > 0:
+        summary_lines.append(f"{complete_count}/{waveform_total} waveform tests COMPLETE")
+    if not summary_lines:
+        summary_lines.append(f"0/{total} tests classified")
+    summary = "\n".join(summary_lines)
+    details = raw[:4000] if raw.strip() else "(no PASS/FAIL/$finish lines found in per-test logs)"
+    return f"{summary}\n\nLog ({log_file}):\n{details}"
+
+
+def aggregate_dump_stats(per_test_dump_summaries: dict[str, dict]) -> dict | None:
+    """Aggregate per-test dump_summary dicts into a dump_stats report.
+
+    F-155: extracted from run_batch_regression — pure function, no I/O.
+    Returns None if no test produced a dump_summary (non-boundary mode).
+    """
+    if not per_test_dump_summaries:
+        return None
+    per_test_entry: dict[str, dict] = {}
+    for tn, s in per_test_dump_summaries.items():
+        per_test_entry[tn] = {
+            "total": s.get("total_signals", 0),
+            "top_boundary": s.get("top_boundary_count", 0),
+            "block_count": sum(
+                1 for c in s.get("block_boundaries", {}).values() if c > 0
+            ),
+        }
+    totals = [v["total"] for v in per_test_entry.values()]
+    avg = sum(totals) / len(totals) if totals else 0
+    max_test = max(per_test_entry, key=lambda t: per_test_entry[t]["total"])
+    min_test = min(per_test_entry, key=lambda t: per_test_entry[t]["total"])
+    suggestions = [
+        f"{t} total={per_test_entry[t]['total']} (max): dump_scopes로 heavy block skip 검토"
+        for t in per_test_entry
+        if per_test_entry[t]["total"] > avg * 2
+    ]
+    return {
+        "per_test": per_test_entry,
+        "max": {"test": max_test, "total": per_test_entry[max_test]["total"]},
+        "min": {"test": min_test, "total": per_test_entry[min_test]["total"]},
+        "suggestions": suggestions,
+    }
+
+
 async def run_batch_regression(
     sim_dir: str,
     test_list: list[str],
@@ -838,84 +943,10 @@ async def run_batch_regression(
         per_test_results[tn] = results
         per_test_errors[tn] = err
 
-    all_parts: list[str] = []
-    pass_count = 0       # HAS_VERDICT: COMPLETE. Errors: 0
-    fail_count = 0       # HAS_VERDICT: COMPLETE. Errors: N>0, or FAIL without COMPLETE
-    complete_count = 0   # NO_VERDICT: $finish + no errors
-    error_count = 0      # NO_VERDICT: $finish + errors, or no $finish (timeout/crash)
-    check_pass = 0       # check-level substring count
-    check_fail = 0       # check-level substring count
-    for tn in test_list:
-        t_raw = "\n".join(per_test_results[tn])
-        all_parts.append(f"=== {tn} ===\n{t_raw}")
-        # 5-way classification
-        m = _COMPLETE_RE.search(t_raw)
-        if m:
-            # (1) HAS_VERDICT: COMPLETE. Errors: N
-            if int(m.group(1)) == 0:
-                pass_count += 1
-            else:
-                fail_count += 1
-        elif "FAIL" in t_raw:
-            # (2) HAS_VERDICT: crash/abort with FAIL but no COMPLETE
-            fail_count += 1
-        elif "$finish" in t_raw:
-            # (3)/(4) NO_VERDICT: $finish reached
-            if per_test_errors.get(tn):
-                error_count += 1  # $finish + errors
-            else:
-                complete_count += 1  # $finish, no errors → waveform complete
-        else:
-            # (5) NO_VERDICT: no $finish → timeout or crash
-            error_count += 1
-        # Check-level counts (individual assertion lines)
-        check_pass += t_raw.count("PASS")
-        check_fail += t_raw.count("FAIL")
+    # F-155: verdict classification + summary formatting extracted to a pure function
+    log_str = classify_regression_results(test_list, per_test_results, per_test_errors, log_file)
 
-    total = len(test_list)
-    raw = "\n".join(all_parts)
-    verdict_total = pass_count + fail_count
-    waveform_total = complete_count + error_count
-    summary_lines: list[str] = []
-    if verdict_total > 0:
-        summary_lines.append(
-            f"{pass_count}/{verdict_total} verdict tests PASS "
-            f"({check_pass} checks passed, {check_fail} failed)"
-        )
-    if waveform_total > 0:
-        summary_lines.append(f"{complete_count}/{waveform_total} waveform tests COMPLETE")
-    if not summary_lines:
-        summary_lines.append(f"0/{total} tests classified")
-    summary = "\n".join(summary_lines)
-    details = raw[:4000] if raw.strip() else "(no PASS/FAIL/$finish lines found in per-test logs)"
-    log_str = f"{summary}\n\nLog ({log_file}):\n{details}"
-
-    # v5.2: aggregate dump_stats across per-test summaries
-    dump_stats: dict | None = None
-    if per_test_dump_summaries:
-        per_test_entry: dict[str, dict] = {}
-        for tn, s in per_test_dump_summaries.items():
-            per_test_entry[tn] = {
-                "total": s.get("total_signals", 0),
-                "top_boundary": s.get("top_boundary_count", 0),
-                "block_count": sum(
-                    1 for c in s.get("block_boundaries", {}).values() if c > 0
-                ),
-            }
-        totals = [v["total"] for v in per_test_entry.values()]
-        avg = sum(totals) / len(totals) if totals else 0
-        max_test = max(per_test_entry, key=lambda t: per_test_entry[t]["total"])
-        min_test = min(per_test_entry, key=lambda t: per_test_entry[t]["total"])
-        suggestions = [
-            f"{t} total={per_test_entry[t]['total']} (max): dump_scopes로 heavy block skip 검토"
-            for t in per_test_entry
-            if per_test_entry[t]["total"] > avg * 2
-        ]
-        dump_stats = {
-            "per_test": per_test_entry,
-            "max": {"test": max_test, "total": per_test_entry[max_test]["total"]},
-            "min": {"test": min_test, "total": per_test_entry[min_test]["total"]},
-            "suggestions": suggestions,
-        }
+    # v5.2: aggregate dump_stats across per-test summaries (F-155: extracted to a pure function)
+    dump_stats = aggregate_dump_stats(per_test_dump_summaries)
 
     return log_str, dump_stats

@@ -1,6 +1,26 @@
 
 ---
 
+## 2026-07-02 - F-155: 아키텍처 리팩터 — run_batch_regression에서 순수 로직(verdict 분류/dump_stats 집계) 추출
+
+### 배경
+code-analyzer 아키텍처 리뷰(2026-07-02, Critical #1). `run_batch_regression`(921줄 파일 중 400줄)이 job-resume, per-test 실행, nohup/PID 플러밍, checkpoint 주입, 결과 수집과 함께 **순수 로직**(5-way verdict 분류, dump_stats 집계)까지 섞여 있어, 이 로직만 테스트하려 해도 매번 전체 regression 파이프라인을 mock해야 했음(F-140~152에서 반복된 패턴).
+
+### 구현 내용
+- `classify_regression_results(test_list, per_test_results, per_test_errors, log_file) -> str` 신설 — 기존 5-way verdict 분류 + summary 문자열 생성 로직(약 85줄) 그대로 이전, 순수 함수
+- `aggregate_dump_stats(per_test_dump_summaries) -> dict | None` 신설 — 기존 dump_stats 집계 로직 그대로 이전, 순수 함수
+- `run_batch_regression()`의 해당 블록을 두 함수 호출로 교체 — 로직 완전히 동일, 반환값(`log_str`, `dump_stats`) 형식 불변
+- 두 함수 모두 `_should_resume_regression` 근처(`run_batch_regression` 바로 앞)에 배치해 "regression 헬퍼" 그룹 유지
+
+### 검증
+`tests/test_regression_classification.py` 신규 작성(15 tests) — **mock 전혀 없이** 순수 함수 직접 호출로 5-way 분류(pass/fail-via-complete/fail-via-FAIL/complete/error-via-finish/error-via-timeout) 전부 + dump_stats 집계(outlier suggestion, block_count 필터링, 빈 입력) 검증. 테스트 작성 중 두 가지를 발견/정정: (1) "no $finish" 케이스도 waveform_total에 집계됨(에러 버킷이 waveform_total에 포함), (2) "0/N tests classified" fallback은 test_list가 완전히 비어있을 때만 도달 가능(개별 테스트가 빈 결과여도 `=== tn ===` 헤더가 남아 raw가 비지 않음) — 둘 다 기존 동작 그대로, 리팩터로 인한 변경 아님.
+`python -m pytest` 442 passed(427→442) / `python -m ruff check src/` all checks passed. 기존 `tests/test_regression_summary.py`, `tests/test_dump_history_stats.py`, `tests/test_regression_result_collection.py` 전부 회귀 없이 통과 — 이 함수들을 경유하는 end-to-end 테스트라 리팩터가 동작을 안 바꿨음을 재확인.
+
+### 남은 작업
+F-156~160(batch_runner.py job-resume/launch_nohup_job 통합, build_eda_command 일원화, manifest 단일 writer, BOUNDARY_SIGNALS 이전), F-162(캐시 격리) — 전부 미착수.
+
+---
+
 ## 2026-07-02 - F-161: 아키텍처 리팩터 — resolve_sim_dir/get_default_sim_dir을 discovery.py → registry.py로 이동
 
 ### 배경
