@@ -17,7 +17,7 @@ import json
 import re as _re
 import time as _time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from xcelium_mcp.batch_polling import poll_batch_log, watch_pid_and_poll
@@ -395,7 +395,7 @@ async def _update_dump_history(
                 k: v for k, v in dump_summary.items() if k != "scope_overrides"
             },
             "dump_scopes": dump_scopes or {},
-            "updated_at": datetime.utcnow().isoformat(timespec="seconds"),
+            "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
         await save_sim_config(sim_dir, config)
     except Exception:

@@ -1,6 +1,23 @@
 
 ---
 
+## 2026-07-02 - F-142: v5.2 gap-fix (Minor M2) — datetime.utcnow() deprecation 해소
+
+### 배경
+`docs/03-analysis/xcelium-mcp-v5.2-hierarchical-dump.analysis.md` (2026-07-02 재분석) Minor M2.
+`_update_dump_history`가 Python 3.12+에서 deprecated된 `datetime.utcnow()`를 사용 — pytest 스위트에서 DeprecationWarning 2건 발생 중이었음(3.14 환경).
+
+### 구현 내용
+- `batch_runner.py` import: `from datetime import datetime` → `from datetime import datetime, timezone`
+- `_update_dump_history()`: `datetime.utcnow().isoformat(timespec="seconds")` → `datetime.now(timezone.utc).isoformat(timespec="seconds")`
+- 코드베이스 내 `datetime.utcnow()` 사용처는 이 한 곳뿐이었음 (grep 확인)
+
+### 검증
+`python -m pytest` 325 passed, **0 warnings** (기존 2건의 DeprecationWarning 해소 확인) / `python -m ruff check src/` all checks passed.
+`tests/test_dump_history_stats.py`의 `datetime.fromisoformat(entry["updated_at"])` 파싱 검증도 그대로 통과 (offset-aware ISO 문자열도 `fromisoformat`으로 정상 파싱됨).
+
+---
+
 ## 2026-07-02 - F-141: v5.2 async wiring 단위 테스트 추가
 
 ### 구현 내용
