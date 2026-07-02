@@ -14,6 +14,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
 from collections import OrderedDict, deque
 from pathlib import Path
 
@@ -441,6 +442,14 @@ async def bisect_signal_dump(
     return "\n".join(lines)
 
 
+# F-154: anchor to the filename's fixed tail structure (sig_hash then mtime,
+# per _default_output_path's `_{stem}_{sig_hash}{mtime_part}{suffix}` layout)
+# instead of scanning every underscore-split part for "the first 9+-digit
+# run" — a stem containing its own long digit run (e.g. a test name with an
+# embedded timestamp) would otherwise be mistaken for the mtime field.
+_STALE_CSV_MTIME_RE = re.compile(r'_[0-9A-Za-z]{8}_(\d{9,})(?:_\d+_\d+)?$')
+
+
 async def cleanup_stale_csv(user_tmp: str, current_shm_path: str) -> int:
     """Delete mcp_csv_*.csv files whose embedded mtime differs from current SHM mtime.
 
@@ -448,7 +457,8 @@ async def cleanup_stale_csv(user_tmp: str, current_shm_path: str) -> int:
     preserving any valid (same mtime) cache files.
 
     Filename format: mcp_csv_{stem}_{sig_hash}_{mtime}[_{start}_{end}].csv
-    The mtime field is a 9+ digit decimal integer (Unix timestamp).
+    The mtime field is a 9+ digit decimal integer (Unix timestamp), anchored
+    immediately after the 8-char sig_hash near the end of the filename.
 
     Returns count of deleted files.
     """
@@ -458,9 +468,8 @@ async def cleanup_stale_csv(user_tmp: str, current_shm_path: str) -> int:
 
     deleted = 0
     for f in Path(user_tmp).glob("mcp_csv_*.csv"):
-        parts = f.stem.split("_")
-        mtime_candidates = [p for p in parts if p.isdigit() and len(p) >= 9]
-        if mtime_candidates and int(mtime_candidates[0]) != current_mtime:
+        m = _STALE_CSV_MTIME_RE.search(f.stem)
+        if m and int(m.group(1)) != current_mtime:
             try:
                 f.unlink(missing_ok=True)
                 deleted += 1

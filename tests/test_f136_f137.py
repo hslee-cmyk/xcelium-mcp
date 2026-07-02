@@ -236,3 +236,49 @@ class TestCleanupStaleCsv:
         # SHM path that doesn't exist
         result = await cleanup_stale_csv(str(tmp_path), "/nonexistent/test.shm")
         assert result == 0
+
+    @pytest.mark.asyncio
+    async def test_stem_with_embedded_long_digit_run_not_mistaken_for_mtime(
+        self, tmp_path: Path
+    ) -> None:
+        """F-154: a test-name stem containing its own 9+-digit token (e.g. an
+        embedded timestamp: 'test_202607021530_run') must not be mistaken for
+        the mtime field — the real mtime is anchored to the filename tail
+        (sig_hash then mtime), not 'the first 9+-digit run found anywhere'."""
+        from xcelium_mcp.csv_cache import cleanup_stale_csv
+
+        shm_dir = tmp_path / "test.shm"
+        shm_dir.mkdir()
+        current_mtime = int(os.path.getmtime(str(shm_dir)))
+
+        # Valid cache file whose CURRENT mtime matches, but whose stem embeds
+        # an unrelated 9+-digit token ('202607021530') before the real
+        # sig_hash/mtime fields. Under the old first-match heuristic this
+        # would be wrongly deleted (202607021530 != current_mtime).
+        tricky_csv = tmp_path / f"mcp_csv_test_202607021530_run_abc12345_{current_mtime}.csv"
+        tricky_csv.write_text("valid cache data")
+
+        deleted = await cleanup_stale_csv(str(tmp_path), str(shm_dir))
+
+        assert deleted == 0
+        assert tricky_csv.exists(), "valid cache file must survive — embedded digit run in stem is not the mtime"
+
+    @pytest.mark.asyncio
+    async def test_stem_with_embedded_long_digit_run_still_deletes_when_actually_stale(
+        self, tmp_path: Path
+    ) -> None:
+        """Same tricky stem shape, but the real (anchored) mtime IS stale — must still delete."""
+        from xcelium_mcp.csv_cache import cleanup_stale_csv
+
+        shm_dir = tmp_path / "test.shm"
+        shm_dir.mkdir()
+        current_mtime = int(os.path.getmtime(str(shm_dir)))
+        stale_mtime = current_mtime - 9999
+
+        tricky_csv = tmp_path / f"mcp_csv_test_202607021530_run_abc12345_{stale_mtime}.csv"
+        tricky_csv.write_text("stale cache data")
+
+        deleted = await cleanup_stale_csv(str(tmp_path), str(shm_dir))
+
+        assert deleted == 1
+        assert not tricky_csv.exists()

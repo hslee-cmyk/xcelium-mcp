@@ -1,6 +1,24 @@
 
 ---
 
+## 2026-07-02 - F-154: 버그 수정 — cleanup_stale_csv mtime 탐지 휴리스틱 오탐 수정
+
+### 배경
+code-analyzer 에이전트의 광범위 코드 리뷰(Minor #9)에서 발견. `cleanup_stale_csv`가 파일명을 `_`로 split한 뒤 "9자리 이상 숫자인 첫 토큰"을 mtime으로 간주했는데, SHM stem(보통 테스트명) 자체에 9자리 이상 숫자가 포함되면(예: 테스트명에 타임스탬프가 임베드된 경우) 그 토큰이 실제 mtime보다 먼저 매치되어 **유효한 캐시 파일이 잘못 삭제**될 수 있는 휴리스틱이었음.
+
+### 구현 내용
+- `_default_output_path()`의 실제 파일명 구성 규칙(`mcp_csv_{stem}_{sig_hash}{mtime_part}{suffix}.csv`, `sig_hash`는 md5 hexdigest 8자)을 근거로, 파일명 **끝(tail)에 고정 앵커**된 정규식 `_STALE_CSV_MTIME_RE = re.compile(r'_[0-9A-Za-z]{8}_(\d{9,})(?:_\d+_\d+)?$')` 신설
+- `cleanup_stale_csv()`가 `parts.isdigit()` 스캔 대신 이 정규식으로 `f.stem`의 끝에서부터 mtime을 추출 — stem 앞쪽에 우연히 낀 9자리+ 숫자는 더 이상 오매칭되지 않음
+
+### 검증
+`tests/test_f136_f137.py TestCleanupStaleCsv`에 2개 추가 — stem에 9자리+ 숫자가 임베드된 케이스에서 (1) 실제로 유효한(mtime 일치) 캐시 파일이 삭제되지 않는지, (2) 실제로 stale한(mtime 불일치) 파일은 여전히 정상 삭제되는지 확인. 기존 2개 테스트도 코드 수정 없이 그대로 통과(sig_hash 문자 클래스를 `[0-9A-Za-z]{8}`로 잡아 기존 테스트의 비-hex 합성 sig_hash 예시와도 호환).
+`python -m pytest` 427 passed (425→427) / `python -m ruff check src/` all checks passed.
+
+### F-144~F-154 전체 마무리 — bisect 소수점 버그 + code-analyzer 리뷰 전체 항목 완료
+2026-07-02 하루 동안 사용자 버그 리포트(bisect CSV 소수점 미지원)에서 시작해 F-144~F-147(같은 버그 클래스 광범위 조사), code-analyzer 리뷰(F-148~F-154, Critical 2 + Major 2 + Minor 3) 전부 구현·테스트·커밋 완료. pytest 325(F-140 시작 시점) → **427 passed**. execute_tcl(Major #5)과 `_list_signals_recursive` 삭제(Minor #8)만 사용자 지시로 범위 밖 유지. `plans/prd.json`은 규칙상 전부 `passes:false`로 남아있음 — 사용자 확인 후 일괄 반영 필요.
+
+---
+
 ## 2026-07-02 - F-153: 성능 개선 — discovery.py SDF 분석 인스턴스별 N+1 grep 병렬화
 
 ### 배경
