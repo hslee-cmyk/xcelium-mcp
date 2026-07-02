@@ -533,10 +533,10 @@ async def run_batch_single(
     # Launch
     log_file = f"{user_tmp}/batch_{int(_time.time())}.log"
     run_cmd = f"env {env_prefix}{cmd}"
-    pid = await launch_nohup_job(sim_dir, run_cmd, log_file, test_name, job_file)
+    await launch_nohup_job(sim_dir, run_cmd, log_file, test_name, job_file)
 
     # Poll + cleanup
-    result = await watch_pid_and_poll(pid, log_file, job_file, effective_timeout)
+    result = await watch_pid_and_poll(log_file, job_file, effective_timeout)
 
     # Persist dump_summary to history if hierarchical mode was used
     if dump_summary is not None:

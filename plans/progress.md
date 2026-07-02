@@ -63,7 +63,15 @@ grep으로 재확인 결과 자기 정의 외 호출부 전혀 없음(`_write_js
 
 **검증**: `pytest` 472 passed(변화 없음), `ruff check src/` clean, `python -c 'import xcelium_mcp.server'` 성공, grep 재확인.
 
-**남은 작업**: F-170(batch_polling.py `watch_pid_and_poll` 미사용 파라미터 정리)로 진행.
+### F-170: batch_polling.py watch_pid_and_poll의 미사용 pid 파라미터 + 과도한 docstring 정리
+
+`pid` 파라미터는 docstring 스스로 "unused but kept for future use"라고 명시할 정도로 실제 미사용이었음(호출부 `run_batch_single`도 `pid` 값을 로깅 등에 쓰지 않고 오직 이 호출에만 넘김). 2줄짜리 함수 본문 대비 Args 섹션까지 갖춘 과도한 docstring도 함께 정리.
+
+**구현**: `watch_pid_and_poll(pid, log_file, job_file, timeout)` → `watch_pid_and_poll(log_file, job_file, timeout)`로 시그니처 축소, docstring을 한 줄로 축약. 호출부(`run_batch_single`)에서 `pid = await launch_nohup_job(...)` 대입도 불필요해져 `await launch_nohup_job(...)`로 변경(반환값이 다른 곳에서 쓰이지 않음을 확인). `tests/test_batch_helpers.py`의 `test_watch_pid_and_poll_returns_result`에서 `pid=42` 인자 제거.
+
+**검증**: `pytest` 472 passed(변화 없음), `ruff check src/` clean, `python -c 'import xcelium_mcp.server'` 성공.
+
+**남은 작업**: F-171(batch_runner.py 중복 `import re` 제거)로 진행.
 
 ### F-160 보류 (사용자 결정)
 code-analyzer 아키텍처 리뷰 Major #6(`BOUNDARY_SIGNALS` 프로젝트별 하드코딩)은 F-155~159와 달리 **순수 리팩터가 아니라 기본 동작을 바꾸는 breaking change**임을 재확인 — `_resolve_probe_signals`의 `dump_strategy.top_boundary` 미설정 시 폴백이 v5.1 backward-compat의 핵심 경로이자 venezia 프로젝트의 실사용 경로(`tests/test_dump_strategy.py`, `tests/test_hierarchical_dump.py`가 이 폴백을 명시적으로 테스트). 원안대로 "빈 리스트+에러"로 바꾸면 venezia의 `.mcp_sim_config.json`에 `top_boundary`가 먼저 마이그레이션돼 있지 않은 한 기존 `dump_depth="boundary"` 호출이 전부 깨짐. 사용자에게 확인 결과 **보류** 결정 — `plans/prd.json`에 `skip:true` + 결정 근거 기록, ralph-loop 자동 진행 대상에서 제외. 재개 시 마이그레이션 전략부터 별도 논의 필요.

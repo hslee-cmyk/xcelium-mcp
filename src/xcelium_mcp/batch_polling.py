@@ -48,26 +48,8 @@ async def poll_batch_log(log_file: str, timeout: float, prefix: str = "") -> tup
     return prefix + result, timed_out
 
 
-async def watch_pid_and_poll(
-    pid: int,
-    log_file: str,
-    job_file: str,
-    timeout: int,
-) -> str:
-    """Poll batch log for completion and clean up job file.
-
-    Waits for the batch simulation to complete by polling the log file,
-    then removes the job state file.
-
-    Args:
-        pid: Process ID of the batch job (unused but kept for future use).
-        log_file: Path to the batch log file to poll.
-        job_file: Path to the job state file to clean up.
-        timeout: Timeout in seconds for polling.
-
-    Returns:
-        Result string from log polling.
-    """
+async def watch_pid_and_poll(log_file: str, job_file: str, timeout: int) -> str:
+    """Poll batch log for completion, then remove the job state file."""
     result, _ = await poll_batch_log(log_file, timeout)
     await shell_run(f"rm -f {job_file}", timeout=5)
     return result

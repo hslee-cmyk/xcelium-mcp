@@ -589,7 +589,6 @@ async def test_watch_pid_and_poll_returns_result() -> None:
         mock_poll.return_value = ("PASS: test completed", False)
         mock_ssh.return_value = ""  # rm -f job_file
         result = await watch_pid_and_poll(
-            pid=42,
             log_file="/tmp/batch_123.log",
             job_file="/tmp/batch_job.json",
             timeout=600,
