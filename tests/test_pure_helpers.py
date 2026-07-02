@@ -21,6 +21,7 @@ from xcelium_mcp.shell_utils import (
     sanitize_signal_name,
     shell_run_with_retry,
 )
+from xcelium_mcp.tcl_preprocessing import _parse_l1_time_ns
 
 # ---------------------------------------------------------------------------
 # _extract_top_module_from_content
@@ -194,6 +195,44 @@ class TestParseTimeNs:
 
     def test_no_match(self):
         assert _parse_time_ns("no time here") == 0
+
+    def test_decimal_ns_format(self):
+        """F-146: decimal counts in the coarse/fine parts must not be dropped."""
+        assert _parse_time_ns("  3 MS + 500.5") == round(3 * 1_000_000 + 500.5)
+
+    def test_decimal_coarse_part(self):
+        assert _parse_time_ns("  1.5 US + 0") == round(1.5 * 1000)
+
+    def test_decimal_plain_number(self):
+        assert _parse_time_ns("42.5") == round(42.5)
+
+
+# ---------------------------------------------------------------------------
+# _parse_l1_time_ns
+# ---------------------------------------------------------------------------
+
+class TestParseL1TimeNs:
+    def test_ns_default_unit(self):
+        assert _parse_l1_time_ns("500") == 500
+
+    def test_us_unit(self):
+        assert _parse_l1_time_ns("500us") == 500_000
+
+    def test_ms_unit(self):
+        assert _parse_l1_time_ns("1ms") == 1_000_000
+
+    def test_no_match_returns_zero(self):
+        assert _parse_l1_time_ns("bogus") == 0
+
+    def test_decimal_ms(self):
+        """F-146: '1.5ms' previously matched only the integer prefix '1' silently."""
+        assert _parse_l1_time_ns("1.5ms") == round(1.5 * 1_000_000)
+
+    def test_decimal_us(self):
+        assert _parse_l1_time_ns("500.25us") == round(500.25 * 1_000)
+
+    def test_decimal_ns_default_unit(self):
+        assert _parse_l1_time_ns("500.5") == round(500.5)
 
 
 # ---------------------------------------------------------------------------

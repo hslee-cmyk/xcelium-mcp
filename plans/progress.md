@@ -1,6 +1,26 @@
 
 ---
 
+## 2026-07-02 - F-146: 버그 수정 — 시간 문자열 파싱 3곳 소수점 미지원
+
+### 배경
+F-144 광범위 조사로 분리된 항목. "N + 단위" 형태의 시간 문자열을 파싱하는 3곳이 전부 `\d+`-only 정규식이라 소수점을 거부: bridge `where` 응답 파싱(`shell_utils.py`), checkpoint L1 저장 시각(`tcl_preprocessing.py`), `sim_run` duration 검증(`sim_lifecycle.py`).
+
+### 구현 내용
+- `shell_utils.py _parse_time_ns()`: 4개 정규식의 `(\d+)` → `(\d+(?:\.\d+)?)`, `int()` → `float()` + 최종 `round()`로 교체 — "N MS + M" 형태의 두 파트(coarse/fine) 모두 소수점 지원
+- `tcl_preprocessing.py _parse_l1_time_ns()`: 동일 패턴 — `l1_time` 파라미터(예: "1.5ms")가 정수부만 조용히 파싱되던 문제 수정
+- `tools/sim_lifecycle.py _DURATION_RE`: `^[0-9]+\s*(unit)$` → `^[0-9]+(?:\.[0-9]+)?\s*(unit)$`로 확장. `_duration_to_ns()`는 이미 `float()` 변환이라 게이트(정규식)만 손대면 충분 — F-013(Tcl injection 방지) 특성(fullmatch, ASCII-only, unit 필수)은 전부 그대로 유지, 추가된 문자는 `.`뿐.
+- 세 곳 모두 waveform.py의 `_TIME_RE`(`^\d+(\.\d+)?...`) 패턴을 참조해 스타일 통일
+
+### 검증
+`tests/test_pure_helpers.py`에 `TestParseTimeNs`(+3) / `TestParseL1TimeNs`(신규, 7 tests) 추가, `tests/test_sim_lifecycle.py`에 `_DURATION_RE`/`_duration_to_ns`/`sim_run` 소수점 케이스 5개 추가 — injection payload가 소수점 허용 후에도 여전히 거부되는지 회귀 테스트 포함.
+`python -m pytest` 366 passed (351→366) / `python -m ruff check src/` all checks passed.
+
+### 남은 작업
+F-147(deposit_signal 값 검증) — priority 2, 아직 미착수.
+
+---
+
 ## 2026-07-02 - F-145: 버그 수정 — compare_waveforms/compare_csv_diff SimTime 소수점 크래시
 
 ### 배경

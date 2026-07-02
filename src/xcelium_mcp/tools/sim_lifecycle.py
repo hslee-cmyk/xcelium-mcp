@@ -74,7 +74,9 @@ async def _auto_connect_all(bridges: BridgeManager, host: str, timeout: float) -
 # fullmatch required — changing to match/search opens Tcl injection
 # re.ASCII ensures [0-9] blocks Unicode digits (e.g. '１００ns')
 # Unit is mandatory — bare integers are ambiguous (Xcelium uses default timescale)
-_DURATION_RE = re.compile(r'^[0-9]+\s*(ns|us|ms|s|ps|fs)$', re.IGNORECASE | re.ASCII)
+# Optional decimal fraction (F-146) — _duration_to_ns() already float()-converts,
+# only this gate rejected "100.5ns" before it ever got there.
+_DURATION_RE = re.compile(r'^[0-9]+(?:\.[0-9]+)?\s*(ns|us|ms|s|ps|fs)$', re.IGNORECASE | re.ASCII)
 _DURATION_MAX_LEN = 32
 _UNIT_TO_NS: dict[str, float] = {
     "fs": 1e-6, "ps": 1e-3, "ns": 1.0, "us": 1e3, "ms": 1e6, "s": 1e9,

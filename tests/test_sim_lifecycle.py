@@ -79,6 +79,47 @@ def test_duration_re_matches_with_leading_trailing_space() -> None:
 
 
 # ---------------------------------------------------------------------------
+# F-146: _DURATION_RE must accept a decimal fraction without opening injection
+# ---------------------------------------------------------------------------
+
+
+def test_duration_re_accepts_decimal_duration() -> None:
+    from xcelium_mcp.tools.sim_lifecycle import _DURATION_RE
+    assert _DURATION_RE.fullmatch("100.5ns") is not None
+    assert _DURATION_RE.fullmatch("1.25ms") is not None
+
+
+def test_duration_re_still_rejects_bare_integer() -> None:
+    """Unit remains mandatory — decimal support must not loosen this rule."""
+    from xcelium_mcp.tools.sim_lifecycle import _DURATION_RE
+    assert _DURATION_RE.fullmatch("100") is None
+    assert _DURATION_RE.fullmatch("100.5") is None
+
+
+def test_duration_re_still_rejects_injection_payloads() -> None:
+    """Decimal support must not open a path for Tcl metacharacters."""
+    from xcelium_mcp.tools.sim_lifecycle import _DURATION_RE
+    assert _DURATION_RE.fullmatch("100ns; exec rm") is None
+    assert _DURATION_RE.fullmatch("100.5ns; exec rm") is None
+    assert _DURATION_RE.fullmatch("1.2.3ns") is None  # malformed decimal rejected
+
+
+@pytest.mark.asyncio
+async def test_sim_run_accepts_decimal_duration() -> None:
+    """Duration with a decimal fraction should pass validation (F-146)."""
+    from xcelium_mcp.tools.sim_lifecycle import register
+
+    mock_mcp = _MockMCP()
+    mock_bridges = MagicMock()
+    mock_bridges.xmsim.execute = AsyncMock(return_value="Time: 100 NS")
+
+    register(mock_mcp, mock_bridges)
+
+    result = await mock_mcp.tools["sim_run"](duration="100.5ns")
+    assert "Simulation advanced" in result
+
+
+# ---------------------------------------------------------------------------
 # F-081: sim_stop passes timeout to bridge.execute
 # ---------------------------------------------------------------------------
 
@@ -379,6 +420,12 @@ class TestDurationToNs:
     def test_case_insensitive(self):
         from xcelium_mcp.tools.sim_lifecycle import _duration_to_ns
         assert _duration_to_ns("10MS") == 10_000_000
+
+    def test_decimal_ns(self):
+        """F-146: _duration_to_ns already float()-converted; the gate (_DURATION_RE)
+        was the only piece rejecting decimals before this string ever got here."""
+        from xcelium_mcp.tools.sim_lifecycle import _duration_to_ns
+        assert _duration_to_ns("100.5ns") == 100  # int(100.5 * 1.0) truncates
 
 
 class TestParseChunkedRunReport:

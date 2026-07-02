@@ -368,16 +368,16 @@ def _parse_tcl_db_open_path(tcl_content: str) -> str:
 
 def _parse_time_ns(where_output: str) -> int:
     """Parse simulation time from xmsim 'where' output into nanoseconds."""
-    m = re.search(r'(\d+)\s+MS\s*\+\s*(\d+)', where_output, re.IGNORECASE)
+    m = re.search(r'(\d+(?:\.\d+)?)\s+MS\s*\+\s*(\d+(?:\.\d+)?)', where_output, re.IGNORECASE)
     if m:
-        return int(m.group(1)) * 1_000_000 + int(m.group(2))
-    m = re.search(r'(\d+)\s+US\s*\+\s*(\d+)', where_output, re.IGNORECASE)
+        return round(float(m.group(1)) * 1_000_000 + float(m.group(2)))
+    m = re.search(r'(\d+(?:\.\d+)?)\s+US\s*\+\s*(\d+(?:\.\d+)?)', where_output, re.IGNORECASE)
     if m:
-        return int(m.group(1)) * 1000 + int(m.group(2))
-    m = re.search(r'(\d+)\s+NS\s*\+\s*(\d+)', where_output, re.IGNORECASE)
+        return round(float(m.group(1)) * 1000 + float(m.group(2)))
+    m = re.search(r'(\d+(?:\.\d+)?)\s+NS\s*\+\s*(\d+(?:\.\d+)?)', where_output, re.IGNORECASE)
     if m:
-        return int(m.group(1)) + int(m.group(2))
-    m = re.search(r'(\d+)', where_output)
+        return round(float(m.group(1)) + float(m.group(2)))
+    m = re.search(r'(\d+(?:\.\d+)?)', where_output)
     if m:
-        return int(m.group(1))
+        return round(float(m.group(1)))
     return 0

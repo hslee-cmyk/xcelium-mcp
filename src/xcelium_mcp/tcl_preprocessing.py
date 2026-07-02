@@ -18,17 +18,17 @@ from xcelium_mcp.shell_utils import shell_quote, shell_run, validate_path
 
 
 def _parse_l1_time_ns(l1_time: str) -> int:
-    """Convert l1_time string (e.g. "500us", "1ms") to nanoseconds."""
-    m = _re.match(r'(\d+)\s*(us|ms|ns)?', l1_time.strip())
+    """Convert l1_time string (e.g. "500us", "1ms", "1.5ms") to nanoseconds."""
+    m = _re.match(r'(\d+(?:\.\d+)?)\s*(us|ms|ns)?', l1_time.strip())
     if not m:
         return 0
-    val = int(m.group(1))
+    val = float(m.group(1))
     unit = m.group(2) or "ns"
     if unit == "ms":
-        return val * 1_000_000
+        return round(val * 1_000_000)
     if unit == "us":
-        return val * 1_000
-    return val
+        return round(val * 1_000)
+    return round(val)
 
 
 def extract_setup_lines(tcl_content: str) -> str:
