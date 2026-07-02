@@ -126,11 +126,6 @@ def _write_json_sync(path, data: dict) -> None:
     Path(str(path)).write_text(json.dumps(data, indent=2))
 
 
-def _write_json(path, data: dict) -> None:
-    """Write JSON file. Works with both Path and str."""
-    _write_json_sync(path, data)
-
-
 async def _update_registry_from_config(sim_dir: str, tb_type: str, config: dict) -> None:
     """Register sim environment in mcp_registry.json.
 
