@@ -197,6 +197,19 @@ async def extract(
     return output_path
 
 
+def _parse_sim_time_ns(raw: str) -> int:
+    """Parse a simvisdbutil SimTime column value to an int ns.
+
+    Accepts plain integers ("1500") and decimal values ("1500.5", "1.234e-05")
+    that AMS/analog dumps or fractional-precision SHM can emit — decimal ns are
+    rounded to the nearest int. Raises ValueError if truly unparseable.
+    """
+    try:
+        return int(raw)
+    except ValueError:
+        return round(float(raw))
+
+
 def bisect_csv(
     csv_path: str,
     signal: str,
@@ -243,7 +256,10 @@ def bisect_csv(
         for row in reader:
             # simvisdbutil uses "SimTime" column. With -timeunits ns, values are in ns.
             raw_time = row.get("SimTime") or row.get("time") or "0"
-            ns = int(raw_time)
+            try:
+                ns = _parse_sim_time_ns(raw_time)
+            except ValueError:
+                continue  # unparseable SimTime — skip row rather than crash
             row["_ns"] = ns
 
             if start_ns and ns < start_ns:
@@ -263,7 +279,10 @@ def bisect_csv(
                 suffix_needed = context_rows
                 for suffix_row in reader:
                     raw_t = suffix_row.get("SimTime") or suffix_row.get("time") or "0"
-                    s_ns = int(raw_t)
+                    try:
+                        s_ns = _parse_sim_time_ns(raw_t)
+                    except ValueError:
+                        continue  # unparseable SimTime — skip row rather than crash
                     suffix_row["_ns"] = s_ns
                     if end_ns and s_ns > end_ns:
                         break
@@ -299,6 +318,26 @@ def bisect_csv(
     return {"found": False, "match_time_ns": 0, "match_value": "", "context": []}
 
 
+def _to_number(s: str) -> int | float | None:
+    """Parse a CSV value/target string to a number for comparison.
+
+    Tries int(s, 0) first (preserves hex/oct/dec literal support, e.g.
+    "0x1A", "8'hFF" style digital values already stripped to a literal),
+    then falls back to float(s) for decimal/scientific-notation real
+    values (AMS/analog signals, e.g. "3.3", "1.234e-05"). Returns None if
+    neither parse succeeds (e.g. tristate "x"/"z") so callers fall back
+    to string comparison.
+    """
+    try:
+        return int(s, 0)
+    except (ValueError, TypeError):
+        pass
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return None
+
+
 def _eval_condition(
     cur_val: str, op: str, target: str, prev_val: str | None
 ) -> bool:
@@ -306,10 +345,10 @@ def _eval_condition(
     if op == "change":
         return prev_val is not None and cur_val != prev_val
 
-    # Numeric comparison (hex/dec/oct literals supported)
-    try:
-        cur_n = int(cur_val, 0)
-        tgt_n = int(target, 0)
+    # Numeric comparison (hex/dec/oct literals + decimal/scientific reals supported)
+    cur_n = _to_number(cur_val)
+    tgt_n = _to_number(target)
+    if cur_n is not None and tgt_n is not None:
         if op == "eq":
             return cur_n == tgt_n
         if op == "ne":
@@ -318,8 +357,6 @@ def _eval_condition(
             return cur_n > tgt_n
         if op == "lt":
             return cur_n < tgt_n
-    except (ValueError, TypeError):
-        pass
 
     # String fallback
     if op == "eq":

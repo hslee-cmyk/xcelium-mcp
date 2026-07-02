@@ -1,6 +1,28 @@
 
 ---
 
+## 2026-07-02 - F-144: 버그 수정 — bisect CSV 소수점 값 미지원
+
+### 배경
+사용자 버그 리포트: "bisect를 csv 파일로 처리할 때 소수점 자리가 지원이 안 되는 문제". Explore 에이전트 조사 + 직접 코드 확인으로 `csv_cache.py`에서 원인 2곳 확정.
+
+### 구현 내용
+- `csv_cache.py`에 `_parse_sim_time_ns(raw: str) -> int` 헬퍼 신규 추가 — `int(raw)` 우선 시도, 실패 시 `float(raw)` 후 `round()`로 반올림. 완전히 파싱 불가하면 `ValueError` 전파.
+- `bisect_csv()`의 SimTime 파싱 2곳(메인 루프, suffix read-ahead 루프)을 `int(raw_time)` → `_parse_sim_time_ns()` + try/except로 교체 — 파싱 실패 row는 크래시 대신 skip.
+- `_to_number(s: str) -> int | float | None` 헬퍼 신규 추가 — `int(s, 0)`(hex/oct/dec literal) 우선 시도, 실패 시 `float(s)`(소수점/과학적 표기법 실수값) 폴백. 둘 다 실패하면 `None` 반환.
+- `_eval_condition()`의 숫자 비교를 `int(cur_val, 0)`/`int(target, 0)` → `_to_number()` 기반으로 교체 — `eq`/`ne`/`gt`/`lt` 4개 op 전부 소수점 값에서 정상 동작. 기존 tristate(`x`/`z`) → 문자열 fallback 동작은 그대로 유지.
+
+### 검증
+`tests/test_bisect.py`에 21개 신규 테스트 추가 (`TestBisectCsvGtLt`, `TestBisectCsvDecimalValue`, `TestBisectCsvDecimalSimTime`, `TestParseSimTimeNs`, `TestToNumber`) — gt/lt op은 이번 수정 전까지 정수값에 대해서도 테스트가 전무했음을 확인하고 함께 보강.
+`python -m pytest` 347 passed (326→347) / `python -m ruff check src/` all checks passed.
+
+### 남은 작업 (별도 태스크로 분리, 2026-07-02 광범위 조사)
+- F-145: `simvision_ops.py _load_rows()`(compare_waveforms/compare_csv_diff)에 동일한 `int(raw_time)` 크래시가 독립적으로 존재 — F-144의 `_parse_sim_time_ns` 재사용 권장
+- F-146: 시간 문자열 파싱 3곳(`shell_utils.py _parse_time_ns`, `tcl_preprocessing.py _parse_l1_time_ns`, `sim_lifecycle.py _DURATION_RE`)이 `\d+`-only 정규식이라 소수점 미지원
+- F-147: `deposit_signal`의 `_DEPOSIT_VALUE_RE`가 digital literal만 허용해 real/wreal(analog) 값 미지원 — bisect(읽기) 버그의 쓰기 경로 짝
+
+---
+
 ## 2026-07-02 - F-143: v5.2 gap-fix (Minor M4) — _update_dump_history load_sim_config force=True
 
 ### 배경
