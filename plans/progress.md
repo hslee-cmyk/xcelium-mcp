@@ -21,7 +21,15 @@ Claude가 직접 코드 확인 완료: `sim_batch_run`(93-117라인)과 `sim_reg
 
 **검증**: `pytest` 467 passed(461→467), `ruff check src/` clean, `python -c 'import xcelium_mcp.server'` 성공.
 
-**남은 작업**: F-165(simvision_ops.py compare_simvision try/except 통합)로 진행.
+### F-165: simvision_ops.py compare_simvision — try/except BRIDGE_ERRORS 3개 블록 통합
+
+`compare_simvision` 내 `database open`/`__WAVEFORM_ADD__ BEFORE`/`__WAVEFORM_ADD__ AFTER` 3곳이 `try/except BRIDGE_ERRORS as e: return f"...: {e}"` 패턴을 그대로 반복하고 있었음.
+
+**구현**: 로컬 async 클로저 `_try(cmd, errmsg) -> str | None` 추가(성공 시 None, 실패 시 `f"{errmsg}: {e}"` 반환). 3개 호출부 모두 `err = await _try(cmd, errmsg); if err: return err` 패턴으로 축소. 에러 메시지 문구는 기존과 동일하게 유지.
+
+**검증**: `pytest` 467 passed(변화 없음, 순수 리팩터라 신규 테스트 불필요 — 기존 compare_simvision 관련 테스트가 이미 이 경로를 커버), `ruff check src/` clean.
+
+**남은 작업**: F-166(read_setup_tcl 불필요 래퍼 제거)로 진행.
 
 ### F-160 보류 (사용자 결정)
 code-analyzer 아키텍처 리뷰 Major #6(`BOUNDARY_SIGNALS` 프로젝트별 하드코딩)은 F-155~159와 달리 **순수 리팩터가 아니라 기본 동작을 바꾸는 breaking change**임을 재확인 — `_resolve_probe_signals`의 `dump_strategy.top_boundary` 미설정 시 폴백이 v5.1 backward-compat의 핵심 경로이자 venezia 프로젝트의 실사용 경로(`tests/test_dump_strategy.py`, `tests/test_hierarchical_dump.py`가 이 폴백을 명시적으로 테스트). 원안대로 "빈 리스트+에러"로 바꾸면 venezia의 `.mcp_sim_config.json`에 `top_boundary`가 먼저 마이그레이션돼 있지 않은 한 기존 `dump_depth="boundary"` 호출이 전부 깨짐. 사용자에게 확인 결과 **보류** 결정 — `plans/prd.json`에 `skip:true` + 결정 근거 기록, ralph-loop 자동 진행 대상에서 제외. 재개 시 마이그레이션 전략부터 별도 논의 필요.

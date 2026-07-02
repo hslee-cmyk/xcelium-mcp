@@ -578,33 +578,38 @@ async def compare_simvision(
         signals = [sanitize_signal_name(s) for s in signals]
     except ValueError as e:
         return f"ERROR: {e}"
-    try:
-        await bridge.execute(
-            f'database open {shm_after} -name cmp_after',
-            timeout=30.0,
-        )
-    except BRIDGE_ERRORS as e:
-        return f"SimVision connected but failed to open shm_after: {e}"
+    async def _try(cmd: str, errmsg: str) -> str | None:
+        """Execute cmd on the bridge; return an error string on failure, else None."""
+        try:
+            await bridge.execute(cmd, timeout=30.0)
+            return None
+        except BRIDGE_ERRORS as e:
+            return f"{errmsg}: {e}"
+
+    err = await _try(
+        f'database open {shm_after} -name cmp_after',
+        "SimVision connected but failed to open shm_after",
+    )
+    if err:
+        return err
 
     # 6. Add BEFORE group (signals from primary / default database)
     sig_str = " ".join(signals)
-    try:
-        await bridge.execute(
-            f"__WAVEFORM_ADD__ BEFORE {sig_str}",
-            timeout=30.0,
-        )
-    except BRIDGE_ERRORS as e:
-        return f"SimVision open but BEFORE group add failed: {e}"
+    err = await _try(
+        f"__WAVEFORM_ADD__ BEFORE {sig_str}",
+        "SimVision open but BEFORE group add failed",
+    )
+    if err:
+        return err
 
     # 7. Add AFTER group (signals qualified with cmp_after database scope)
     after_signals = " ".join(f"cmp_after.{s}" for s in signals)
-    try:
-        await bridge.execute(
-            f"__WAVEFORM_ADD__ AFTER {after_signals}",
-            timeout=30.0,
-        )
-    except BRIDGE_ERRORS as e:
-        return f"BEFORE group added but AFTER group failed: {e}"
+    err = await _try(
+        f"__WAVEFORM_ADD__ AFTER {after_signals}",
+        "BEFORE group added but AFTER group failed",
+    )
+    if err:
+        return err
 
     display_num = display.lstrip(":")
     vnc_port = 5900 + int(display_num)
