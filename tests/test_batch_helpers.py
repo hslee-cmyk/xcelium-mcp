@@ -518,6 +518,62 @@ async def test_launch_nohup_pid_watcher_fire_and_forget() -> None:
     assert not shell_watchers, "PID watcher must NOT use shell_run (would block on capture_output)"
 
 
+@pytest.mark.asyncio
+async def test_launch_nohup_extra_job_fields_merged_and_override_base() -> None:
+    """F-157: extra_job_fields lets run_batch_regression reuse launch_nohup_job —
+    merged fields (type/current/current_log/completed/test_list) must appear in
+    the written job JSON, and an overriding "log_file" must win over the base
+    "log_file" (=the per-test log passed positionally)."""
+    shell_cmds: list[str] = []
+
+    async def capturing_shell_run(cmd: str, timeout: float = 30) -> str:
+        shell_cmds.append(cmd)
+        if "cat" in cmd and "batch_pid" in cmd:
+            return "42"
+        return ""
+
+    with (
+        patch("xcelium_mcp.batch_runner.shell_run", side_effect=capturing_shell_run),
+        patch("xcelium_mcp.batch_runner.shell_run_fire_and_forget", new_callable=AsyncMock),
+        patch(
+            "xcelium_mcp.shell_utils.get_user_tmp_dir",
+            new_callable=AsyncMock,
+            return_value="/tmp/xcelium_mcp_1000",
+        ),
+    ):
+        pid = await launch_nohup_job(
+            sim_dir="/sim",
+            run_cmd="env TEST_NAME=T1 ./run_sim.sh -test T1 --",
+            log_file="/tmp/regression_123_T1.log",  # per-test log (base "log_file")
+            test_name="T1",
+            job_file="/tmp/regression_job.json",
+            extra_job_fields={
+                "type": "regression",
+                "current": "T1",
+                "current_log": "/tmp/regression_123_T1.log",
+                "completed": ["T0"],
+                "test_list": ["T0", "T1"],
+                "log_file": "/tmp/regression_123.log",  # overrides base log_file
+            },
+        )
+
+    assert pid == 42
+    job_writes = [c for c in shell_cmds if "printf" in c and "regression_job" in c]
+    assert len(job_writes) == 1
+    written_cmd = job_writes[0]
+    # Extract the JSON payload out of: printf '%s' '<json>' > job_file
+    payload_str = written_cmd.split("printf '%s' ", 1)[1].rsplit(" > ", 1)[0].strip("'")
+    payload = json.loads(payload_str)
+    assert payload["type"] == "regression"
+    assert payload["current"] == "T1"
+    assert payload["current_log"] == "/tmp/regression_123_T1.log"
+    assert payload["completed"] == ["T0"]
+    assert payload["test_list"] == ["T0", "T1"]
+    assert payload["log_file"] == "/tmp/regression_123.log"  # overridden, not the per-test log
+    assert payload["pid"] == 42
+    assert payload["test_name"] == "T1"
+
+
 # ---------------------------------------------------------------------------
 # Tests: watch_pid_and_poll
 # ---------------------------------------------------------------------------

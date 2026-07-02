@@ -1,6 +1,29 @@
 
 ---
 
+## 2026-07-02 - F-157: 아키텍처 리팩터 — launch_nohup_job을 run_batch_regression 경로에서 재사용
+
+### 배경
+code-analyzer 아키텍처 리뷰(2026-07-02, Major #3). `run_batch_single`은 `launch_nohup_job()` 헬퍼를 쓰는데, `run_batch_regression`의 per-test 루프는 nohup-subshell + `echo $! > pid_file` + PID 읽기 + job-file 쓰기 + fire-and-forget watcher 시퀀스를 인라인으로 재구현하고 있었음(주석에 "P6-5b", "F-020" 등 서로 다른 커밋 태그가 붙어 있어 이미 따로 진화 중이었음을 시사).
+
+### 구현 내용
+- `launch_nohup_job()`에 `extra_job_fields: dict | None = None` 파라미터 추가 — job JSON dict를 base 필드(`pid`/`log_file`/`test_name`/`started_at`) 생성 후 `.update()`로 병합. regression 쪽은 `type`/`current`/`current_log`/`completed`/`test_list`를 추가하고, `log_file`은 base(=`test_log`, 인자로 넘긴 per-test 로그)를 **의도적으로 override**해 실제로 필요한 aggregate regression log 값을 유지
+- `run_batch_regression`의 인라인 nohup 블록(약 30줄)을 `launch_nohup_job()` 호출 1개로 교체
+
+### 의도적 동작 변화 2건 (검토 후 안전하다고 판단, 회귀 아님)
+1. **pgrep fallback 추가**: `launch_nohup_job`은 pid-file 읽기 실패 시 `pgrep -f {test_name}`로 재시도하는데, 기존 regression 인라인 코드엔 이 fallback이 없었음 — PID 캡처 실패 시 더 견고해지는 방향의 개선(`run_batch_single`이 이미 누리던 안전장치를 regression도 갖게 됨)
+2. **PID=0일 때 job-file 미생성**: `launch_nohup_job`은 `if pid:` 블록 안에서만 job-file을 쓰는데, 기존 regression 코드는 PID=0이어도 무조건 job-file을 썼음(watcher만 조건부). 다만 `_read_job_status`/`_should_resume_regression`이 이미 `pid<=0`을 "dead"로 취급하므로 resume 판단 결과는 동일 — 오히려 무의미한 pid=0 job-file을 안 남기는 쪽이 더 깔끔함
+3. timeout guard의 `if pid_str.strip().isdigit():` → `if test_pid:`로 단순화 — PID=0("0".isdigit()이 True라 원래는 `kill -0 0`을 시도할 뻔했던 엣지케이스)을 안전하게 걸러냄, 코드베이스 전반의 "pid must be > 0" 컨벤션과 일치
+
+### 검증
+`tests/test_batch_helpers.py`에 `test_launch_nohup_extra_job_fields_merged_and_override_base` 추가 — 성공 케이스(pid>0)에서 실제 작성되는 job JSON을 파싱해 병합된 필드(type/current/current_log/completed/test_list)와 override된 log_file이 정확한지 직접 검증(이 시나리오는 기존 blanket-mock 테스트들이 pid=0 조기 반환 경로만 태워서 커버 못 하던 부분).
+`python -m pytest` 448 passed(447→448) / `python -m ruff check src/` all checks passed.
+
+### 남은 작업
+F-158(`build_eda_command` 일원화), F-159(manifest 단일 writer), F-160(`BOUNDARY_SIGNALS` 이전), F-162(캐시 격리) — 미착수. 이걸로 batch_runner.py의 job-lifecycle 관심사(F-155/156/157) 통합은 마무리.
+
+---
+
 ## 2026-07-02 - F-156: 아키텍처 리팩터 — job-resume 로직 중복(parse_existing_job vs run_batch_regression) 통합
 
 ### 배경

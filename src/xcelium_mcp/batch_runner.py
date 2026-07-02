@@ -302,6 +302,7 @@ async def launch_nohup_job(
     log_file: str,
     test_name: str,
     job_file: str,
+    extra_job_fields: dict | None = None,
 ) -> int:
     """Launch a nohup batch job and save job state for resume.
 
@@ -314,6 +315,11 @@ async def launch_nohup_job(
         log_file: Path to the log file for output redirection.
         test_name: Test name (for pgrep fallback).
         job_file: Path to save job state JSON.
+        extra_job_fields: F-157 — additional/overriding fields merged into the
+            job JSON (e.g. run_batch_regression adds type/current/current_log/
+            completed/test_list and overrides "log_file" with the aggregate
+            regression log, since this call's `log_file` param is the
+            per-test log used for redirection).
 
     Returns:
         PID of the launched process (0 if unknown).
@@ -339,12 +345,15 @@ async def launch_nohup_job(
     pid = int(pid_str.strip()) if pid_str.strip().isdigit() else 0
 
     if pid:
-        job_info = json.dumps({
+        job_dict = {
             "pid": pid,
             "log_file": log_file,
             "test_name": test_name,
             "started_at": datetime.now().isoformat(),
-        })
+        }
+        if extra_job_fields:
+            job_dict.update(extra_job_fields)
+        job_info = json.dumps(job_dict)
         done_file = f"{log_file}.done"
         # Write job file (fast, sync)
         await shell_run(f"printf '%s' {shell_quote(job_info)} > {job_file}", timeout=15)
@@ -850,45 +859,27 @@ async def run_batch_regression(
             if params["extra_args"]:
                 cmd = f"{cmd} {params['extra_args']}"
 
-            # B-0 fix: subshell wrapping, stdbuf removed (Xcelium incompatible)
-            # P6-5b: echo $! > pid_file inside subshell — aligns with run_batch_single
+            # F-157: reuse launch_nohup_job (was an inline re-implementation of
+            # the same nohup+PID+jobfile+watcher sequence run_batch_single uses).
             run_cmd = f"env {env_prefix}{cmd}"
-            pid_file = f"{test_log}.pid"
-            await shell_run(
-                f"cd {shell_quote(sim_dir)} && "
-                f"(nohup {run_cmd} {build_redirect(test_log)} < /dev/null & echo $! > {pid_file}) "
-                f">& /dev/null",
-                timeout=15.0,
+            test_pid = await launch_nohup_job(
+                sim_dir, run_cmd, test_log, test_name, job_file,
+                extra_job_fields={
+                    "type": "regression",
+                    "current": test_name,
+                    "current_log": test_log,
+                    "completed": completed_tests,
+                    "test_list": test_list,
+                    "log_file": log_file,  # overrides base "log_file" (=test_log) with the aggregate regression log
+                },
             )
-
-            # Read PID + save job state in single cycle (F-020: was 2 base64 writes)
-            pid_str = await shell_run(f"(cat {pid_file} || true); rm -f {pid_file}", timeout=5)
-            test_pid = int(pid_str.strip()) if pid_str.strip().isdigit() else 0
-            job_info = json.dumps({
-                "type": "regression",
-                "pid": test_pid,
-                "log_file": log_file,
-                "current": test_name,
-                "current_log": test_log,
-                "completed": completed_tests,
-                "test_list": test_list,
-                "started_at": datetime.now().isoformat(),
-            })
-            # Write job file (fast, sync)
-            await shell_run(f"printf '%s' {shell_quote(job_info)} > {job_file}", timeout=15)
-            # Launch PID watcher — fire and forget (Popen with DEVNULL, returns immediately)
-            if test_pid:
-                test_done = f"{test_log}.done"
-                await shell_run_fire_and_forget(
-                    f"while kill -0 {test_pid} 2>/dev/null; do sleep 2; done; touch {shell_quote(test_done)}"
-                )
 
             # Per-test poll (P6-1/P6-2/P6-5 via poll_batch_log)
             _, timed_out = await poll_batch_log(test_log, 600)
 
             if timed_out:
                 # Guard: kill stale xmsim/xmrm to prevent worklib lock on next test
-                if pid_str.strip().isdigit():
+                if test_pid:
                     await shell_run(
                         f"(kill -0 {test_pid}) && kill {test_pid}",
                         timeout=5,
