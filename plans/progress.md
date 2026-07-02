@@ -1,6 +1,28 @@
 
 ---
 
+## 2026-07-02 - F-161: 아키텍처 리팩터 — resolve_sim_dir/get_default_sim_dir을 discovery.py → registry.py로 이동
+
+### 배경
+code-analyzer 에이전트의 아키텍처 리뷰(2026-07-02, Minor #7)에서 발견. `resolve_sim_dir`/`get_default_sim_dir`이 `load_registry()`만 쓰는데 무거운 `discovery.py`(runner_detection, sim_env_detection 등 의존)에 있어서, 여러 모듈이 순환참조를 피하려고 함수 내부에서 lazy import 중이었음. 아키텍처 리뷰가 권장한 선행 작업(F-155~160 리팩터 전에 먼저) — priority 3이지만 다른 태스크의 전제조건이라 먼저 진행.
+
+### 구현 내용
+- `registry.py`에 `get_default_sim_dir()`/`resolve_sim_dir()` 이동 (registry는 tcl_bridge 외 의존성 없는 leaf 모듈이라 어디서 import해도 순환 위험 없음)
+- `discovery.py`에서 두 함수 제거, 내부 사용처는 `from xcelium_mcp.registry import get_default_sim_dir`로 재import
+- 실제로는 review가 집계한 4곳보다 많은 **lazy import 6곳** 발견 및 정리: `registry.py`(config_action 자기 자신 호출이라 import 자체 제거), `test_resolution.py`, `csv_cache.py`(2곳), `tools/signal_inspection.py`, `tools/waveform.py` — 전부 module-level import로 전환
+- module-level import였던 `bridge_lifecycle.py`, `simvision_ops.py`, `tools/batch.py`, `tools/checkpoint.py`, `tools/debug.py`, `tools/sim_lifecycle.py`도 import 출처를 `discovery` → `registry`로 갱신
+- 부수 정리: `csv_cache.py`의 인접 lazy import(`load_sim_config`, `build_eda_command`)도 같은 줄을 만지는 김에 module-level로 정리(F-161 범위는 아니지만 동일 패턴이라 함께 처리)
+- `test_resolution.py`의 stale 주석("sim_runner → batch_runner → sim_runner" — F-005로 이미 사라진 모듈 언급) 제거
+
+### 검증
+`python -c "import xcelium_mcp.server"` 순환 임포트 없음 확인. `tests/test_regression_summary.py`가 `patch("xcelium_mcp.discovery.get_default_sim_dir", ...)`로 패치하는 기존 테스트 2개가 여전히 통과함을 확인 — `discovery.py`가 재import로 해당 이름을 자기 네임스페이스에 유지하고 있어 patch 경로가 그대로 유효.
+동작 변경 없는 순수 리팩터라 `python -m pytest` 427 passed(테스트 수 불변) / `python -m ruff check src/` all checks passed.
+
+### 남은 작업
+F-155~160(아키텍처 리뷰 나머지 6건, 이번 F-161이 전제조건이었음), F-162(캐시 격리) — 전부 미착수.
+
+---
+
 ## 2026-07-02 - F-154: 버그 수정 — cleanup_stale_csv mtime 탐지 휴리스틱 오탐 수정
 
 ### 배경
