@@ -1,6 +1,30 @@
 
 ---
 
+## 2026-07-02 - F-147: 버그 수정 — deposit_signal 값 검증 정규식 소수점(real/wreal) 미지원
+
+### 배경
+F-144 광범위 조사로 분리된 마지막 항목. bisect(읽기 경로)의 소수점 버그와 짝을 이루는 쓰기 경로 — `deposit_signal`의 `_DEPOSIT_VALUE_RE`가 digital Verilog literal만 허용해 real/wreal(AMS analog) 값("3.3")을 Tcl에 도달하기도 전에 Python 레이어에서 거부.
+
+### 구현 내용
+- `signal_inspection.py _DEPOSIT_VALUE_RE`: `^[\d'bhBHdDoOxXzZ_]+$` → `^[\da-fA-F'bhBHdDoOxXzZ_.eE+-]+$` — 소수점(`.`), 부호(`-`/`+`), 지수표기(`e`/`E`) 추가. injection 방지 목적(F-012)은 그대로 유지 — Tcl 메타문자(`;`,`[`,`]`,`$`,`{`,`}`, 공백, 따옴표, 백슬래시)는 여전히 전부 거부됨(char class에 없음).
+- **부수 발견**: 테스트를 작성하다가 `8'hFF`(함수 자체 docstring의 예시)가 기존 정규식에서 애초에 매치되지 않던 사전 버그를 발견 — hex 자릿값 문자 `a-f`/`A-F`가 char class에 전혀 없었음(라디칼 지정자 `h`/`H`만 있고 실제 hex 숫자는 없었음). `deposit_signal`에 대한 테스트가 이전까지 전무해 아무도 잡지 못했던 것 — 같은 정규식을 손대는 김에 `a-fA-F`도 함께 추가해 실제로 동작하도록 수정.
+- docstring/에러 메시지에 real/wreal 예시(`3.3`, `-1.5`, `1.2e-05`) 추가
+
+### 검증
+`tests/test_deposit_signal.py` 신규 작성 (24 tests, 이전엔 deposit_signal에 대한 테스트가 전무했음) — 기존 digital literal 회귀 없음(hex 포함), 신규 decimal/음수/과학적 표기법 허용, injection payload 10종 여전히 거부, end-to-end `deposit_signal` tool 호출(정상/injection/digital 각 1개) 확인.
+`python -m pytest` 390 passed (366→390) / `python -m ruff check src/` all checks passed.
+
+### F-144~F-147 전체 마무리
+사용자 버그 리포트("bisect CSV 소수점 미지원")에서 출발한 광범위 조사 4개 항목 모두 구현·테스트 완료:
+- F-144: bisect CSV (읽기 경로, SimTime + 값 비교)
+- F-145: compare_waveforms (동일 버그 독립 재구현 지점)
+- F-146: 시간 문자열 파싱 3곳 (bridge where / checkpoint L1 / sim_run duration)
+- F-147: deposit_signal (쓰기 경로, + 부수적으로 발견한 hex 버그)
+전체 pytest 325(F-140 시작 시점) → 390 passed, 신규 테스트 65개 추가. `plans/prd.json`은 프로젝트 규칙상 `passes:false`로 유지 — 사용자 확인 대기.
+
+---
+
 ## 2026-07-02 - F-146: 버그 수정 — 시간 문자열 파싱 3곳 소수점 미지원
 
 ### 배경

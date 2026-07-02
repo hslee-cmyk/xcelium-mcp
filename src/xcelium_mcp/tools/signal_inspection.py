@@ -12,8 +12,16 @@ from xcelium_mcp.bridge_manager import BridgeManager
 from xcelium_mcp.shell_utils import find_shm, sanitize_signal_name
 from xcelium_mcp.tcl_bridge import TclError
 
-# Verilog/SystemVerilog value literals: 1'b0, 8'hFF, 32'd100, 16'bxxxx, plain digits
-_DEPOSIT_VALUE_RE = re.compile(r"^[\d'bhBHdDoOxXzZ_]+$")
+# Verilog/SystemVerilog value literals: 1'b0, 8'hFF, 32'd100, 16'bxxxx, plain digits.
+# F-147: also allow real/wreal (AMS analog) decimal values: 3.3, -1.5, 1.2e-05.
+# (Also fixes a pre-existing bug found while extending this: hex digit letters
+# a-f/A-F were never in the charset, so "8'hFF" — the function's own docstring
+# example — never actually matched. Zero test coverage previously existed.)
+# Charset stays a strict allowlist (no Tcl metachars) — this is the sole
+# injection guard for deposit_signal's value param (interpolated into a raw
+# Tcl bridge command), so any addition here must not admit ';', '[', ']',
+# '$', '{', '}', whitespace, quotes, or backslash.
+_DEPOSIT_VALUE_RE = re.compile(r"^[\da-fA-F'bhBHdDoOxXzZ_.eE+-]+$")
 
 # SimVision 'scope show' returns TCL list items in four forms:
 #   {{full.path}[idx]}  — scope show on array base returns double-braced elements
@@ -288,7 +296,8 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
 
         Args:
             signal:  Full hierarchical signal path.
-            value:   Value to deposit (e.g. "1'b1", "8'hFF"). Required unless release=True.
+            value:   Value to deposit (e.g. "1'b1", "8'hFF", or "3.3"/"-1.5" for
+                     real/wreal analog nets). Required unless release=True.
             release: True = release the signal instead of depositing.
         """
         # S-1 fix: sanitize signal name
@@ -307,7 +316,8 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             if not _DEPOSIT_VALUE_RE.fullmatch(value):
                 return (
                     f"ERROR: Invalid deposit value {value!r}. "
-                    "Only Verilog literals allowed (e.g. 1'b1, 8'hFF, 32'd100)."
+                    "Only Verilog literals (e.g. 1'b1, 8'hFF, 32'd100) or "
+                    "real/wreal decimal values (e.g. 3.3, -1.5, 1.2e-05) allowed."
                 )
             readback = await bridge.execute(f"__DEPOSIT_AND_VERIFY__ {signal} {value}")
             return f"Deposited {value} on {signal}. Readback: {readback}"
