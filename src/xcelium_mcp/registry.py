@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from xcelium_mcp import checkpoint_manager as _checkpoint_manager
 from xcelium_mcp.tcl_bridge import DEFAULT_BRIDGE_PORT
 
 _REGISTRY_PATH = Path.home() / ".xcelium_mcp" / "mcp_registry.json"
@@ -223,24 +224,27 @@ def _parse_json_value(value: str) -> int | float | bool | str:
 
 async def config_action(action: str, file: str, key: str, value: str) -> str:
     """Execute mcp_config action."""
-    # Load target file
+    # Load target file. Each branch also defines _write(d), an async closure
+    # that persists the (possibly mutated) data dict through the correct
+    # owner for that file.
     if file == "registry":
         data = await asyncio.to_thread(_load_registry_sync)
-        path = _REGISTRY_PATH
+
+        async def _write(d: dict) -> None:
+            await asyncio.to_thread(_write_json_sync, _REGISTRY_PATH, d)
     elif file == "checkpoint":
         try:
             sim_dir = await resolve_sim_dir()
         except ValueError as e:
             raise RuntimeError(str(e))
-        path = Path(sim_dir) / "checkpoints" / "manifest.json"
-        if await asyncio.to_thread(path.exists):
-            try:
-                raw = await asyncio.to_thread(path.read_text)
-                data = json.loads(raw)
-            except json.JSONDecodeError:
-                data = {}
-        else:
-            data = {}
+        # F-159: delegate to checkpoint_manager's read/write so the manifest
+        # schema (compile_hash, checkpoints, tb_analysis_cache) has a single
+        # owner — this generic dot-path editor no longer reads/writes the
+        # file directly, only via checkpoint_manager's own I/O functions.
+        data = await asyncio.to_thread(_checkpoint_manager._read_manifest, sim_dir)
+
+        async def _write(d: dict) -> None:
+            await asyncio.to_thread(_checkpoint_manager._write_manifest, sim_dir, d)
     else:
         try:
             sim_dir = await resolve_sim_dir()
@@ -251,6 +255,9 @@ async def config_action(action: str, file: str, key: str, value: str) -> str:
             raise RuntimeError(f"No .mcp_sim_config.json in {sim_dir}. Run sim_discover first.")
         data = cfg
         path = Path(sim_dir) / ".mcp_sim_config.json"
+
+        async def _write(d: dict) -> None:
+            await asyncio.to_thread(_write_json_sync, path, d)
 
     if action == "show":
         return json.dumps(data, indent=2)
@@ -268,12 +275,12 @@ async def config_action(action: str, file: str, key: str, value: str) -> str:
 
         parsed = _parse_json_value(value)
         _dot_set(data, key, parsed)
-        await asyncio.to_thread(_write_json_sync, path, data)
+        await _write(data)
         return f"Set {key} = {json.dumps(parsed)}"
 
     if action == "delete":
         if _dot_delete(data, key):
-            await asyncio.to_thread(_write_json_sync, path, data)
+            await _write(data)
             return f"Deleted {key}"
         return f"Key '{key}' not found"
 

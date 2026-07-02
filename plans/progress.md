@@ -1,6 +1,28 @@
 
 ---
 
+## 2026-07-02 - F-159: 아키텍처 리팩터 — checkpoints/manifest.json 단일 writer화
+
+### 배경
+code-analyzer 아키텍처 리뷰(2026-07-02, Major #5), Claude가 직접 코드 확인. `checkpoint_manager.py`가 `_read_manifest`/`_write_manifest`로 manifest 스키마(`compile_hash`, `checkpoints`, `tb_analysis_cache`)를 관리하는데, `registry.config_action`의 `file=="checkpoint"` 분기가 완전히 별개 경로로 같은 파일을 raw `Path.read_text`/`_write_json_sync`로 직접 읽고 썼음 — `mcp_config` tool을 통해 AI가 스키마 지식 없이 manifest를 손상시킬 수 있는 실질적 데이터 무결성 리스크였음.
+
+### 구현 내용
+- `registry.py`에 `checkpoint_manager` 모듈 최상단 import 추가(순환참조 없음 확인 — checkpoint_manager는 xcelium_mcp 내부 의존성이 전혀 없는 leaf 모듈)
+- `config_action()`을 각 분기(`registry`/`checkpoint`/그 외 project config)마다 `_write(d)` async 클로저를 정의하는 구조로 재구성 — `checkpoint` 분기의 read는 `checkpoint_manager._read_manifest(sim_dir)`, write는 `checkpoint_manager._write_manifest(sim_dir, d)`를 경유
+- dot-path 데이터 접근(`_dot_get`/`_dot_set`/`_dot_delete`)은 그대로 유지 — I/O 경로만 교체
+
+### 부수 발견 — 버그 수정
+`_write_manifest`는 `checkpoints/` 디렉터리가 없으면 `mkdir(parents=True)`로 생성하는데, 기존 raw `_write_json_sync`는 디렉터리 생성을 안 해서 **한 번도 checkpoint를 저장한 적 없는 sim_dir에서 `mcp_config(file='checkpoint', action='set', ...)`을 먼저 호출하면 `FileNotFoundError`로 죽었을 것** — 통합하면서 이 엣지케이스도 함께 해소됨.
+
+### 검증
+`tests/test_config_action_checkpoint.py` 신규 작성(4 tests, 이전엔 `config_action`에 대한 테스트가 전무했음) — 디렉터리 미존재 시 정상 생성, `checkpoint_manager.register_checkpoint()`로 쓴 데이터가 `config_action(get)`으로 보이는지(단일 writer 증명), `config_action(set)`이 기존 `compile_hash`/`checkpoints` 스키마를 훼손하지 않는지(read-modify-write 증명), `config_action(delete)`가 실제 manifest에 반영되는지 확인.
+`python -m pytest` 458 passed(454→458) / `python -m ruff check src/` all checks passed.
+
+### 남은 작업
+F-160(`BOUNDARY_SIGNALS` 이전), F-162(캐시 격리) — 미착수.
+
+---
+
 ## 2026-07-02 - F-158: 아키텍처 리팩터 — build_eda_command 일원화 (batch_runner + simvision_ops)
 
 ### 배경
