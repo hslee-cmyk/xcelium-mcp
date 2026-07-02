@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -386,6 +387,23 @@ def test_get_ssh_cmd_timeout_coerced_to_float() -> None:
 # shell_run_with_retry
 # ---------------------------------------------------------------------------
 
+
+@contextmanager
+def _patched_asyncio_passthrough():
+    """Patch xcelium_mcp.shell_utils.asyncio but keep real TimeoutError/subprocess/wait_for.
+
+    Only asyncio.sleep is replaced with a no-op mock, so retry backoff
+    doesn't actually delay the test.
+    """
+    with patch("xcelium_mcp.shell_utils.asyncio") as mock_asyncio:
+        mock_asyncio.TimeoutError = asyncio.TimeoutError
+        mock_asyncio.sleep = AsyncMock()
+        mock_asyncio.create_subprocess_shell = asyncio.create_subprocess_shell
+        mock_asyncio.subprocess = asyncio.subprocess
+        mock_asyncio.wait_for = asyncio.wait_for
+        yield mock_asyncio
+
+
 @pytest.mark.asyncio
 async def test_shell_run_with_retry_success_first_attempt() -> None:
     """Succeeds on first attempt — no retry needed."""
@@ -401,12 +419,7 @@ async def test_shell_run_with_retry_retries_on_timeout() -> None:
     """Retries on TimeoutError, succeeds on second attempt."""
     with patch("xcelium_mcp.shell_utils.shell_run", new_callable=AsyncMock) as mock:
         mock.side_effect = [asyncio.TimeoutError("timeout"), "ok"]
-        with patch("xcelium_mcp.shell_utils.asyncio") as mock_asyncio:
-            mock_asyncio.TimeoutError = asyncio.TimeoutError
-            mock_asyncio.sleep = AsyncMock()
-            mock_asyncio.create_subprocess_shell = asyncio.create_subprocess_shell
-            mock_asyncio.subprocess = asyncio.subprocess
-            mock_asyncio.wait_for = asyncio.wait_for
+        with _patched_asyncio_passthrough():
             result = await shell_run_with_retry("cmd", timeout=5.0, max_retries=2, backoff_base=1.0)
             assert result == "ok"
             assert mock.call_count == 2
@@ -417,12 +430,7 @@ async def test_shell_run_with_retry_raises_after_max_retries() -> None:
     """Raises TimeoutError after exhausting all retries."""
     with patch("xcelium_mcp.shell_utils.shell_run", new_callable=AsyncMock) as mock:
         mock.side_effect = asyncio.TimeoutError("timeout")
-        with patch("xcelium_mcp.shell_utils.asyncio") as mock_asyncio:
-            mock_asyncio.TimeoutError = asyncio.TimeoutError
-            mock_asyncio.sleep = AsyncMock()
-            mock_asyncio.create_subprocess_shell = asyncio.create_subprocess_shell
-            mock_asyncio.subprocess = asyncio.subprocess
-            mock_asyncio.wait_for = asyncio.wait_for
+        with _patched_asyncio_passthrough():
             with pytest.raises(asyncio.TimeoutError):
                 await shell_run_with_retry("cmd", timeout=5.0, max_retries=1, backoff_base=1.0)
             assert mock.call_count == 2  # original + 1 retry
@@ -938,10 +946,22 @@ async def test_start_simvision_removes_stale_ready_file_on_connection_failure() 
 # ---------------------------------------------------------------------------
 
 
+def _make_inspect_tool(fake_bridges):
+    """Register inspect_signal and return the tool fn."""
+    from unittest.mock import patch
+    from mcp.server.fastmcp import FastMCP
+    from xcelium_mcp.tools.signal_inspection import register
+
+    with patch("xcelium_mcp.tools.signal_inspection.sanitize_signal_name", side_effect=lambda s: s):
+        mcp = FastMCP("test_inspect_signal")
+        register(mcp, fake_bridges)
+        return mcp._tool_manager._tools["inspect_signal"].fn
+
+
 @pytest.mark.asyncio
 async def test_inspect_signal_list_nonrecursive_uses_describe_dot() -> None:
     """list action with recursive=False (default) sends describe scope.pattern."""
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import MagicMock
 
     executed: list[str] = []
 
@@ -953,13 +973,8 @@ async def test_inspect_signal_list_nonrecursive_uses_describe_dot() -> None:
     fake_bridges = MagicMock()
     fake_bridges.get_bridge.return_value = _FakeBridge()
 
-    with patch("xcelium_mcp.tools.signal_inspection.sanitize_signal_name", side_effect=lambda s: s):
-        from xcelium_mcp.tools.signal_inspection import register
-        from mcp.server.fastmcp import FastMCP
-        mcp = FastMCP("test")
-        register(mcp, fake_bridges)
-        tool = mcp._tool_manager._tools["inspect_signal"]
-        await tool.fn(action="list", scope="top.hw", pattern="*sda*", recursive=False)
+    tool_fn = _make_inspect_tool(fake_bridges)
+    await tool_fn(action="list", scope="top.hw", pattern="*sda*", recursive=False)
 
     assert len(executed) == 1
     assert executed[0] == "describe top.hw.*sda*"
@@ -968,7 +983,7 @@ async def test_inspect_signal_list_nonrecursive_uses_describe_dot() -> None:
 @pytest.mark.asyncio
 async def test_inspect_signal_list_recursive_single_tcl_call() -> None:
     """list recursive=True sends a single __LIST_SIGNALS__ command (F-135: no per-item round-trips)."""
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import MagicMock
 
     executed: list[str] = []
 
@@ -982,13 +997,8 @@ async def test_inspect_signal_list_recursive_single_tcl_call() -> None:
     fake_bridges = MagicMock()
     fake_bridges.get_bridge.return_value = _FakeBridge()
 
-    with patch("xcelium_mcp.tools.signal_inspection.sanitize_signal_name", side_effect=lambda s: s):
-        from xcelium_mcp.tools.signal_inspection import register
-        from mcp.server.fastmcp import FastMCP
-        mcp = FastMCP("test")
-        register(mcp, fake_bridges)
-        tool = mcp._tool_manager._tools["inspect_signal"]
-        result = await tool.fn(action="list", scope="top.hw", pattern="*sda*", recursive=True)
+    tool_fn = _make_inspect_tool(fake_bridges)
+    result = await tool_fn(action="list", scope="top.hw", pattern="*sda*", recursive=True)
 
     # Exactly one TCP call (the __LIST_SIGNALS__ meta command)
     assert len(executed) == 1
@@ -1004,7 +1014,7 @@ async def test_inspect_signal_list_recursive_single_tcl_call() -> None:
 @pytest.mark.asyncio
 async def test_inspect_signal_list_recursive_no_match_returns_message() -> None:
     """recursive=True with no matching signals returns a descriptive message."""
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import MagicMock
 
     class _FakeBridge:
         async def execute(self, cmd: str, timeout: float = 30) -> str:
@@ -1013,13 +1023,8 @@ async def test_inspect_signal_list_recursive_no_match_returns_message() -> None:
     fake_bridges = MagicMock()
     fake_bridges.get_bridge.return_value = _FakeBridge()
 
-    with patch("xcelium_mcp.tools.signal_inspection.sanitize_signal_name", side_effect=lambda s: s):
-        from xcelium_mcp.tools.signal_inspection import register
-        from mcp.server.fastmcp import FastMCP
-        mcp = FastMCP("test")
-        register(mcp, fake_bridges)
-        tool = mcp._tool_manager._tools["inspect_signal"]
-        result = await tool.fn(action="list", scope="top.hw", pattern="*sda*", recursive=True)
+    tool_fn = _make_inspect_tool(fake_bridges)
+    result = await tool_fn(action="list", scope="top.hw", pattern="*sda*", recursive=True)
 
     assert "No signals" in result
 
@@ -1027,7 +1032,7 @@ async def test_inspect_signal_list_recursive_no_match_returns_message() -> None:
 @pytest.mark.asyncio
 async def test_inspect_signal_list_recursive_default_false_backward_compat() -> None:
     """recursive=False (default) preserves the existing describe scope.pattern behaviour."""
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import MagicMock
 
     executed: list[str] = []
 
@@ -1039,13 +1044,8 @@ async def test_inspect_signal_list_recursive_default_false_backward_compat() -> 
     fake_bridges = MagicMock()
     fake_bridges.get_bridge.return_value = _FakeBridge()
 
-    with patch("xcelium_mcp.tools.signal_inspection.sanitize_signal_name", side_effect=lambda s: s):
-        from xcelium_mcp.tools.signal_inspection import register
-        from mcp.server.fastmcp import FastMCP
-        mcp = FastMCP("test")
-        register(mcp, fake_bridges)
-        tool = mcp._tool_manager._tools["inspect_signal"]
-        await tool.fn(action="list", scope="top.hw", pattern="*")
+    tool_fn = _make_inspect_tool(fake_bridges)
+    await tool_fn(action="list", scope="top.hw", pattern="*")
 
     assert executed == ["describe top.hw.*"], f"Unexpected: {executed}"
 
@@ -1053,18 +1053,6 @@ async def test_inspect_signal_list_recursive_default_false_backward_compat() -> 
 # ---------------------------------------------------------------------------
 # F-132: inspect_signal list recursive — xmsim silent fail → SimVision fallback
 # ---------------------------------------------------------------------------
-
-
-def _make_inspect_tool(fake_bridges):
-    """Register inspect_signal and return the tool fn."""
-    from unittest.mock import patch
-    from mcp.server.fastmcp import FastMCP
-    from xcelium_mcp.tools.signal_inspection import register
-
-    with patch("xcelium_mcp.tools.signal_inspection.sanitize_signal_name", side_effect=lambda s: s):
-        mcp = FastMCP("test_f132")
-        register(mcp, fake_bridges)
-        return mcp._tool_manager._tools["inspect_signal"].fn
 
 
 @pytest.mark.asyncio
@@ -1235,7 +1223,7 @@ async def test_list_recursive_empty_prefixes_general_mode() -> None:
 @pytest.mark.asyncio
 async def test_inspect_signal_list_scope_prefixes_threaded() -> None:
     """scope_prefixes param on inspect_signal is forwarded via __LIST_SIGNALS__ command."""
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import MagicMock
 
     calls: list[str] = []
 
@@ -1253,16 +1241,11 @@ async def test_inspect_signal_list_scope_prefixes_threaded() -> None:
     fake_bridges.xmsim_raw = MagicMock()   # different object → no fallback
     fake_bridges.simvision_raw = sv_bridge
 
-    with patch("xcelium_mcp.tools.signal_inspection.sanitize_signal_name", side_effect=lambda s: s):
-        from xcelium_mcp.tools.signal_inspection import register
-        from mcp.server.fastmcp import FastMCP
-        mcp = FastMCP("test_f133")
-        register(mcp, fake_bridges)
-        tool = mcp._tool_manager._tools["inspect_signal"]
-        result = await tool.fn(
-            action="list", scope="top", pattern="*sda*",
-            target="simvision", recursive=True, scope_prefixes=["inst_"]
-        )
+    tool_fn = _make_inspect_tool(fake_bridges)
+    result = await tool_fn(
+        action="list", scope="top", pattern="*sda*",
+        target="simvision", recursive=True, scope_prefixes=["inst_"]
+    )
 
     # __LIST_SIGNALS__ was called with inst_ prefix in the command
     assert len(calls) == 1

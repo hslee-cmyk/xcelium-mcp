@@ -45,7 +45,17 @@ Claude가 직접 코드 확인 완료: `sim_batch_run`(93-117라인)과 `sim_reg
 
 **검증**: `tests/test_batch_helpers.py`에 `TestHistoryScopes` 5 tests 추가(기록된 scopes 반환/기록 없음/빈 dict/config 로드 실패/None config). `pytest` 472 passed(467→472), `ruff check src/` clean.
 
-**남은 작업**: F-168(테스트 헬퍼 재사용 + mock-wiring 중복 제거)로 진행.
+### F-168: 테스트 헬퍼 _make_inspect_tool 미재사용 4곳 + shell_run_with_retry mock-wiring 중복 2곳
+
+`_make_inspect_tool` 헬퍼(F-132 섹션에서 정의)가 있었는데, 그보다 앞선 F-131/F-135 섹션의 테스트 4개와 뒤쪽 F-133 섹션의 테스트 1개(`test_inspect_signal_list_scope_prefixes_threaded`)가 이를 재사용하지 않고 register+patch 인라인 패턴을 반복하고 있었음. 별도로 `shell_run_with_retry` 테스트 2개(`retries_on_timeout`, `raises_after_max_retries`)가 `patch("xcelium_mcp.shell_utils.asyncio")` 6줄짜리 mock-wiring 블록을 반복.
+
+**구현**:
+- `_make_inspect_tool`을 F-131/F-135 섹션 최상단(첫 사용 지점 바로 위)으로 이동, F-132 섹션의 중복 정의 삭제. 5개 테스트(4개 앞선 섹션 + scope_prefixes_threaded) 모두 헬퍼를 사용하도록 축소.
+- `shell_run_with_retry` 섹션에 `_patched_asyncio_passthrough()` 컨텍스트매니저(`@contextmanager`) 추가 — 2개 테스트 모두 사용하도록 축소.
+
+**검증**: `pytest` 472 passed(변화 없음, 순수 리팩터), `ruff check src/` clean. 개별로 `-k "inspect_signal or recursive_list"` 8 tests 재확인.
+
+**남은 작업**: F-169(registry.py `_write_json` 죽은 코드 제거)로 진행.
 
 ### F-160 보류 (사용자 결정)
 code-analyzer 아키텍처 리뷰 Major #6(`BOUNDARY_SIGNALS` 프로젝트별 하드코딩)은 F-155~159와 달리 **순수 리팩터가 아니라 기본 동작을 바꾸는 breaking change**임을 재확인 — `_resolve_probe_signals`의 `dump_strategy.top_boundary` 미설정 시 폴백이 v5.1 backward-compat의 핵심 경로이자 venezia 프로젝트의 실사용 경로(`tests/test_dump_strategy.py`, `tests/test_hierarchical_dump.py`가 이 폴백을 명시적으로 테스트). 원안대로 "빈 리스트+에러"로 바꾸면 venezia의 `.mcp_sim_config.json`에 `top_boundary`가 먼저 마이그레이션돼 있지 않은 한 기존 `dump_depth="boundary"` 호출이 전부 깨짐. 사용자에게 확인 결과 **보류** 결정 — `plans/prd.json`에 `skip:true` + 결정 근거 기록, ralph-loop 자동 진행 대상에서 제외. 재개 시 마이그레이션 전략부터 별도 논의 필요.
