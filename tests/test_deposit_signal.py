@@ -139,3 +139,25 @@ async def test_deposit_signal_still_accepts_digital_literal() -> None:
         result = await tool.fn(signal="top.hw.r_en", value="1'b1")
 
     assert "Deposited 1'b1" in result
+
+
+@pytest.mark.asyncio
+async def test_deposit_signal_rejects_embedded_newline_in_signal_name() -> None:
+    """F-148: a signal name with an embedded newline must be rejected before
+    reaching the bridge — otherwise it smuggles a second Tcl command past the
+    line-framed bridge protocol (tcl_bridge.py's `command + "\\n"` framing)."""
+    from mcp.server.fastmcp import FastMCP
+    from xcelium_mcp.tools.signal_inspection import register
+
+    fake_bridge = _FakeBridge()
+    fake_bridges = MagicMock()
+    fake_bridges.xmsim = fake_bridge
+
+    # Real sanitize_signal_name (not patched) must catch this.
+    mcp = FastMCP("test")
+    register(mcp, fake_bridges)
+    tool = mcp._tool_manager._tools["deposit_signal"]
+    result = await tool.fn(signal="top.hw.r_en\ndatabase close", value="1'b1")
+
+    assert "ERROR" in result
+    assert not fake_bridge.calls, "bridge must not be called when signal name validation fails"

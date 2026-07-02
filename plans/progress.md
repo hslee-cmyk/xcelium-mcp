@@ -1,6 +1,27 @@
 
 ---
 
+## 2026-07-02 - F-148: 보안 수정 — sanitize_signal_name 개행문자 미차단 (Tcl 명령 스머글링)
+
+### 배경
+code-analyzer 에이전트의 광범위 코드 리뷰(Critical #1)에서 발견, Claude가 직접 프로토콜 코드를 추적해 재현 가능함을 검증. `sanitize_signal_name`이 `[`, `$`, `;`만 거부하고 개행은 체크하지 않음 — `tcl_bridge.py:129`가 명령을 `command + "\n"`으로 1개 개행 프레이밍하고, `tcl/mcp_bridge.tcl:162-186`의 `on_readable`이 `gets $channel line`으로 한 줄씩 읽어 즉시 dispatch. 신호명에 개행이 포함되면 두 개의 독립된 Tcl 명령으로 스플릿되어 두 번째 명령이 Python 클라이언트 모르게 실행됨.
+
+### 구현 내용
+- `shell_utils.py sanitize_signal_name()`: 빈 문자열 체크 직후 `'\n' in stripped or '\r' in stripped` 검사 추가 — 개행/CR 포함 시 `ValueError`
+- docstring에 개행/CR 거부 근거(line-framed 프로토콜) 명시
+
+### 영향도 (사전 검증 완료, 회귀 없음)
+`sanitize_signal_name` 호출부 14곳(`csv_cache.py`, `debug_tools.py`, `tools/debug.py`, `tools/signal_inspection.py`, `tools/waveform.py`) 전부 개별 신호명/scope 문자열만 넘겨 개행을 포함할 정당한 사용 사례 없음. `.strip()`은 선행/후행 개행만 제거하므로 (`test_leading_trailing_newline_still_stripped`로 확인) 중간에 삽입된 개행만 새로 거부됨.
+
+### 검증
+`tests/test_pure_helpers.py TestSanitizeSignalName`에 4개 injection 케이스 + strip 경계 테스트 1개 추가, `tests/test_deposit_signal.py`에 `deposit_signal` end-to-end 통합 테스트 1개 추가(개행 포함 signal 전달 시 bridge 미호출 확인).
+`python -m pytest` 396 passed (390→396) / `python -m ruff check src/` all checks passed.
+
+### 남은 작업
+같은 리뷰에서 발견된 F-149(reload_waveform shm_path 무검증), F-150(Tcl-safe path validator), F-151(compare_simvision signals sanitize 누락) — 전부 priority 1, 아직 미착수. execute_tcl(5번)과 dead code 제거(8번)는 사용자 지시로 수정 대상에서 제외.
+
+---
+
 ## 2026-07-02 - F-147: 버그 수정 — deposit_signal 값 검증 정규식 소수점(real/wreal) 미지원
 
 ### 배경

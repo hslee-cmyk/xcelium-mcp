@@ -309,6 +309,23 @@ class TestSanitizeSignalName:
         with pytest.raises(ValueError, match="Tcl injection"):
             sanitize_signal_name("sig[exec rm]")
 
+    # --- F-148: embedded newline/CR must be rejected (command smuggling) ---
+
+    @pytest.mark.parametrize("payload", [
+        "top.a\ndatabase close",
+        "top.a\nexec rm -rf /",
+        "top.a\r\ndatabase close",
+        "top.a\rdatabase close",
+    ])
+    def test_embedded_newline_rejected(self, payload):
+        with pytest.raises(ValueError, match="newline"):
+            sanitize_signal_name(payload)
+
+    def test_leading_trailing_newline_still_stripped(self):
+        """Newlines at the very ends are removed by strip() before the check —
+        only embedded (mid-string) newlines are a smuggling vector."""
+        assert sanitize_signal_name("\ntop.hw.clk\n") == "top.hw.clk"
+
 
 # ---------------------------------------------------------------------------
 # is_safe_tcl_string (F-062)

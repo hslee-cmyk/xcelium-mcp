@@ -232,7 +232,8 @@ def sanitize_signal_name(name: str) -> str:
 
     Allows: alphanumeric, underscore, dot, brackets, colon, star, backslash, slash, space.
     Rejects: Tcl injection chars like [, ], $, ;, {, } when used outside of
-    legitimate signal path syntax.
+    legitimate signal path syntax, and embedded newlines/CR (command smuggling
+    across the line-framed Tcl bridge protocol).
 
     Raises ValueError if the name contains dangerous characters.
     """
@@ -240,6 +241,15 @@ def sanitize_signal_name(name: str) -> str:
     stripped = name.strip()
     if not stripped:
         raise ValueError("Signal name cannot be empty")
+    # F-148: reject embedded newlines/CR — the Tcl bridge protocol frames one
+    # command per line (tcl_bridge.py _send_and_recv writes `command + "\n"`,
+    # mcp_bridge.tcl reads one `gets` per dispatch), so a signal name containing
+    # "\n" would smuggle a second, independent Tcl command past this guard.
+    if '\n' in stripped or '\r' in stripped:
+        raise ValueError(
+            f"Signal name contains forbidden newline/CR: {name!r}. "
+            "Only signal path characters allowed."
+        )
     # Check for Tcl command substitution: [exec ...] or [...]
     if re.search(r'\[(?![\d:]+\])', stripped):
         # Allow [N:M] bit-select but reject [exec ...] etc.
