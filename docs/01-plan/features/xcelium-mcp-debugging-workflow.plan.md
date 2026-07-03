@@ -19,6 +19,27 @@
 
 ---
 
+## Agent 위임 구조 (`verilog-rtl-debugger`, chip-design-skills 신설 예정)
+
+기존 chip-design-skills의 5개 verilog-rtl-* agent(analyst/architect-advisor/coder/prover/reviewer)는 전부 **정적 분석·코드 작성·formal 증명 전용**이며 MCP tool 접근 권한이 없다. 이 문서의 Phase 2~4(xcelium-mcp로 실제 시뮬레이션을 실행하고 bisect/CSV/FSM을 대조하는 **라이브 디버깅 루프**)를 수행할 agent가 지금 하나도 없다 — 이건 기존 5개 agent 스코프 밖의 진짜 공백이다.
+
+신설할 `verilog-rtl-debugger` agent가 이 공백을 메운다: **MCP tool 접근 권한을 가진 유일한 agent**로서 Phase 2(시뮬레이션 실행)~Phase 4(bisect/CSV 추출/FSM 전이 대조, Phase 4E의 AI 자율 디버깅 루프)를 직접 소유·수행하며, 필요 시 아래처럼 기존 agent를 호출하는 라우터 역할도 겸한다:
+
+| 상황 | 위임 대상 | 트리거 Phase |
+|------|----------|-------------|
+| `.ai/analysis/{module}.analysis.md` 부재/stale | `verilog-rtl-analyst` | Phase 1B |
+| 근본 원인 확정 후 실제 RTL 수정 코드 작성 | `verilog-rtl-coder` | Phase 5A |
+| 수정 커밋 전 AI-failure 패턴 리뷰 | `verilog-rtl-reviewer` | Phase 5A~5B |
+| 아키텍처 경계 판단 필요 (신규 FSM/모듈/case-arm) | `verilog-rtl-architect-advisor` | Phase 5A (수정 규모가 클 때) |
+| self-contained 로직/타이밍 클레임 형식 증명 | `verilog-rtl-prover` | Phase 5B (필요 시) |
+| Verilog-A / AMS 아날로그 컴포넌트 디버깅 | (verilog-rtl-debugger 직접 수행, `verilog-a` skill 참조) | Phase 1D-4/4E (AMS Tier 3) |
+
+**배포**: chip-design-skills repo에 기존 5개 agent와 동일하게 정본 관리, `install.py`로 `~/.claude/agents/`에 배포 — 독립 배포가 아니라 기존 agent kit 컨벤션을 그대로 따른다(이 점이 `xcelium-mcp-tool-usage-guide`의 skill 배포 방식과 다름에 유의). 상세 설계(시스템 프롬프트, tool 목록, 트리거 문구)는 chip-design-skills repo 소관의 별도 PDCA 사이클(`chip-design-skills/docs/01-plan/features/verilog-rtl-debugger.plan.md`)에서 진행하며, 이 문서는 "언제·무엇을 위임하는가"만 규정한다.
+
+**방법론 출처 — `references/phase-2~4*.md`가 agent의 "public API"가 됨 (2026-07-03 결정)**: `verilog-rtl-debugger` agent는 Phase 2~4 방법론을 자기 system prompt에 복사하지 않고, **런타임에 `~/.claude/skills/xcelium-sim/references/phase-2~4*.md`(tool-usage-guide FR-02~FR-06 산출물)를 직접 Read**해서 따른다 — 두 repo에 같은 내용이 중복돼 drift되는 것을 막기 위함. 이 때문에 **해당 reference 파일은 더 이상 이 skill 내부용 문서가 아니라, 다른 repo의 agent가 소비하는 계약(contract)**이 된다. `xcelium-mcp-tool-usage-guide.plan.md`에서 이 파일들을 수정할 때는 "Claude가 skill 안에서 읽기 좋은 형태"뿐 아니라 "독립된 agent가 그 자체로 읽고 수행할 수 있는 자기완결적 형태"인지도 함께 검토해야 한다.
+
+---
+
 ## 전체 워크플로우 개요
 
 ```
@@ -360,6 +381,8 @@ Phase 0 (1회성, lazy)              Phase 1 (매 디버깅)
 - **신호 의존성 맵**: 판별 신호를 생성하는 FSM/always 블록 식별
 - **크로스 FSM 신호**: 다른 모듈에서 오는 신호의 타이밍
 
+**분석서 부재/stale 시**: `verilog-rtl-debugger`(§Agent 위임 구조)가 `verilog-rtl-analyst` agent를 호출해 분석서를 먼저 작성/갱신한 후 진행한다. 분석서 없이 Phase 4C의 FSM 전이 대조로 바로 넘어가지 않는다.
+
 **실전 예시 (TOP015 V-18 FAIL 분석):**
 
 ```
@@ -657,6 +680,35 @@ sim_disconnect(action="shutdown")       # SHM 보존 안전 종료
 
 ---
 
+#### 1D-5. v5.2 `dump_scopes` — Block-level Dump (Tier 2를 대체하는 자동/수동 조합) [2026-07-03 추가]
+
+**신규 발견(2026-07-03 소스 대조)**: `xcelium-mcp-v5.2-hierarchical-dump` feature(2026-04-09 Plan → 2026-07-02 Report, 94% match rate, 완료됨)가 `sim_batch_run`/`sim_regression`에 `dump_scopes`/`use_dump_history` 파라미터를, `sim_bridge_run`/`sim_discover`에 `auto_boundaries`/`boundary_depth` 파라미터를 추가했다. 이 문서(Phase 1D)는 v5.2 이전(2026-04-09까지)에 작성되어 이 내용이 전혀 반영되어 있지 않았다 — §1D-3(Tier 2 Targeted-Deep)의 수동 신호 나열 방식을 사실상 대체·일반화하는 기능이므로 추가한다.
+
+**핵심 개념**: `dump_depth="boundary"`(top I/O만) vs `"all"`(전체) 사이의 **블록 단위 중간 해상도**를 `dump_scopes` dict로 지정한다.
+
+```python
+# 예: I2C 블록만 전체 dump, 나머지는 boundary만 (Tier 2의 수동 TIER2_I2C_SIGNALS 나열을 대체)
+sim_batch_run(
+    test_name="TOP015",
+    dump_depth="boundary",
+    dump_scopes={"top.hw.u_ext.u_ext_d_main.u_ext_i2cSlave": "all"},  # glob 지원, value: all/boundary/skip
+    sim_mode="gate",
+)
+
+# 재실행 시 이전 dump_scopes를 재사용 (자동 갱신되는 dump_history 참조)
+sim_batch_run(test_name="TOP015", use_dump_history=True)
+```
+
+**자동 감지(선택)**: 블록 경계를 수동으로 나열하지 않고 자동 탐색하려면:
+- **Flow A** (Bridge, 런타임): `sim_bridge_run(test_name="TOP015", auto_boundaries=True)` — SimVision `scope -describe`로 탐색 후 config에 저장.
+- **Flow B** (Batch, lazy): `sim_discover(boundary_depth=3)` — Yosys JSON 기반 netlist 분석으로 지연 탐색.
+
+**Tier 2(§1D-3)와의 관계**: Tier 2의 수동 `TIER2_I2C_SIGNALS` 신호 나열 방식은 여전히 유효하지만(세밀한 개별 신호 제어가 필요할 때), 블록 단위로 충분하면 `dump_scopes`가 더 간결하고 자동 감지까지 지원한다. 신규 작업에서는 `dump_scopes`를 우선 검토하고, 블록 내부 특정 신호까지 필요하면 Tier 2로 세분화한다.
+
+**상세 설계/구현**: `docs/01-plan/features/xcelium-mcp-v5.2-hierarchical-dump.plan.md`, `docs/02-design/features/xcelium-mcp-v5.2-hierarchical-dump.design.md`, `docs/04-report/xcelium-mcp-v5.2-hierarchical-dump.report.md`가 정본.
+
+---
+
 #### 1D 요약: sim_mode별 dump_signals 사용법
 
 ```python
@@ -673,6 +725,10 @@ sim_batch_run(test_name="TOP015", dump_signals=TIER2_I2C_SIGNALS, sim_mode="gate
 # AMS — Tier 1 + Tier 3 windowed (ams_rtl or ams_gate)
 sim_batch_run(test_name="TOP015", dump_signals=BOUNDARY_SIGNALS,
               sim_mode="ams_rtl", dump_window_start_ms=50, dump_window_end_ms=55)
+
+# Gate FAIL → v5.2 dump_scopes (§1D-5, Tier 2의 블록 단위 대안)
+sim_batch_run(test_name="TOP015", dump_depth="boundary",
+              dump_scopes={"top.hw.u_ext.u_ext_d_main.u_ext_i2cSlave": "all"}, sim_mode="gate")
 ```
 
 ---
@@ -907,7 +963,7 @@ simvisdbutil dump/... -csv -output /tmp/detail.csv -overwrite \
 
 ### 4C. 근본 원인 특정 — FSM 전이 대조
 
-CSV 데이터를 RTL 분석서의 FSM 전이 테이블과 대조한다.
+CSV 데이터를 RTL 분석서의 FSM 전이 테이블과 대조한다. **이 대조 작업은 `verilog-rtl-debugger` agent(§Agent 위임 구조)가 직접 소유·수행한다** — 기존 5개 verilog-rtl-* agent 중 이 판단을 하는 agent가 없었다.
 
 **실전 예시 (TOP015 V-18):**
 
@@ -938,6 +994,8 @@ inspect_signal(action="value", signals=["top.hw...c_regAddr", "top.hw...c_stream
 ```
 
 ### 4E. AI 자율 디버깅 + Human-in-the-Loop (병렬 프로세스)
+
+**이 절 전체가 `verilog-rtl-debugger` agent(§Agent 위임 구조)의 핵심 책임 범위다** — bisect/CSV/RTL 참조 자율 루프는 MCP tool 접근 권한이 있는 이 agent만 수행할 수 있다.
 
 정적 RTL 분석으로 순환하지 말고, **프로빙 도구로 값 변화 시점을 먼저 특정**한 후 원인을 추적한다.
 
@@ -1029,10 +1087,12 @@ Step 6. knowledge 문서 참조 (.ai/knowledge/i2c-repeated-start-race.md)
 
 ### 5A. RTL 수정 (로컬)
 
-1. verilog-rtl skill 활성화
+1. `verilog-rtl-debugger`가 확정한 근본 원인(Phase 4C)을 `verilog-rtl-coder` agent에 전달해 수정 코드 작성 위임 (verilog-rtl skill 규칙 자동 적용)
 2. 분석서 참조: `.ai/analysis/{module}.analysis.md`
 3. 수정 코드 작성 — 사이클 주석 포함
 4. Bit-width safety 검증
+5. 수정 규모가 신규 FSM/모듈/case-arm 등 아키텍처 경계를 건드리면 `verilog-rtl-architect-advisor`에 먼저 에스컬레이션
+6. 커밋 전 `verilog-rtl-reviewer`로 AI-failure 시그니처(T1~T9) 리뷰
 
 ### 5B. Verilator Lint
 
@@ -1162,25 +1222,27 @@ docs/04-report/features/regression-{scope}.report.md
 
 ---
 
-## xcelium-mcp Tool 맵핑 (v5.0 — 25 tools)
+## xcelium-mcp Tool 맵핑 (v5.0 구조, 실제 24 tools — 2026-07-03 소스 재검증)
 
-7개 모듈, 25개 tool. action 파라미터 기반 통합 (v4.2 51개 → v5.0 25개).
+7개 모듈, **24개 네이티브 tool**(`grep -c "@mcp.tool()" src/xcelium_mcp/tools/*.py` 실측, 2026-07-03). action 파라미터 기반 통합 (v4.2 51개 → v5.0 24개).
 
-### Sim Lifecycle — 환경 설정 + 실행 제어 (11)
+> **2026-07-03 수정 노트**: 이 섹션은 원래 "v5.0 — 25 tools"로 표기돼 있었으나, 아래 `ssh_run("kill -s INT ...")` 항목이 xcelium-mcp 네이티브 tool이 아니라 **별도 ssh-mcp 서버의 헬퍼 명령**을 편의상 같은 표에 끼워 넣은 것이었다 — 실제 네이티브 tool을 21개 항목(Sim Lifecycle 10 + Batch 2 + Signal Inspection 2 + Debug 4 + Checkpoint 1 + Waveform 2 + SimVision 3 = 24)만 세면 정확히 24개다. 표 이름/파라미터 자체는 소스 대조 결과 전부 정확했음(수정 불필요) — 총계 표기만 교정.
+
+### Sim Lifecycle — 환경 설정 + 실행 제어 (10 네이티브 + ssh-mcp 헬퍼 1건)
 
 | Phase | Tool | 용도 |
 |-------|------|------|
-| 0 | `sim_discover` | 시뮬레이션 환경 자동 감지 (TB type, shell, EDA, sdf_info, top_module) |
+| 0 | `sim_discover` | 시뮬레이션 환경 자동 감지 (TB type, shell, EDA, sdf_info, top_module, boundary_depth — v5.2) |
 | 0 | `mcp_config` | mcp_sim_config / mcp_registry 조회·수정 |
 | 0 | `list_tests` | 테스트케이스 목록 조회 (캐시) |
-| 2A | `sim_bridge_run` | Bridge (interactive) mode 시작 (dump_depth 지원) |
+| 2A | `sim_bridge_run` | Bridge (interactive) mode 시작 (dump_depth 지원, `auto_boundaries` — v5.2 Flow A) |
 | 2B | `connect_simulator` | 기존 xmsim에 bridge 재연결 |
 | 2B | `sim_disconnect` | action="bridge" (연결 해제) 또는 "shutdown" (안전 종료, SHM 보존) |
 | 2B | `sim_run` | 시간/breakpoint 지정 실행 |
 | 2B | `sim_status` | 현재 시간/scope/상태 조회. 정지 위치 확인 용도 (`sim_stop` 대체) |
 | 2B | `sim_restart` | 시뮬레이션 재시작 |
-| 2B | `ssh_run("kill -s INT {xmsim_pid}")` | 실행 중 강제 중단. xmsim_pid는 sim_bridge_run result에서 획득 |
 | 2B | `execute_tcl` | 임의 Tcl 명령 실행 (escape hatch) |
+| 2B | *(참고, 네이티브 아님)* `ssh_run("kill -s INT {xmsim_pid}")` | ssh-mcp 서버의 명령 — 실행 중 강제 중단. xmsim_pid는 sim_bridge_run result에서 획득 |
 
 ### Batch — 비대화형 실행 (2)
 
@@ -1247,3 +1309,6 @@ docs/04-report/features/regression-{scope}.report.md
 | **2.1** | **2026-04-07** | **본문 code snippet + diagram 전면 갱신 (v5.0 tool 반영): 15개소 수정. 구 tool명(sim_start, sim_batch_regression, watch_signal, get_signal_value, extract_csv, shutdown_simulator, simvision_start, waveform_add/zoom, take_waveform_screenshot, probe_control, deposit_value, prepare_dump_scope, keep_alive) → 현재 tool명. 파라미터: sim_type→sim_mode, dump_window→dump_window_start_ms/end_ms. Phase 4E bisect 실전 예시에 실제 파라미터 포함** |
 | **2.2** | **2026-04-08** | **Tool 맵 v5.1 갱신: inspect_signal에 "check_dump" action 추가 (Phase 1D — SHM signal 존재 확인, simvisdbutil 기반). simvision에 "reload" action 추가 (동일/신규 SHM 갱신, waveform context 보존). explorefull 제거로 duplicate DB 해결** |
 | **2.3** | **2026-04-09** | **(1) Phase 3 판별 분기 수정: "판별 가능→Phase 5"가 모호 — PASS→Phase 5E, FAIL/불확정→Phase 4로 명확화 (본문 표와 일치). (2) TB 분석서 네이밍 규칙: env prefix(`lgc`/`uvm`/`dsv`/`ams`) 항상 필수, 파일명만 보고 TB 환경 즉시 유추 가능. AMS는 컴포넌트 자체가 analog를 다룰 때만 사용. (3) Phase 0-Prep 신설: sim_discover→list_tests→mcp_config 환경 등록 워크플로우 명시. (4) 파라미터 일관성 수정: sim_type→sim_mode (설명 텍스트), sim_mode="ams"→"ams_rtl" (실제 지원 값), bisect_signal start_time/end_time→start_ns/end_ns. (5) Phase 개요 diagram 동기화.** |
+| **2.4** | **2026-07-03** | **`verilog-rtl-debugger` agent 위임 구조 신설 (chip-design-skills 신설 예정, 다른 verilog-rtl-* agent와 동일하게 install.py로 배포): 새 `## Agent 위임 구조` 섹션 추가 — 기존 5개 agent가 전부 정적 분석/코드 작성/formal 전용이라 MCP tool 기반 라이브 디버깅(Phase 2~4)을 수행할 agent가 없었던 공백을 이 신규 agent로 메움. Phase 1B(분석서 부재 시 verilog-rtl-analyst 위임), Phase 4C/4E(FSM 대조·자율 디버깅 루프를 verilog-rtl-debugger가 직접 소유), Phase 5A(verilog-rtl-coder/architect-advisor/reviewer로 위임 체인 명시) 갱신** |
+| **2.5** | **2026-07-03** | **방법론 중복 방지 결정**: `verilog-rtl-debugger` agent가 Phase 2~4 방법론을 자체 내장하지 않고 `~/.claude/skills/xcelium-sim/references/phase-2~4*.md`를 런타임에 Read하도록 chip-design-skills 쪽과 합의(`verilog-rtl-debugger.plan.md` v0.2). §Agent 위임 구조에 "방법론 출처" 절 추가 — 해당 reference 파일이 이제 다른 repo agent가 소비하는 계약이 됨을 명시 |
+| **2.6** | **2026-07-03** | **소스 재검증 전수 감사 결과 반영**(`src/xcelium_mcp/tools/*.py` 실측 대조, tool-usage-guide/debug-workflow-v2 Design 착수 전 정합성 점검): (1) "Tool 맵핑 v5.0 — 25 tools" 표기 오류 수정 — `ssh_run(kill)`이 네이티브 tool이 아닌 ssh-mcp 헬퍼인데 카운트에 포함돼 25로 부풀려짐, 실제 네이티브는 24개(정확 확인). 표 자체의 tool 이름·action 값·파라미터는 전수 대조 결과 전부 정확했음. (2) §1D-5 신설 — 완료된 `xcelium-mcp-v5.2-hierarchical-dump`(94% match rate)의 `dump_scopes`/`use_dump_history`/`auto_boundaries`/`boundary_depth` 파라미터가 이 문서 작성 시점(~2026-04-09) 이후 추가돼 전혀 반영 안 돼 있던 것을 발견해 추가. (3) `sim_discover`/`sim_bridge_run` 표 항목에 v5.2 파라미터 주석 추가 |

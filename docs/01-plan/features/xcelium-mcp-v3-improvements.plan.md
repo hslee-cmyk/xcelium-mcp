@@ -3,7 +3,7 @@
 > **Feature**: xcelium-mcp 안정성 및 dump 기반 bisect 확장
 >
 > **Date**: 2026-03-26
-> **Status**: Draft
+> **Status**: Completed (2026-03-30, 100% match rate — 45/45 항목 PASS, `docs/03-analysis/xcelium-mcp-v3-improvements.analysis.md` 참조) — *2026-07-03 정정: 이 헤더가 "Draft"로 오래 방치돼 있었음. 아래 본문(요구사항 등)은 계획 당시 원문 그대로 보존*
 > **Project**: xcelium-mcp (`Todoc/fpga/xcelium-mcp/`)
 
 ---

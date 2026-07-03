@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-MCP (Model Context Protocol) server that enables AI assistants to control Cadence Xcelium/SimVision simulator in real time. A Tcl socket bridge (`mcp_bridge.tcl`) runs inside SimVision, and a Python FastMCP server communicates with it over TCP to expose 25 tools + 13 meta commands.
+MCP (Model Context Protocol) server that enables AI assistants to control Cadence Xcelium/SimVision simulator in real time. A Tcl socket bridge (`mcp_bridge.tcl`) runs inside SimVision, and a Python FastMCP server communicates with it over TCP to expose 24 tools + 13 meta commands.
 
 ## Architecture
 
@@ -19,13 +19,24 @@ Claude (stdio) ←→ Python FastMCP Server ←→ (TCP) ←→ mcp_bridge.tcl (
 ```
 src/xcelium_mcp/
 ├── __init__.py        # Package version
-├── server.py          # FastMCP server, 18 tool definitions, entry point
-├── tcl_bridge.py      # TclBridge async TCP client
-└── screenshot.py      # PostScript → PNG conversion
+├── server.py          # FastMCP server entry point, tool module registration
+├── tools/              # 24 MCP tool definitions (7 modules, action-param consolidated)
+│   ├── sim_lifecycle.py    # 10 tools — discover/connect/run/status/restart/etc.
+│   ├── batch.py             # 2 tools — sim_batch_run, sim_regression
+│   ├── signal_inspection.py # 2 tools — inspect_signal, deposit_signal
+│   ├── debug.py              # 4 tools — bisect_signal, watch, probe, debug_snapshot
+│   ├── checkpoint.py         # 1 tool  — checkpoint
+│   ├── waveform.py           # 2 tools — waveform, waveform_screenshot
+│   └── simvision.py          # 3 tools — simvision_connect, simvision, compare_waveforms
+├── tcl_bridge.py       # TclBridge async TCP client
+├── bridge_manager.py   # Multi-bridge connection management
+├── batch_runner.py     # Batch simulation execution (run_batch_single/regression)
+├── csv_cache.py        # SHM→CSV extraction + in-memory bisect (extract/bisect_signal_dump)
+├── runner_detection.py # TB/runner auto-detection
+├── checkpoint_manager.py, registry.py, screenshot.py, etc.
 tcl/
 └── mcp_bridge.tcl     # SimVision-side Tcl socket server
-tests/
-└── test_bridge.py     # MockTclServer-based unit tests
+tests/                 # 472 tests (pytest, MockTclServer-based, no SimVision required)
 ```
 
 ## Build & Install
@@ -52,18 +63,9 @@ Tests use `MockTclServer` (asyncio TCP server) — no SimVision required. All te
 - Python >= 3.10
 - Optional: `Pillow`, ghostscript or ImageMagick (screenshot support)
 
-## Tool Groups (25 tools)
+## Tool Usage
 
-| Group | Tools | Module |
-|-------|-------|--------|
-| Connection (1–2) | `connect_simulator`, `disconnect_simulator` | `server.py` |
-| Sim Control (3–8) | `sim_run`, `sim_stop`, `sim_restart`, `sim_status`, `set_breakpoint`, `shutdown_simulator` | `server.py` |
-| Signal (9–14) | `get_signal_value`, `describe_signal`, `find_drivers`, `list_signals`, `deposit_value`, `release_signal` | `server.py` |
-| Waveform (15–17) | `waveform_add_signals`, `waveform_zoom`, `cursor_set` | `server.py` |
-| Debug (18–20) | `take_waveform_screenshot`, `run_debugger_mode`, `probe_control` | `server.py` |
-| Watch (21–22) | `watch_signal`, `watch_clear` | `server.py` |
-| Checkpoint (23–24) | `save_checkpoint`, `restore_checkpoint` | `server.py` |
-| Bisect (25) | `bisect_signal` | `server.py` |
+24개 tool의 phase별 사용법·파라미터·결정 매트릭스는 `~/.claude/skills/xcelium-sim/references/tool-map.md`(user-level skill, 정본)를 참조 — 이 파일에 별도로 tool 목록을 유지하지 않는다(중복 방지). 소스 자체는 `src/xcelium_mcp/tools/*.py`(위 Repository Structure).
 
 ## Tcl Bridge Protocol
 
@@ -92,39 +94,13 @@ Regular commands are evaluated via `uplevel #0` in SimVision's global Tcl namesp
 
 ## Debugging Workflow
 
-표준 디버깅 워크플로우 (ncsim legacy / UVM / Directed SV 모든 환경 대응):
+RTL 시뮬레이션 디버깅(6-phase: 인프라 분석→사전 분석→실행→1차 판별→waveform 분석→수정)은
+`~/.claude/skills/xcelium-sim/`(user-level skill, 정본)가 안내한다 — "FAIL 분석", "waveform",
+"시뮬레이션" 등 키워드 등장 시 자동 로드됨. 세부 tool 사용법은 skill의
+`references/phase-0~5.md` + `tool-map.md` 참조.
 
-```
-Phase 0: 검증 환경 인프라 분석 (1회성 캐시)
-    공유 컴포넌트 (Agent/BFM/inc task) + 테스트케이스 → .ai/analysis/tb_*.analysis.md
-
-Phase 1: 사전 분석 — 캐시 참조 + RTL 분석서 + dump scope 확인
-Phase 2: 시뮬레이션 — Batch (권장) or Bridge (interactive)
-Phase 3: 1차 판별 — 로그 (PASS/FAIL/Errors/UVM_ERROR)
-Phase 4: 2차 판별 — Waveform CSV (simvisdbutil) + FSM 전이 대조
-Phase 5: 수정 + Regression + 문서 갱신
-```
-
-**원칙**:
-- 시뮬레이션 전에 판별 신호를 정한다 (Phase 0/1)
-- Batch mode + CSV가 기본 (save/restore 안정성 문제 회피)
-- 분석서 FSM 전이 테이블과 CSV를 대조하여 근본 원인 특정
-- TB 공유 컴포넌트와 테스트케이스는 1회 분석 후 캐시하여 재사용
-
-상세: `venezia-fpga/docs/01-plan/features/xcelium-mcp-debugging-workflow.plan.md`
-
-## v3 Improvement Plan
-
-7개 개선 항목 계획됨:
-1. `sim_restart` snapshot name 에러 수정
-2. `bisect` 2-mode (checkpoint + dump 기반)
-3. Dump signal scope 사전 분석 (`prepare_dump_scope`)
-4. `save/restore` 안정화
-5. simvisdbutil CSV 추출 tool (`extract_waveform_csv`)
-6. Batch mode simulation tool (`sim_batch_run`, `sim_batch_regression`)
-7. Script 재사용 정책 (기존 스크립트 탐색 → 없을 때만 생성)
-
-상세: `venezia-fpga/docs/01-plan/features/xcelium-mcp-v3-improvements.plan.md`
+원본 방법론(caching 규칙, 실전 히스토리): `docs/01-plan/features/xcelium-mcp-debugging-workflow.plan.md`
+후속(범용 `/sim` subcommand, Draft, compound.py 대기): `docs/01-plan/features/xcelium-mcp-debug-workflow-v2.plan.md`
 
 ## Deployment
 
