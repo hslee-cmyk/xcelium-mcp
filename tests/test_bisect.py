@@ -2,10 +2,16 @@
 from __future__ import annotations
 
 import csv
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from xcelium_mcp.csv_cache import _parse_sim_time_ns, _to_number, bisect_csv
+from xcelium_mcp.csv_cache import (
+    _parse_sim_time_ns,
+    _to_number,
+    bisect_csv,
+    bisect_signal_dump,
+)
 
 
 def _write_csv(rows: list[dict], path: str) -> None:
@@ -250,4 +256,63 @@ class TestToNumber:
 
     def test_tristate_returns_none(self):
         assert _to_number("x") is None
+
+
+class TestBisectSignalDumpCsvPath:
+    """bisect_signal_dump() must surface the cached CSV path in its result text
+    so callers (skill/AI) can reuse it directly instead of bypassing the cache
+    with a separate manual simvisdbutil extraction (F-174)."""
+
+    @pytest.mark.asyncio
+    async def test_match_found_includes_csv_path(self, tmp_path):
+        csv_path = tmp_path / "extracted.csv"
+        _write_csv([
+            {"SimTime": "0", "sig_a": "0"},
+            {"SimTime": "20", "sig_a": "1"},
+        ], str(csv_path))
+
+        with patch(
+            "xcelium_mcp.csv_cache.extract", AsyncMock(return_value=str(csv_path))
+        ):
+            result = await bisect_signal_dump(
+                shm_path="dump/test.shm", signal="sig_a", op="eq", value="1",
+            )
+
+        assert f"CSV: {csv_path}" in result
+
+    @pytest.mark.asyncio
+    async def test_no_match_includes_csv_path(self, tmp_path):
+        csv_path = tmp_path / "extracted.csv"
+        _write_csv([
+            {"SimTime": "0", "sig_a": "0"},
+        ], str(csv_path))
+
+        with patch(
+            "xcelium_mcp.csv_cache.extract", AsyncMock(return_value=str(csv_path))
+        ):
+            result = await bisect_signal_dump(
+                shm_path="dump/test.shm", signal="sig_a", op="eq", value="1",
+            )
+
+        assert f"CSV: {csv_path}" in result
+        assert "No match found" in result
+
+    @pytest.mark.asyncio
+    async def test_signal_not_in_dump_includes_csv_path(self, tmp_path):
+        """Signal missing from CSV — 'error' branch — still returns csv_path
+        so the caller can inspect what WAS extracted."""
+        csv_path = tmp_path / "extracted.csv"
+        _write_csv([
+            {"SimTime": "0", "other_sig": "0"},
+        ], str(csv_path))
+
+        with patch(
+            "xcelium_mcp.csv_cache.extract", AsyncMock(return_value=str(csv_path))
+        ):
+            result = await bisect_signal_dump(
+                shm_path="dump/test.shm", signal="sig_a", op="eq", value="1",
+            )
+
+        assert f"CSV: {csv_path}" in result
+        assert "not found in SHM" in result
         assert _to_number("z") is None

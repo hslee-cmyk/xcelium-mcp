@@ -9,24 +9,28 @@
 
 ## 절차
 
-### 4A. bisect → CSV 추출(1회) → In-memory 분석
+### 4A. bisect → CSV 추출(1회, 캐시 재사용) → In-memory 분석
 
-**Step 1. bisect_signal로 이상 시점 1차 특정** — 넓은 범위에서 binary search로 자동 탐색(수동 CSV 스캔 불필요):
+**Step 1. bisect_signal로 이상 시점 1차 특정** — 넓은 범위에서 binary search로 자동 탐색(수동 CSV 스캔 불필요). **Phase 1A에서 정한 판별 신호 전체를 `context_signals`에 미리 포함**시켜서, 뒤에서 다시 추출할 필요가 없게 한다:
 
 ```python
 bisect_signal(signal="top.hw...r_streamRwState", op="eq", value="3",
-              start_ns=0, end_ns=END_NS, shm_path="dump/ci_top_${TEST}.shm")
+              start_ns=0, end_ns=END_NS, shm_path="dump/ci_top_${TEST}.shm",
+              context_signals=["top.hw...r_regAddr", "top.hw...r_loopState",
+                                "top.hw...r_startStopDetState"])
 ```
 
-**Step 2. bisect가 좁힌 구간에서 CSV 1회 추출** (Phase 1A 판별 신호를 이 구간 기준으로):
+응답 마지막에 `CSV: {path}`가 포함된다 — 이건 `[signal]+context_signals`를 이미 추출·캐싱(`csv_cache.extract`)해둔 CSV 경로다.
+
+**Step 2. Step 1의 CSV를 그대로 재사용** — `context_signals`에 필요한 신호를 전부 넣었다면 별도 추출이 필요 없다. `simvisdbutil`을 다시 부르면 **cache를 우회**하게 되므로, 아래처럼 Step 1이 반환한 경로를 직접 쓴다:
 
 ```bash
-simvisdbutil dump/ci_top_${TEST}.shm/ci_top.trn \
-    -csv -output /tmp/${TEST}_check.csv -overwrite -missing \
-    -range START:ENDns \
-    -sig top.hw...r_regAddr -sig top.hw...r_streamRwState \
-    -sig top.hw...r_loopState -sig top.hw...r_startStopDetState
+awk -F',' 'NR>1 && $2+0 != prev {print; prev=$2+0}' {Step1이 반환한 CSV 경로}
 ```
+
+**Step 1에서 빠뜨린 신호가 뒤늦게 필요할 때만** 추가 추출한다(4B 참조) — 이 경우에도 매번 새 파일로 뽑지 말고, 가능하면 같은 `-output` 경로에 `-overwrite`로 덮어써서 파일 수를 늘리지 않는다.
+
+> **왜 이게 중요한가**: `bisect_signal`/`compare_waveforms`/`inspect_signal(action="extract_csv")`를 거치지 않고 `simvisdbutil`을 직접 shell로 호출하면 `csv_cache.py`의 in-memory/disk 캐시를 완전히 우회한다 — 같은 신호·같은 SHM을 반복 분석할 때마다 재추출이 발생한다. **좁은 범위라 bisect가 필요 없다고 판단되는 경우엔 `inspect_signal(action="extract_csv", signals=[...], shm_path=..., start_ns=..., end_ns=...)`로 CSV만 뽑는다**(2026-07-03, F-174) — bisect 조건을 억지로 걸 필요 없이 곧바로 cache 경유 경로를 탄다.
 
 **Step 3. In-memory 분석** (같은 CSV에서 awk/grep으로 다양한 관점 필터링, simvisdbutil 재호출 없음):
 
@@ -91,7 +95,8 @@ waveform_screenshot()
 | 상황 | 도구 |
 |------|------|
 | 값 변화 시점 자동 탐색 | `bisect_signal`(Mode A) |
-| 신호 시간 변화 추적 | `simvisdbutil`(ssh_run, MCP tool 아님) |
+| bisect 없이 CSV만 필요(좁은 범위 등) | `inspect_signal(action="extract_csv")` — cache 경유, `simvisdbutil` 직접 호출 금지 |
+| 신호 시간 변화 추적(추출된 CSV의 in-memory 분석) | awk/grep (simvisdbutil 재호출 없음) |
 | 시각적 확인/공유 | `simvision_connect` → `waveform` → `waveform_screenshot` |
 | 특정 시점 조합 신호 | `inspect_signal(action="value")` |
 | 조건부 stop | `watch(action="set")` |

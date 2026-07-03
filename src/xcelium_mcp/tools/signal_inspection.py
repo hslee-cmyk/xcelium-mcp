@@ -129,8 +129,11 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
         shm_path: str = "",
         recursive: bool = False,
         scope_prefixes: list[str] | None = None,
+        start_ns: int = 0,
+        end_ns: int = 0,
     ) -> str:
-        """Read signal values, describe metadata, list signals, find drivers, or check SHM dump.
+        """Read signal values, describe metadata, list signals, find drivers, check SHM dump,
+        or extract a cached CSV.
 
         Args:
             action:  "value" — read current values of one or more signals.
@@ -138,16 +141,22 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
                      "list" — list signals in a scope, filtered by pattern.
                      "drivers" — find all drivers of a signal (useful for X/Z debugging).
                      "check_dump" — check which signals exist in an SHM dump file.
+                     "extract_csv" — extract signals from an SHM dump to CSV (via csv_cache,
+                     same in-memory/disk cache bisect_signal uses) without doing a bisect
+                     search. Use this instead of shelling out to simvisdbutil directly —
+                     a direct shell call bypasses the cache entirely.
             signal:  Full hierarchical signal path. Required for describe/drivers. Also usable for value (single).
-            signals: List of signal paths for "value" or "check_dump" action.
+            signals: List of signal paths for "value"/"check_dump"/"extract_csv" action.
             scope:   Hierarchical scope path (e.g. "top.hw.u_ext"). Required for "list".
             pattern: Glob pattern for "list" action (default "*").
             target:  "xmsim" | "simvision" | "auto" (default: auto). Used by "list".
-            shm_path: SHM dump path for "check_dump". Empty = auto-detect latest.
+            shm_path: SHM dump path for "check_dump"/"extract_csv". Empty = auto-detect latest.
             recursive: If True, "list" walks the sub-hierarchy via scope show. Default False.
             scope_prefixes: Controls which items are recursed into during recursive list.
                      None / ["u_"] — only recurse into items with a matching prefix (fast).
                      []            — try scope show on every item (general, works with any naming).
+            start_ns: Start of range for "extract_csv" (0 = from beginning).
+            end_ns:   End of range for "extract_csv" (0 = to end).
         """
         # S-1 fix: sanitize all signal/scope inputs to prevent Tcl injection
         try:
@@ -283,8 +292,39 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
                     lines.append(f"  - {s}")
             return "\n".join(lines)
 
+        elif action == "extract_csv":
+            if not signals:
+                return "ERROR: 'signals' list is required for action='extract_csv'."
+
+            import xcelium_mcp.csv_cache as csv_cache
+
+            resolved_shm_path = shm_path
+            if not resolved_shm_path:
+                try:
+                    resolved_dir = await resolve_sim_dir()
+                except ValueError as e:
+                    return f"ERROR: {e}"
+                resolved_shm_path = await find_shm(resolved_dir)
+                if not resolved_shm_path:
+                    return "ERROR: No SHM found in dump directory"
+
+            try:
+                csv_path = await csv_cache.extract(
+                    shm_path=resolved_shm_path,
+                    signals=signals,
+                    start_ns=start_ns,
+                    end_ns=end_ns,
+                )
+            except RuntimeError as e:
+                return f"ERROR extracting CSV: {e}"
+
+            return f"CSV: {csv_path}"
+
         else:
-            return f"ERROR: Unknown action '{action}'. Use 'value', 'describe', 'list', 'drivers', or 'check_dump'."
+            return (
+                f"ERROR: Unknown action '{action}'. "
+                "Use 'value', 'describe', 'list', 'drivers', 'check_dump', or 'extract_csv'."
+            )
 
     @mcp.tool()
     async def deposit_signal(

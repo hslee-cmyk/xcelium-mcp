@@ -413,13 +413,15 @@ async def bisect_signal_dump(
         return (
             f"Signal '{signal}' not found in SHM.\n"
             f"{result['error']}\n\n"
-            "Tip: Re-run with sim_batch_run(dump_signals=[...]) to include this signal."
+            "Tip: Re-run with sim_batch_run(dump_signals=[...]) to include this signal.\n\n"
+            f"CSV: {csv_path}"
         )
 
     if not result["found"]:
         return (
             f"No match found for {signal} {op} {value} "
-            f"in range [{start_ns}ns, {end_ns or 'end'}]."
+            f"in range [{start_ns}ns, {end_ns or 'end'}].\n\n"
+            f"CSV: {csv_path}"
         )
 
     # Format context table
@@ -441,6 +443,8 @@ async def bisect_signal_dump(
         vals = " | ".join(row.get(c, "?") for c in cols)
         lines.append(f"{prefix}{row.get('_ns', row.get('SimTime', row.get('time', '?'))):>10} | {vals}")
 
+    lines.append("")
+    lines.append(f"CSV: {csv_path}")
     return "\n".join(lines)
 
 

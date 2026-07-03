@@ -160,7 +160,10 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
 
         Mode A (preferred, no active simulator required): when shm_path is given,
         extracts CSV from SHM and performs in-memory binary search.
-        No bridge connection needed.
+        No bridge connection needed. Response includes "CSV: {path}" — the cached
+        CSV path (via csv_cache.extract) covering [signal]+context_signals over
+        [start_ns, end_ns]. Reuse this path directly (e.g. awk/grep) instead of
+        re-running simvisdbutil — avoids bypassing the cache.
 
         Mode B (bridge, legacy): when shm_path is empty and a bridge is connected,
         uses the simulator's native __BISECT__ binary search with save/restore.
