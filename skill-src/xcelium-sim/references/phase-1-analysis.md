@@ -12,12 +12,15 @@
 2. 있으면 → 캐시에서 판별 신호/기대값/시퀀스 참조 → Phase 2로
 3. 없으면 → 테스트케이스 파일 읽고 phase-0-discovery.md 형식으로 분석서 작성 후 캐시
 
+**분석서 부재 시(3번) — agent 위임**: 로컬에 설치된 `verilog-tb-analyst` agent(chip-design-skills가 install.py로 배포 — 신설 예정)를 Task로 호출해 phase-0-discovery.md §0A/0B 형식으로 작성/캐시한 후 진행한다. 분석서 없이 Phase 4의 판별로 바로 넘어가지 않는다 — 1B(RTL 분석서 부재 시 `verilog-rtl-analyst` 위임)와 동일 원칙.
+> **Fallback**: 로컬에 설치돼 있지 않으면 `verilog-rtl-debugger` 또는 Claude가 직접 작성한다.
+
 ### 1B. RTL 분석서 참조
 
 `.ai/analysis/{module}.analysis.md`에서 FSM 전이 테이블, 신호 의존성 맵, 크로스 FSM 신호 타이밍을 확인한다.
 
-**분석서 부재/stale 시 — agent 위임**: `verilog-rtl-debugger` agent(chip-design-skills)가 `verilog-rtl-analyst` agent를 호출해 분석서를 먼저 작성/갱신한다. 분석서 없이 Phase 4의 FSM 전이 대조로 바로 넘어가지 않는다.
-> **Fallback**: `verilog-rtl-debugger` agent를 찾을 수 없으면(chip-design-skills에 아직 미배포), Claude가 직접 `.ai/analysis/{module}.analysis.md`를 작성한다 — verilog-rtl skill의 Module Analysis 방법론(FSM 상태/전이 테이블, 신호 의존성, CDC 경로, timing 관계, reset provenance)을 따른다.
+**분석서 부재/stale 시 — agent 위임**: 로컬에 설치된 `verilog-rtl-debugger` agent가 `verilog-rtl-analyst` agent를 Task로 호출해 분석서를 먼저 작성/갱신한다(두 agent 모두 chip-design-skills가 install.py로 배포한 것을 로컬에서 부르는 것 — chip-design-skills 자체가 호출하는 게 아님). 분석서 없이 Phase 4의 FSM 전이 대조로 바로 넘어가지 않는다.
+> **Fallback**: `verilog-rtl-debugger` agent가 로컬에 설치돼 있지 않으면(chip-design-skills에 아직 미배포), Claude가 직접 `.ai/analysis/{module}.analysis.md`를 작성한다 — verilog-rtl skill의 Module Analysis 방법론(FSM 상태/전이 테이블, 신호 의존성, CDC 경로, timing 관계, reset provenance)을 따른다.
 
 ### 1C. Dump Scope 확인
 
@@ -73,11 +76,12 @@ sim_batch_run(test_name="TOP015", dump_depth="boundary",
 inspect_signal(action="check_dump", signals=["top.hw...r_regAddr"], shm_path="dump/ci_top_TOP015.shm")
 ```
 
-## verilog-rtl-debugger agent 위임
+## Agent 위임
 
 | 상황 | 위임 대상 |
 |------|----------|
-| `.ai/analysis/{module}.analysis.md` 부재/stale | `verilog-rtl-analyst` |
+| `.ai/analysis/tb_{env}_*.analysis.md`(TB 공유 컴포넌트/테스트케이스) 부재/stale | `verilog-tb-analyst` |
+| `.ai/analysis/{module}.analysis.md`(RTL) 부재/stale | `verilog-rtl-analyst` |
 
 ## 다음 단계
 

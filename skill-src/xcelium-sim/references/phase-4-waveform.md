@@ -4,8 +4,8 @@
 
 로그로 판별할 수 없거나, FAIL의 근본 원인을 특정할 때 사용한다.
 
-> **verilog-rtl-debugger agent 위임**: 이 Phase 전체(4A~4E)는 `verilog-rtl-debugger` agent(chip-design-skills)의 핵심 책임 범위다 — bisect/CSV/RTL 참조 자율 루프는 xcelium-mcp MCP tool 접근 권한이 있는 agent만 수행할 수 있다(기존 verilog-rtl-analyst/coder/reviewer/prover/architect-advisor는 MCP tool 접근이 없음).
-> **Fallback**: agent를 찾을 수 없으면 Claude가 이 문서의 절차를 직접 수행한다.
+> **verilog-rtl-debugger agent 위임**: 이 Phase 전체(4A~4E)는 `verilog-rtl-debugger` agent의 핵심 책임 범위다(이 agent는 chip-design-skills가 install.py로 user/project-level에 배포 — chip-design-skills 자체가 실행하는 게 아니라 로컬에 설치된 agent를 그 세션에서 호출) — bisect/CSV/RTL 참조 자율 루프는 xcelium-mcp MCP tool 접근 권한이 있는 agent만 수행할 수 있다(기존 verilog-rtl-analyst/coder/reviewer/prover/architect-advisor는 MCP tool 접근이 없음).
+> **Fallback**: 로컬에 설치돼 있지 않으면 Claude가 이 문서의 절차를 직접 수행한다.
 
 ## 절차
 

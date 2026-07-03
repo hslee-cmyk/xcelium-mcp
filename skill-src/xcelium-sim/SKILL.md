@@ -33,7 +33,7 @@ xcelium-mcp(Cadence Xcelium/SimVision MCP 서버)의 24개 tool을 RTL 디버깅
 2. 대화 맥락(로그 존재 여부, dump 존재 여부, 이미 알려진 판별 신호 등)으로 현재 phase 판단
 3. 해당 `references/phase-N-*.md` 로드 → 절차 확인
 4. 구체적 tool 호출/파라미터가 필요하면 `references/tool-map.md` 참조
-5. Phase 1/4/5에서는 `verilog-rtl-debugger` agent(chip-design-skills) 위임 여부를 각 reference의 "agent 위임" 절에서 확인 — agent가 없으면 Claude가 직접 수행(각 reference의 fallback 문구 참조)
+5. Phase 0/1/4/5에서는 `verilog-tb-analyst`/`verilog-rtl-debugger` agent(chip-design-skills가 install.py로 user/project-level에 배포) 위임 여부를 각 reference의 "agent 위임" 절에서 확인 — 로컬에 설치돼 있으면 Task로 호출, 없으면 Claude가 직접 수행(각 reference의 fallback 문구 참조)
 
 ### 트리거 판단 기준 (오탐 방지)
 

@@ -4,6 +4,9 @@
 
 검증 환경의 공유 컴포넌트와 테스트케이스는 프로젝트 수명 동안 비교적 안정적이다. 한 번 분석하고 캐시하면 이후 모든 디버깅에서 재사용한다. 이 Phase는 검증 환경 종류(Legacy directed Verilog / UVM / Directed SV / AMS / Multi-methodology)에 무관하게 동일 원칙이 적용된다.
 
+> **작성 주체(2026-07-03)**: §0A/0B(TB 분석서 작성/갱신)는 `verilog-tb-analyst` agent(신설 예정)가 전담한다 — RTL 쪽 `verilog-rtl-analyst`(Phase 1B 위임)와 대칭 구조. 이 skill이 "tool 사용법 전용"이면서 TB 분석 방법론 전체를 위임 없이 직접 안고 있던 비대칭을 해소하기 위함(`xcelium-mcp-debugging-workflow.plan.md` §Agent 위임 구조 v2.7). 이 agent는 chip-design-skills repo가 정본 관리하며 `install.py`로 user/project-level `.claude/agents/`에 배포한다 — chip-design-skills 자체가 agent를 호출/실행하는 게 아니라, 배포만 담당한다.
+> **Fallback**: 로컬에 설치돼 있지 않으면 `verilog-rtl-debugger` 또는 Claude가 아래 §0A/0B 절차를 직접 수행한다.
+
 ## 절차
 
 ### 0-Prep. xcelium-mcp 환경 등록 (최초 1회)
@@ -53,6 +56,12 @@ sim_discover(sim_dir="", force=False)
 list_tests(pattern="TOP01*")
 mcp_config(action="show", file="registry")
 ```
+
+## verilog-tb-analyst agent 위임
+
+| 상황 | 위임 대상 |
+|------|----------|
+| §0A/0B TB 분석서(공유 컴포넌트/테스트케이스) 신규 작성·갱신 | `verilog-tb-analyst` |
 
 ## 다음 단계
 

@@ -3,7 +3,7 @@
 > xcelium-mcp는 Cadence Xcelium/SimVision을 MCP로 제어하는 24개 tool(7개 모듈, action 파라미터 기반 통합)을 제공한다. 이 문서는 "지금 어떤 tool을 어떤 파라미터로 써야 하는가"를 phase별로 즉시 답하기 위한 결정 매트릭스다.
 >
 > **소스**: 2026-07-03 `src/xcelium_mcp/tools/*.py` 직접 대조(`grep -c "@mcp.tool()"` = 24) 기준. CLAUDE.md 프로즈가 아니라 이 감사 결과가 원본이다.
-> **자기완결성 안내**: 이 문서는 Claude(skill 세션 내)와 `verilog-rtl-debugger` agent(chip-design-skills, 별도 context) 양쪽에서 단독으로 읽힌다 — "위에서 설명한" 같은 세션-종속 표현 없이 매 항목이 독립적으로 이해 가능해야 한다.
+> **자기완결성 안내**: 이 문서는 Claude(skill 세션 내)와 `verilog-rtl-debugger` agent(chip-design-skills가 배포, 별도 context에서 실행) 양쪽에서 단독으로 읽힌다 — "위에서 설명한" 같은 세션-종속 표현 없이 매 항목이 독립적으로 이해 가능해야 한다.
 
 ---
 

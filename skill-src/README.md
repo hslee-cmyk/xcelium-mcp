@@ -33,7 +33,7 @@ cp -r skill-src/xcelium-sim ~/.claude/skills/
 
 ## 이 skill을 다른 repo가 소비하는 방법
 
-`verilog-rtl-debugger` agent(chip-design-skills, 신설 예정)가 `references/phase-2~4*.md`를 런타임에 Read해서 Phase 2~4 방법론을 따른다 — 이 skill이 그 agent보다 먼저(최소 병행) 배포되어 있어야 한다. 상세: `xcelium-mcp-debugging-workflow.plan.md` §Agent 위임 구조, `xcelium-mcp-tool-usage-guide.plan.md` §7 Dependencies.
+`verilog-rtl-debugger` agent(신설 예정, chip-design-skills가 install.py로 user/project-level에 배포 — chip-design-skills 자체가 실행하는 게 아니라 로컬에 설치된 agent가 그 세션에서 동작)가 `references/phase-2~4*.md`를 런타임에 Read해서 Phase 2~4 방법론을 따른다 — 이 skill이 그 agent보다 먼저(최소 병행) 배포되어 있어야 한다. 상세: `xcelium-mcp-debugging-workflow.plan.md` §Agent 위임 구조, `xcelium-mcp-tool-usage-guide.plan.md` §7 Dependencies.
 
 ## 검증
 

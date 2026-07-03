@@ -417,7 +417,7 @@ next-skill-map:
 | `analyze` | `analyze_waveform` | — |
 | `debug` (CSV) | `analyze_waveform` | — |
 | `debug` (bridge) | — | connect, watch, get_signal_value |
-| `debug` (RTL) | — | `verilog-rtl-debugger` agent 호출(chip-design-skills, 신설 예정 — `xcelium-mcp-debugging-workflow.plan.md` §Agent 위임 구조), 필요 시 analyst/coder/reviewer/prover로 추가 위임 |
+| `debug` (RTL) | — | 로컬에 설치된 `verilog-rtl-debugger` agent 호출(신설 예정 — chip-design-skills가 install.py로 배포, `xcelium-mcp-debugging-workflow.plan.md` §Agent 위임 구조), 필요 시 analyst/coder/reviewer/prover로 추가 위임 |
 | `verify` | 위 조합 (자동 체이닝) | — |
 | `status` | — | mcp_config, ssh_run |
 

@@ -67,7 +67,7 @@ CLAUDE.md의 "Debugging Workflow" 섹션(6-phase, Phase 0~5)이 이미 방법론
 - [ ] `references/tool-map.md` — 24개 tool을 phase/목적별로 분류한 결정 매트릭스
 - [ ] xcelium-mcp `CLAUDE.md` "Debugging Workflow" 섹션을 skill 포인터로 간소화
 - [ ] **CLAUDE.md 전체를 실제 소스(`src/xcelium_mcp/tools/*.py`, `server.py` 등록부)와 대조해 오래된 detail 전수 수정** — "Tool Groups (25 tools)" 표, "Repository Structure"의 tool 개수/위치 서술 등. §3.1 FR-11 참조
-- [ ] **`references/phase-1-analysis.md`·`phase-4-waveform.md`·`phase-5-fix-regression.md`에 `verilog-rtl-debugger` agent(chip-design-skills, 신설 예정) 위임 지점 명시** — `xcelium-mcp-debugging-workflow.plan.md` §Agent 위임 구조(v2.4)와 1:1 대응. §3.1 FR-12 참조
+- [ ] **`references/phase-0-discovery.md`·`phase-1-analysis.md`·`phase-4-waveform.md`·`phase-5-fix-regression.md`에 `verilog-rtl-debugger`/`verilog-tb-analyst` agent(chip-design-skills, 신설 예정) 위임 지점 명시** — `xcelium-mcp-debugging-workflow.plan.md` §Agent 위임 구조(v2.4, v2.7)와 1:1 대응. §3.1 FR-12 참조
 
 ### 2.2 Out of Scope
 
@@ -76,6 +76,7 @@ CLAUDE.md의 "Debugging Workflow" 섹션(6-phase, Phase 0~5)이 이미 방법론
 - v5.1 Runner Abstraction (`RunnerInterface`, wrapper script 자동생성) — 별도 트랙, 무관
 - chip-design-skills로의 편입 — 검토했으나 기각(§7 Dependencies). 방법론/도메인 스코프가 아니라 단일 MCP 서버 스코프라 그 repo의 기존 컨벤션과 맞지 않고, 독립 배포로 결정됨
 - **`verilog-rtl-debugger` agent 자체의 구현(정의 파일 작성)** — chip-design-skills repo 소관, 별도 PDCA 사이클. 이 문서(skill)는 "언제 이 agent를 호출하는가"만 phase reference에 명시하며, agent가 아직 없을 때는 Claude가 직접 수행하도록 fallback 문구를 둔다(§3.1 FR-12)
+- **[2026-07-03 추가]** **`verilog-tb-analyst` agent 자체의 구현(정의 파일 작성)** — 위와 동일 원칙: chip-design-skills repo 소관, 별도 PDCA 사이클. 이 문서는 "언제 이 agent를 호출하는가"만 phase-0/1 reference에 명시하며, agent가 아직 없을 때는 `verilog-rtl-debugger` 또는 Claude가 직접 수행하도록 fallback 문구를 둔다(§3.1 FR-13)
 
 ---
 
@@ -96,6 +97,7 @@ CLAUDE.md의 "Debugging Workflow" 섹션(6-phase, Phase 0~5)이 이미 방법론
 | FR-09 | xcelium-mcp `CLAUDE.md`의 "Debugging Workflow" 섹션을 skill 포인터로 축소 (기존 v3/v2 문서들의 "15줄 패턴"과 동일) | Medium | Pending |
 | FR-10 | 배포 방식: xcelium-mcp repo 안에 소스(`docs/`나 별도 폴더)를 두고 수동/스크립트로 `~/.claude/skills/xcelium-sim/`에 복사하는 절차 정의 — chip-design-skills의 `install.py` 패턴은 따르지 않되, "정본 repo → user-level 배포" 구조 자체는 동일하게 유지 | Medium | Pending |
 | FR-12 | **`verilog-rtl-debugger` agent 위임 명시**: `references/phase-1-analysis.md`(분석서 부재/stale → `verilog-rtl-analyst` 위임), `references/phase-4-waveform.md`(FSM 전이 대조·AI 자율 디버깅 루프를 `verilog-rtl-debugger`가 직접 수행), `references/phase-5-fix-regression.md`(수정 코드 작성 → `verilog-rtl-coder`, 커밋 전 리뷰 → `verilog-rtl-reviewer`, 아키텍처 경계 시 → `verilog-rtl-architect-advisor`)에 각각 위임 지점을 `xcelium-mcp-debugging-workflow.plan.md` §Agent 위임 구조와 동일하게 명시. Agent가 아직 chip-design-skills에 없는 동안은 "Agent를 찾을 수 없으면 Claude가 직접 수행" fallback 문구 포함 | High | Pending |
+| FR-13 | **`verilog-tb-analyst` agent 위임 명시 (2026-07-03 추가, TB 분석서 위임 비대칭 해소)**: `references/phase-0-discovery.md`(§0A/0B — TB 공유 컴포넌트·테스트케이스 분석서 작성/갱신 전체를 `verilog-tb-analyst`가 전담, RTL 쪽 `verilog-rtl-analyst`/Phase 1B와 대칭), `references/phase-1-analysis.md`(§1A — 캐시 미스 시 동일 agent 호출)에 위임 지점을 `xcelium-mcp-debugging-workflow.plan.md` §Agent 위임 구조(v2.7)와 동일하게 명시. FR-12와 동일하게 "Agent를 찾을 수 없으면 `verilog-rtl-debugger` 또는 Claude가 직접 수행" fallback 문구 포함. **배경**: 기존 SKILL.md가 스스로를 "tool 사용법 전용"이라 선언하면서도 §0A/0B(TB 분석 방법론)를 위임 없이 직접 보유하고 있어 RTL 쪽과 비대칭이라는 지적(venezia-fpga 세션)에서 식별됨 | High | Pending |
 | FR-11 | **CLAUDE.md 소스-오브-트루스 감사**: CLAUDE.md 전체를 `src/xcelium_mcp/tools/*.py`(batch/checkpoint/debug/signal_inspection/sim_lifecycle/simvision/waveform 7개 모듈) + `server.py` 등록부와 1:1 대조해 detail 오류 전수 수정. 확인된 항목만 예시: (1) "Tool Groups (25 tools)" 표의 tool 이름이 전부 v4.2 이전 명세(`get_signal_value`/`waveform_add_signals`/`save_checkpoint` 등) — 현재 코드엔 존재하지 않음, 실제 24개 tool(`checkpoint`/`waveform`/`watch`/`probe`/`simvision` 등 action-파라미터 통합형 포함)로 전면 재작성 (2) "Repository Structure"의 "server.py, 18 tool definitions" — 실제는 `tools/` 서브모듈 7개 파일에 분산, 18이 아님 (3) **[2026-07-03 추가 확인]** "## v3 Improvement Plan" 섹션 전체가 "7개 개선 항목 계획됨"으로 서술돼 있으나 실제로는 2026-03-30에 100% match rate로 완료됨(`xcelium-mcp-v3-improvements.plan.md`/`.analysis.md`/`.report.md` 확인) — 이 섹션 전체가 CLAUDE.md 갱신(FR-09) 대상. **tool-map.md(FR-08)와 CLAUDE.md 갱신 둘 다 기존 CLAUDE.md 프로즈가 아니라 이 감사 결과를 원본으로 작성** | High | Pending |
 
 ### 3.2 Non-Functional Requirements
@@ -127,6 +129,7 @@ CLAUDE.md의 "Debugging Workflow" 섹션(6-phase, Phase 0~5)이 이미 방법론
 - [ ] 다른 project/user-level skill(verilog-rtl, chip-verification 등)과 트리거 키워드 중복 최소화
 - [ ] CLAUDE.md의 tool 이름·개수·구조 서술이 소스(`tools/*.py`, `server.py`)와 100% 일치(FR-11), 관련 plan 문서들과도 tool 개수 서술이 일관됨
 - [ ] `references/phase-2~4*.md`가 **Claude(skill 내부 사용)와 `verilog-rtl-debugger` agent(외부 Read 소비) 양쪽에서 모두 자기완결적으로 이해 가능** — skill 세션의 다른 컨텍스트(예: SKILL.md 라우팅 문구)에 의존하는 표현 금지
+- [ ] **[2026-07-03 추가]** `references/phase-0-discovery.md`(§0A/0B)·`phase-1-analysis.md`(§1A)가 `verilog-tb-analyst` agent(외부 Read 소비, FR-13)의 자기완결적 API 문서로도 성립 — 위 항목과 동일 원칙을 TB 분석서 작성 절차에도 적용
 
 ---
 
@@ -196,6 +199,13 @@ CLAUDE.md의 "Debugging Workflow" 섹션(6-phase, Phase 0~5)이 이미 방법론
 - 상세: `xcelium-mcp-debugging-workflow.plan.md` §Agent 위임 구조(v2.4~v2.5)가 정본.
 - **역방향 의존 신규 확정(2026-07-03, `verilog-rtl-debugger.plan.md` v0.2)**: agent는 Phase 2~4 방법론을 자체 내장하지 않고 이 skill의 `references/phase-2~4*.md`를 **런타임에 Read**한다. 즉 이 skill이 agent보다 먼저(또는 최소 병행) 완성돼야 agent가 정상 동작한다 — **build 순서: skill reference 초안 → agent Do 단계**. 이로 인해 `references/phase-2~4*.md`는 Claude가 skill 안에서 읽는 내부 문서에 그치지 않고, **외부 agent가 소비하는 자기완결적 API 문서**가 되어야 한다(§4.2 Quality Criteria 참조).
 
+### `verilog-tb-analyst` agent(chip-design-skills, 신설 예정)와의 관계 — **cross-repo 의존, 신규(2026-07-03)**
+
+- `verilog-rtl-debugger`와 마찬가지로 이 skill과는 별개로 chip-design-skills repo에 신설되는 agent(§FR-13)이며, 동일한 배포 경로(install.py)를 사용한다.
+- 위임 대상 결정 배경: RTL 분석서는 `verilog-rtl-analyst`(Phase 1B)가 전담하는데, TB 분석서(Phase 0A/0B — 공유 컴포넌트·테스트케이스 분석서 작성)는 위임 대상이 없어 이 skill이 방법론을 직접 안고 있던 비대칭을 해소하기 위해 도입. `xcelium-mcp-debugging-workflow.plan.md` §Agent 위임 구조(v2.7)가 정본.
+- **동일한 역방향 의존 구조 적용**: `verilog-rtl-debugger`가 `references/phase-2~4*.md`를 런타임에 Read하는 것과 같은 원칙으로, `verilog-tb-analyst`도 `references/phase-0-discovery.md`(§0A/0B)·`phase-1-analysis.md`(§1A)를 자체 system prompt에 복사하지 않고 런타임에 Read하도록 설계한다 — build 순서: 이 skill의 phase-0/1 reference 완성 → `verilog-tb-analyst` Do 단계.
+- 이 문서는 agent 구현을 기다리지 않고 "어디서 호출하는가"만 먼저 확정한다(FR-13) — agent 부재 시 fallback 문구로 즉시 착수 가능.
+
 ---
 
 ## 8. Next Steps
@@ -207,6 +217,7 @@ CLAUDE.md의 "Debugging Workflow" 섹션(6-phase, Phase 0~5)이 이미 방법론
 5. [ ] xcelium-mcp `CLAUDE.md` 간소화 + FR-11 감사 결과로 "Tool Groups"/"Repository Structure" 등 detail 전수 수정
 6. [ ] user-level 배포 절차(FR-10) 정의 + venezia-fpga 세션에서 트리거 동작 수동 검증
 7. [ ] `verilog-rtl-debugger` agent가 chip-design-skills에 구현되면, phase reference의 fallback 문구("Claude가 직접 수행")를 "agent 호출"로 갱신(FR-12 관련 체크리스트)
+8. [ ] **[2026-07-03 추가]** Phase 0~1 reference 작성 시 §0A/0B·§1A에 `verilog-tb-analyst` 위임 지점을 명시(FR-13). `verilog-tb-analyst` agent가 chip-design-skills에 구현되면 마찬가지로 fallback 문구를 "agent 호출"로 갱신
 
 ---
 
@@ -221,3 +232,4 @@ CLAUDE.md의 "Debugging Workflow" 섹션(6-phase, Phase 0~5)이 이미 방법론
 | 0.5 | 2026-07-03 | **방법론 중복 방지 — 역방향 의존 확정**: `verilog-rtl-debugger` agent가 Phase 2~4 방법론을 자체 내장하지 않고 이 skill의 `references/phase-2~4*.md`를 런타임에 Read하도록 chip-design-skills 쪽과 합의(`verilog-rtl-debugger.plan.md` v0.2) → 이 skill이 agent보다 먼저 완성돼야 하는 build 순서 의존이 생김, `references/phase-2~4*.md`가 skill 내부 문서에서 외부 agent가 소비하는 "API 문서"로 격상됨을 §7 Dependencies·§4.2 Quality Criteria에 반영 | HSLEE |
 | 0.6 | 2026-07-03 | **Design 문서 분리 결정** — `xcelium-mcp-debug-workflow-v2`와 Design을 병합할지 여부를 확정: **별도 유지**. bkit matchRate가 feature별 Design-vs-구현 비교라, 병합 시 아직 구현 불가한 Phase 2 Design 요소가 matchRate를 왜곡하는 문제를 근거로 결정. §7 Dependencies·§8 Next Steps 갱신 | HSLEE |
 | 0.7 | 2026-07-03 | **소스 재검증 전수 감사** — Design 착수 전 이 문서 + 참조 문서(`xcelium-mcp-debugging-workflow.plan.md`, CLAUDE.md, `xcelium-mcp-v3-improvements.plan.md`, `xcelium-mcp-v5.1-runner-abstraction.plan.md`, chip-design-skills `verilog-rtl-debugger.plan.md`) 전체를 `src/xcelium_mcp/tools/*.py` 실제 소스와 대조. 24개 tool 개수·이름·action 파라미터는 이 문서/debug-workflow-v2 기준 전부 정확함을 확인(수정 불필요). 발견 사항: FR-11에 CLAUDE.md "v3 Improvement Plan" 섹션 stale 사례 추가, FR-08에 v5.2 dump_scopes 누락 방지 문구 추가. v5.1-runner-abstraction은 재확인 결과 여전히 미구현(RunnerInterface/sim_start 코드 없음) — Draft 상태 정확, 수정 없음 | HSLEE |
+| 0.8 | 2026-07-03 | **FR-13(`verilog-tb-analyst` agent 위임 명시) 신규 추가 — TB 분석서 위임 비대칭 해소**: venezia-fpga 세션에서 SKILL.md가 스스로 "tool 사용법 전용"이라 선언하면서도 §0A/0B(TB 공유 컴포넌트·테스트케이스 분석서 작성 방법론)를 위임 없이 그대로 안고 있어 RTL 쪽(Phase 1B → `verilog-rtl-analyst`, FR-12)과 비대칭이라는 지적을 받고 확인. `xcelium-mcp-debugging-workflow.plan.md` §Agent 위임 구조에 신규 agent `verilog-tb-analyst`(가칭, chip-design-skills 신설 예정) 위임 행 추가(v2.7)에 대응해 이 문서에도 FR-13 신설, §2.1 In Scope·§4.2 Quality Criteria·§7 Dependencies(cross-repo, `verilog-rtl-debugger`와 동일한 역방향 Read 의존 구조)·§8 Next Steps 갱신. `verilog-tb-analyst` agent 자체의 구현은 chip-design-skills 소관 별도 PDCA(out of scope, FR-12와 동일 원칙) | HSLEE |
