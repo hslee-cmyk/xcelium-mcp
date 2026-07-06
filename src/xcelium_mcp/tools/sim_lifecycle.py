@@ -13,7 +13,7 @@ from xcelium_mcp.bridge_manager import BridgeManager, scan_ready_files
 from xcelium_mcp.discovery import run_full_discovery
 from xcelium_mcp.registry import config_action, load_sim_config, resolve_sim_dir, save_sim_config
 from xcelium_mcp.shell_utils import UserInputRequired, get_user_tmp_dir, shell_run
-from xcelium_mcp.tb_provenance import build_tb_provenance, find_dependency_files, format_tb_provenance
+from xcelium_mcp.tb_provenance import build_tb_provenance, format_tb_provenance, scan_test_dependencies
 from xcelium_mcp.tcl_bridge import BRIDGE_ERRORS, TclBridge, TclError
 from xcelium_mcp.test_resolution import parse_test_discovery_output, resolve_test_name
 
@@ -158,18 +158,17 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
                 # sim_discover re-runs and populates tb_type.
                 cached = sorted({t.strip() for t in r.strip().splitlines() if t.strip()})
                 cached_test_files = {}
-            # F-175: resolve dependency FILE LOCATIONS here, once, at
-            # cache-miss time — never on the per-run hot path. Same
+            # F-175: resolve dependency FILE LOCATIONS (+ primary sha256 for
+            # staleness checks) here, once, at cache-miss time — same
             # rationale as discovery.py's initial-discovery pass.
-            cached_dependency_files: dict[str, list[str]] = {}
+            cached_dependency_files: dict[str, dict] = {}
             if cached_test_files:
                 names = list(cached_test_files.keys())
-                dep_results = await asyncio.gather(
-                    *(find_dependency_files(cached_test_files[n], resolved_dir) for n in names)
+                scan_results = await asyncio.gather(
+                    *(scan_test_dependencies(cached_test_files[n], resolved_dir) for n in names)
                 )
-                for n, deps in zip(names, dep_results):
-                    if deps:
-                        cached_dependency_files[n] = deps
+                for n, entry in zip(names, scan_results):
+                    cached_dependency_files[n] = entry
             if cached:
                 # Cache via config_action (write centralization)
                 await config_action("set", "config", "test_discovery.cached_tests",

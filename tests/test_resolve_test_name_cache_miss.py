@@ -55,12 +55,12 @@ async def test_cache_miss_populates_cached_test_files(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_cache_miss_populates_cached_dependency_files(tmp_path) -> None:
-    """Cache-miss resolution must also call find_dependency_files() for each
-    discovered test and store the result in cached_dependency_files — once,
-    here, so the per-run hot path (build_tb_provenance) never needs to
-    find/grep. find_dependency_files' own scanning correctness is covered
-    separately in test_tb_provenance.py::TestFindDependencyFiles; this test
-    only proves the wiring."""
+    """Cache-miss resolution must also call scan_test_dependencies() for each
+    discovered test and store the result (deps + the primary file's sha256
+    at scan time) in cached_dependency_files — once, here, so the per-run
+    hot path (build_tb_provenance) only re-scans if the primary file later
+    changes. scan_test_dependencies' own scanning correctness is covered
+    separately in test_tb_provenance.py; this test only proves the wiring."""
     sim_dir = str(tmp_path)
     cfg = {
         "test_discovery": {
@@ -71,6 +71,7 @@ async def test_cache_miss_populates_cached_dependency_files(tmp_path) -> None:
         }
     }
     grep_output = "/sim/tb/tests/top015_test.sv:2:class VENEZIA_TOP015_test extends uvm_test;"
+    scan_entry = {"scanned_primary_sha256": "abc123", "deps": ["/sim/tb/shared/i2c_sequence.svh"]}
 
     saved_cfg: dict = {}
 
@@ -84,15 +85,15 @@ async def test_cache_miss_populates_cached_dependency_files(tmp_path) -> None:
               return_value=cfg),
         patch("xcelium_mcp.test_resolution.shell_run", new_callable=AsyncMock,
               return_value=grep_output),
-        patch("xcelium_mcp.test_resolution.find_dependency_files", new_callable=AsyncMock,
-              return_value=["/sim/tb/shared/i2c_sequence.svh"]),
+        patch("xcelium_mcp.test_resolution.scan_test_dependencies", new_callable=AsyncMock,
+              return_value=scan_entry),
         patch("xcelium_mcp.test_resolution.save_sim_config", side_effect=_fake_save),
     ):
         result = await resolve_test_name("TOP015", sim_dir)
 
     assert result == "VENEZIA_TOP015_test"
     assert saved_cfg["test_discovery"]["cached_dependency_files"] == {
-        "VENEZIA_TOP015_test": ["/sim/tb/shared/i2c_sequence.svh"],
+        "VENEZIA_TOP015_test": scan_entry,
     }
 
 

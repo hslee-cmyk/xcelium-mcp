@@ -43,7 +43,7 @@ from xcelium_mcp.sim_env_detection import (
     detect_setup_tcls,
     discover_sim_dir,
 )
-from xcelium_mcp.tb_provenance import find_dependency_files
+from xcelium_mcp.tb_provenance import scan_test_dependencies
 from xcelium_mcp.tcl_bridge import DEFAULT_BRIDGE_PORT
 from xcelium_mcp.test_resolution import parse_test_discovery_output
 
@@ -442,19 +442,19 @@ async def run_full_discovery(
         logger.debug("test discovery failed (non-fatal): %s", e)
 
     # F-175: resolve each test's `include`/import dependency FILE LOCATIONS
-    # here, once, at discovery time — never on the per-run hot path
-    # (sim_batch_run/sim_regression/sim_bridge_run only read this cache and
-    # re-hash file *contents* fresh every call). See tb_provenance.py docstring.
-    cached_dependency_files: dict[str, list[str]] = {}
+    # (+ the primary file's sha256 at this scan, for later staleness checks)
+    # here, once, at discovery time — never unconditionally on the per-run
+    # hot path (sim_batch_run/sim_regression/sim_bridge_run only re-scan if
+    # the primary file's content changed since — see tb_provenance.py).
+    cached_dependency_files: dict[str, dict] = {}
     if cached_test_files:
         names = list(cached_test_files.keys())
         try:
-            dep_results = await asyncio.gather(
-                *(find_dependency_files(cached_test_files[n], sim_dir) for n in names)
+            scan_results = await asyncio.gather(
+                *(scan_test_dependencies(cached_test_files[n], sim_dir) for n in names)
             )
-            for n, deps in zip(names, dep_results):
-                if deps:
-                    cached_dependency_files[n] = deps
+            for n, entry in zip(names, scan_results):
+                cached_dependency_files[n] = entry
         except (RuntimeError, OSError, asyncio.TimeoutError) as e:
             logger.debug("dependency file discovery failed (non-fatal): %s", e)
 

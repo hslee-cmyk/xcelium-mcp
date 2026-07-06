@@ -12,11 +12,23 @@ test content than the one actually simulated on cloud0).
 
 Design split — cheap on the hot path, not just at discovery:
   - WHERE a test's files live (cached_test_files/cached_dependency_files) is
-    resolved via find/grep exactly once, at discovery/cache-miss time — never
-    on the per-run hot path (sim_batch_run/sim_regression/sim_bridge_run).
+    resolved via find/grep at discovery/cache-miss time, or — self-healing —
+    lazily re-scanned the moment the test's own file content changes (see
+    resolve_cached_dependency_files). It is never scanned unconditionally on
+    the per-run hot path (sim_batch_run/sim_regression/sim_bridge_run).
   - WHAT those files currently contain (the sha256 hashes) is always read
     fresh, on every single call — content can change between runs and that
-    must be caught every time, unlike the (rarely-changing) file locations.
+    must be caught every time.
+
+Self-healing dependency cache: a test's own file changing is exactly when its
+`include`/import lines might have changed too (added/removed a dependency).
+cached_dependency_files therefore also records the primary file's sha256 at
+scan time (scanned_primary_sha256). Every build_tb_provenance() call already
+computes the CURRENT primary sha256 for its own purposes — comparing it
+against scanned_primary_sha256 is then free. On a mismatch (or no cache entry
+at all), the dependency scan re-runs once, right now, and the refreshed
+result is written back — so the cost is paid only when the test file actually
+changed, not on every run.
 
 Scope note: dependency resolution covers the test's own file plus its
 *direct* `include`/import references only (one level deep) — it does not
@@ -32,51 +44,16 @@ import hashlib
 import re
 from pathlib import Path
 
-from xcelium_mcp.registry import load_sim_config, resolve_sim_dir
+from xcelium_mcp.registry import load_sim_config, resolve_sim_dir, save_sim_config
 from xcelium_mcp.shell_utils import shell_quote, shell_run
 
 _INCLUDE_RE = re.compile(r'`include\s+"([^"]+)"')
 _IMPORT_RE = re.compile(r'\bimport\s+(\w+)\s*::')
 
 
-async def resolve_tb_source_file(full_test_name: str, sim_dir: str = "") -> str | None:
-    """Look up the TB source file that defines full_test_name.
-
-    Must be called with an already-resolved (full) test name — callers
-    resolve short names via resolve_test_name() first. Returns None when
-    unavailable (e.g. a config discovered before this feature existed, or no
-    grep match) — provenance is best-effort, never a hard requirement.
-    """
-    try:
-        resolved_dir = await resolve_sim_dir(sim_dir)
-    except ValueError:
-        resolved_dir = sim_dir
-    if not resolved_dir:
-        return None
-    cfg = await load_sim_config(resolved_dir)
-    if not cfg:
-        return None
-    return cfg.get("test_discovery", {}).get("cached_test_files", {}).get(full_test_name)
-
-
-async def resolve_cached_dependency_files(full_test_name: str, sim_dir: str = "") -> list[str]:
-    """Look up the cached dependency file paths for full_test_name.
-
-    Pure cache read — no find/grep here (see module docstring). Populated
-    once at discovery/cache-miss time. Backward compat: a config from before
-    this caching existed, or a test with no known dependencies, returns an
-    empty list — not an error.
-    """
-    try:
-        resolved_dir = await resolve_sim_dir(sim_dir)
-    except ValueError:
-        resolved_dir = sim_dir
-    if not resolved_dir:
-        return []
-    cfg = await load_sim_config(resolved_dir)
-    if not cfg:
-        return []
-    return cfg.get("test_discovery", {}).get("cached_dependency_files", {}).get(full_test_name, [])
+# ---------------------------------------------------------------------------
+# Content hashing — always fresh, never cached
+# ---------------------------------------------------------------------------
 
 
 def _sha256_file(path: str) -> str:
@@ -93,6 +70,12 @@ async def compute_file_sha256(path: str) -> str | None:
         return await asyncio.to_thread(_sha256_file, path)
     except OSError:
         return None
+
+
+# ---------------------------------------------------------------------------
+# Dependency scan (find/grep) — only ever called at discovery/cache-miss
+# time or by resolve_cached_dependency_files' self-healing refresh
+# ---------------------------------------------------------------------------
 
 
 async def _find_file_by_basename(sim_dir: str, name: str) -> str | None:
@@ -151,12 +134,93 @@ async def find_dependency_files(test_file: str, sim_dir: str) -> list[str]:
     return resolved
 
 
+async def scan_test_dependencies(primary_path: str, sim_dir: str) -> dict:
+    """Scan primary_path's dependencies and hash it, as one cache entry.
+
+    Returns {"scanned_primary_sha256": str | None, "deps": list[str]} — the
+    shape stored in test_discovery.cached_dependency_files[test_name].
+    scanned_primary_sha256 is what resolve_cached_dependency_files compares
+    against on later calls to decide whether this entry is still valid.
+    """
+    deps, checksum = await asyncio.gather(
+        find_dependency_files(primary_path, sim_dir),
+        compute_file_sha256(primary_path),
+    )
+    return {"scanned_primary_sha256": checksum, "deps": deps}
+
+
+# ---------------------------------------------------------------------------
+# Cache-backed resolvers
+# ---------------------------------------------------------------------------
+
+
+async def resolve_tb_source_file(full_test_name: str, sim_dir: str = "") -> str | None:
+    """Look up the TB source file that defines full_test_name.
+
+    Must be called with an already-resolved (full) test name — callers
+    resolve short names via resolve_test_name() first. Returns None when
+    unavailable (e.g. a config discovered before this feature existed, or no
+    grep match) — provenance is best-effort, never a hard requirement.
+    """
+    try:
+        resolved_dir = await resolve_sim_dir(sim_dir)
+    except ValueError:
+        resolved_dir = sim_dir
+    if not resolved_dir:
+        return None
+    cfg = await load_sim_config(resolved_dir)
+    if not cfg:
+        return None
+    return cfg.get("test_discovery", {}).get("cached_test_files", {}).get(full_test_name)
+
+
+async def resolve_cached_dependency_files(
+    full_test_name: str, primary_path: str, primary_sha256: str, sim_dir: str = "",
+) -> list[str]:
+    """Look up (or self-heal) the dependency file paths for full_test_name.
+
+    Cache hit (scanned_primary_sha256 matches the CURRENT primary_sha256,
+    which the caller already computed for its own hashing purposes): pure
+    read, no find/grep.
+
+    Cache miss/stale (no entry at all, or the test's own file has changed
+    since the dependency list was last scanned — exactly when its
+    `include`/import lines might have changed too): re-scans right now via
+    find_dependency_files() (reusing the already-computed primary_sha256
+    rather than hashing the file a second time), persists the refreshed
+    entry back to config, and returns the fresh list. So the find/grep cost
+    is paid only when the test file actually changed, not on every run —
+    never on an unconditional per-run schedule.
+    """
+    try:
+        resolved_dir = await resolve_sim_dir(sim_dir)
+    except ValueError:
+        resolved_dir = sim_dir
+    if not resolved_dir:
+        return []
+    cfg = await load_sim_config(resolved_dir)
+    if not cfg:
+        return []
+
+    entry = cfg.get("test_discovery", {}).get("cached_dependency_files", {}).get(full_test_name)
+    if entry is not None and entry.get("scanned_primary_sha256") == primary_sha256:
+        return entry.get("deps", [])
+
+    # Stale/missing — rescan deps only (the caller already computed
+    # primary_sha256, so reuse it rather than hashing the file a second time).
+    fresh_deps = await find_dependency_files(primary_path, resolved_dir)
+    fresh_entry = {"scanned_primary_sha256": primary_sha256, "deps": fresh_deps}
+    cfg.setdefault("test_discovery", {}).setdefault("cached_dependency_files", {})[full_test_name] = fresh_entry
+    await save_sim_config(resolved_dir, cfg)
+    return fresh_deps
+
+
 async def build_tb_provenance(full_test_name: str, sim_dir: str = "") -> dict | None:
     """Resolve + hash the TB source file(s) for full_test_name.
 
-    File *locations* (primary + dependencies) come from cache only — no
-    find/grep runs here (see module docstring). File *contents* are always
-    read fresh via compute_file_sha256.
+    File *locations* come from cache, refreshed automatically when the
+    primary file's content changes (see resolve_cached_dependency_files).
+    File *contents* are always read fresh via compute_file_sha256.
 
     Returns:
         {
@@ -177,7 +241,10 @@ async def build_tb_provenance(full_test_name: str, sim_dir: str = "") -> dict | 
 
     files = [{"path": primary_path, "sha256": primary_checksum}]
     seen_paths = {primary_path}
-    for dep_path in await resolve_cached_dependency_files(full_test_name, sim_dir):
+    dep_paths = await resolve_cached_dependency_files(
+        full_test_name, primary_path, primary_checksum, sim_dir
+    )
+    for dep_path in dep_paths:
         if dep_path in seen_paths:
             continue
         checksum = await compute_file_sha256(dep_path)

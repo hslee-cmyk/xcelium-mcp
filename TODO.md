@@ -49,16 +49,28 @@ this closed the original single-file gap. One smaller thing remains:
   above, just for included files instead of test files.
 
 **Resolved (2026-07-06, same day)** — dependency-scan caching: `find_dependency_files()`
-(the actual `find`/`grep -rl` scan) now only runs once, at discovery/cache-miss
-time, alongside `cached_test_files` — its results are stored in a new
-`test_discovery.cached_dependency_files: {test_name: [path, ...]}` field.
-`build_tb_provenance()` no longer calls `find_dependency_files()` on the
-per-run hot path at all; it only reads `cached_dependency_files` (via
-`resolve_cached_dependency_files()`) and always re-hashes file *contents*
-fresh. Backward compat: a config without this field (pre-caching) yields an
-empty dependency list per test until `sim_discover(force=True)` re-runs —
-same degrade-safely pattern as `cached_test_files`/`tb_type`.
+(the actual `find`/`grep -rl` scan) now only runs at discovery/cache-miss
+time, alongside `cached_test_files` — results are stored in a new
+`test_discovery.cached_dependency_files: {test_name: {"scanned_primary_sha256", "deps"}}`
+field. `build_tb_provenance()` never calls `find_dependency_files()`
+unconditionally on the per-run hot path; it only reads
+`cached_dependency_files` (via `resolve_cached_dependency_files()`) and
+always re-hashes file *contents* fresh.
 
-Low priority remainder — the single-file gap and the caching cost were the
-two significant issues and both are now fixed; the two bullets above are
+**Resolved (2026-07-06, same day, follow-up)** — self-healing staleness:
+initially the cache had no way to notice when a test's OWN file was edited
+to add/remove an `include`/import line — the cached dependency *locations*
+would silently go stale. Fixed by recording the primary file's sha256 at
+scan time (`scanned_primary_sha256`) and comparing it, on every
+`build_tb_provenance()` call, against the CURRENT primary hash (already
+computed for the "files" entry anyway — free comparison). A mismatch (or no
+cache entry at all — same backward-compat path as before) triggers exactly
+one live re-scan via `resolve_cached_dependency_files()`, which then persists
+the refreshed entry. So the find/grep cost is paid only on the run right
+after the test file actually changed, never on every run, and never stays
+silently stale indefinitely.
+
+Low priority remainder — the single-file gap, the caching cost, and the
+staleness blind spot were the three significant issues and all three are now
+fixed; the two bullets above (non-recursive scan, duplicate basenames) are
 refinements on top.

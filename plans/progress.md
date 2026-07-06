@@ -1,6 +1,30 @@
 
 ---
 
+## 2026-07-06 - F-175 후속: 의존 파일 캐시에 self-healing 추가 — 테스트 파일 자체가 바뀌면(=include 목록이 바뀔 수 있는 시점) 자동 재스캔
+
+### 배경
+직전 커밋(discovery 시점 캐싱)에 대해 사용자가 "test file이 변경되면 hash가 바뀌는데, 그 시점에 include 파일이 추가/삭제될 수 있으니 재확인이 필요하지 않나" 지적. 정확한 지적 — discovery 시점에만 `cached_dependency_files`를 채우고 이후 갱신 메커니즘이 없으면, 테스트 자신의 파일을 수정해서 새로운 `` `include``를 추가/삭제해도 캐시된 의존 파일 목록이 영원히 stale 상태로 남음(재discover 전까지).
+
+### 구현 — self-healing 캐시
+- `cached_dependency_files`의 각 엔트리를 `[path, ...]` 단순 리스트에서 `{"scanned_primary_sha256": <스캔 당시 테스트 자신 파일의 sha256>, "deps": [path, ...]}`로 확장.
+- `build_tb_provenance()`가 이미 매번 계산하는 "테스트 자신 파일의 현재 sha256"(`primary_checksum`)을 그대로 재사용해 `scanned_primary_sha256`과 비교 — 별도 계산 비용 없음(공짜 비교).
+  - 일치(테스트 파일이 스캔 이후 안 바뀜) → 캐시된 `deps` 그대로 반환, find/grep 없음.
+  - 불일치(테스트 파일이 바뀜 → include/import 줄도 바뀌었을 수 있음) 또는 캐시 자체가 없음 → `find_dependency_files()`를 지금 한 번 다시 실행하고, 결과를(새 sha256과 함께) config에 즉시 write-back.
+- `tb_provenance.py`에 `scan_test_dependencies(primary_path, sim_dir) -> {"scanned_primary_sha256", "deps"}` 신규 — deps 스캔 + 파일 해시를 한 쌍으로 묶어 discovery 시점(3곳)에서 재사용. self-heal 경로(`resolve_cached_dependency_files`)는 호출자가 이미 계산해둔 sha256을 그대로 쓰고 `find_dependency_files()`만 다시 불러 중복 해시 계산을 피함.
+- `discovery.py`/`test_resolution.py::resolve_test_name`/`tools/sim_lifecycle.py::list_tests` 3곳 모두 `find_dependency_files()` 직접 호출 대신 `scan_test_dependencies()`로 교체(같은 자리, 스키마만 변경).
+
+### 검증
+`tests/test_tb_provenance.py`: `TestResolveCachedDependencyFiles`를 self-healing 동작에 맞춰 재작성(3 tests) — 캐시 히트 시 shell_run 미호출(AssertionError로 회귀 방지), stale entry 시 정확히 1회 재스캔 후 새 sha256으로 write-back, 캐시 엔트리 자체가 없을 때도 정상 스캔. `TestBuildTbProvenance`의 기존 테스트들도 신규 스키마(`scanned_primary_sha256`)로 갱신 — 그중 "의존 파일만 바뀌고 테스트 자신은 안 바뀌는" 시나리오 테스트에 `shell_run` 호출 시 AssertionError를 추가해 "테스트 파일 불변 시 재스캔이 일어나지 않는다"를 명시적으로 검증. `test_resolve_test_name_cache_miss.py`도 `scan_test_dependencies` mock으로 갱신.
+
+부수 발견: 초안에서 self-heal 경로가 호출자로부터 받은 `primary_sha256`을 쓰지 않고 `scan_test_dependencies()`로 다시 해시를 계산해 테스트가 실패 — 같은 파일을 굳이 두 번 해시하는 비효율이기도 해서, self-heal 경로만 `find_dependency_files()` 직접 호출 + 이미 받은 `primary_sha256` 재사용으로 수정.
+
+`python -m pytest` 526 passed(525→526) / `python -m ruff check src/` all checks passed / `python -c 'import xcelium_mcp.server'` 순환 임포트 없음 확인.
+
+TODO.md 갱신 — "의존 스캔 미캐싱"에 이어 "테스트 파일 변경 시 재스캔 안 됨"도 해결됨으로 표시. 남은 건 1단계 스코프 한계와 include 파일 basename 중복 두 가지만.
+
+---
+
 ## 2026-07-06 - F-175 후속: 의존 파일 위치 탐색을 discovery 시점으로 캐싱 — 매 실행마다 find/grep 반복 제거
 
 ### 배경

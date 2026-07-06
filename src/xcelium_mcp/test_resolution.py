@@ -15,7 +15,7 @@ from xcelium_mcp.shell_utils import (
     shell_quote,
     shell_run,
 )
-from xcelium_mcp.tb_provenance import find_dependency_files
+from xcelium_mcp.tb_provenance import scan_test_dependencies
 
 # F-175: test_discovery's grep command (built in discovery.py) now emits
 # `-n` (filename:lineno:content) instead of `-h` (content only), so the file
@@ -158,18 +158,17 @@ async def resolve_test_name(short_name: str, sim_dir: str = "") -> str:
                     # re-runs and populates tb_type.
                     cached = sorted({t.strip() for t in r.strip().splitlines() if t.strip()})
                     cached_test_files = {}
-                # F-175: resolve dependency FILE LOCATIONS here, once, at
-                # cache-miss time — never on the per-run hot path. Same
+                # F-175: resolve dependency FILE LOCATIONS (+ primary sha256
+                # for staleness checks) here, once, at cache-miss time — same
                 # rationale as discovery.py's initial-discovery pass.
-                cached_dependency_files: dict[str, list[str]] = {}
+                cached_dependency_files: dict[str, dict] = {}
                 if cached_test_files:
                     names = list(cached_test_files.keys())
-                    dep_results = await asyncio.gather(
-                        *(find_dependency_files(cached_test_files[n], resolved_dir) for n in names)
+                    scan_results = await asyncio.gather(
+                        *(scan_test_dependencies(cached_test_files[n], resolved_dir) for n in names)
                     )
-                    for n, deps in zip(names, dep_results):
-                        if deps:
-                            cached_dependency_files[n] = deps
+                    for n, entry in zip(names, scan_results):
+                        cached_dependency_files[n] = entry
                 if cached:
                     # Cache via config_action (write centralization)
                     cfg.setdefault("test_discovery", {})["cached_tests"] = cached
