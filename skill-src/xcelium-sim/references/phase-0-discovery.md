@@ -19,15 +19,11 @@ mcp_config(action="get", key="runner.default_mode")   # 필요 시 수동 조정
 
 `sim_discover`는 TB type을 감지해 `tb_type: ncsim_legacy | uvm | sv_directed | mixed`로 등록한다. v5.2 이후 `boundary_depth` 파라미터로 블록 경계 자동 탐색 깊이도 함께 설정 가능(Flow B — Yosys JSON lazy discovery, 실제 탐색은 이후 `sim_batch_run`에서 지연 수행).
 
-### 0-Prep-2. TB 소스 읽기 원칙 — 로컬 사본 신뢰 금지
+### 0-Prep-2. TB 소스 읽기 원칙 — 로컬 사본 금지
 
-0A/0B에서 TB 소스 파일을 읽어 분석서를 작성할 때, **로컬 프로젝트 저장소에 있는 동일 파일명 사본을 신뢰하지 않는다**. 실행 정본은 항상 `sim_discover`/`mcp_config`가 resolve한 실제 `sim_dir`이며, 그 경로를 ssh-mcp(`file_read`/`file_grep`)로 직접 읽는 것이 기본 경로다.
+0A/0B에서 TB 소스 파일을 읽어 분석서를 작성할 때, 로컬 프로젝트 저장소에 있는 동일 파일명 사본은 읽지 않는다. 항상 `sim_discover`/`mcp_config`가 resolve한 실제 `sim_dir`을 ssh-mcp(`file_read`/`file_grep`)로 직접 읽는다 — 조건 없는 규칙이다(로컬 사본이 있어도 그걸로 대체하지 않는다).
 
-**Why**: 여러 저장소(예: FPGA 검증용 로컬 repo와 실제 시뮬레이션에 쓰이는 ASIC/venezia-t0 repo)에 같은 이름의 TB 테스트 파일이 독립적으로 존재할 수 있고, 두 파일의 내용이 서로 달라져 있을 수 있다(2026-07-06 실전 사례: 로컬 사본엔 있던 drain 로직이 실제 cloud0 TB엔 없어서, 로컬 사본을 읽고 작성한 분석서의 근본원인 서술이 실제 시뮬레이션 결과와 어긋났다). 파일명이 같다고 내용도 같다고 가정하면 안 된다 — 실제로 그 결과를 만든 파일을 읽어야 한다.
-
-**적용 순서**:
-1. `sim_batch_run`/`sim_regression`/`sim_bridge_run`의 반환 텍스트에 `tb_source`/`tb_provenance`(경로+sha256, xcelium-mcp F-175)가 있으면, 로컬 사본을 근거로 쓰기 전에 그 sha256과 로컬 사본의 체크섬을 비교해 일치하는지 먼저 확인한다.
-2. 체크섬 비교가 불가능하면(F-175 이전에 discover된 config라 provenance가 없는 경우 등) — 로컬 사본을 신뢰하지 말고, `sim_discover`가 resolve한 sim_dir 경로를 ssh-mcp(`file_read`/`file_grep`)로 직접 읽어 분석 근거로 삼는다.
+**Why**: 여러 저장소(예: FPGA 검증용 로컬 repo와 실제 시뮬레이션에 쓰이는 ASIC/venezia-t0 repo)에 같은 이름의 TB 테스트 파일이 독립적으로 존재할 수 있고, 두 파일의 내용이 서로 달라져 있을 수 있다(2026-07-06 실전 사례: 로컬 사본엔 있던 drain 로직이 실제 cloud0 TB엔 없어서, 로컬 사본을 읽고 작성한 분석서의 근본원인 서술이 실제 시뮬레이션 결과와 어긋났다). 이 사건 이후 로컬 사본 자체를 두지 않기로 결정했다 — 그러니 "로컬 사본을 검증 후 조건부로 써도 되는지"가 아니라, 애초에 분석 근거로 로컬 경로를 읽지 않는다는 게 원칙이다.
 
 > **별도 저장소의 agent 문서화 필요**: `verilog-tb-analyst`/`verilog-rtl-debugger` agent(chip-design-skills repo 소유, 이 저장소와 별개)가 이 원칙을 따르게 하려면 해당 agent 문서에도 동일 원칙이 반영되어야 한다 — 이 항목은 xcelium-mcp의 skill-src만 수정 대상이며, chip-design-skills 쪽 반영은 별도 작업이다.
 
@@ -66,10 +62,18 @@ RTL 합성·CDC 설계 규칙(verilog-rtl §1~§7, §11)이나 AMS 아날로그 
 | 규칙 | 설명 |
 |------|------|
 | 작성 시점 | 해당 컴포넌트/테스트를 처음 디버깅할 때 (lazy) |
-| 갱신 시점 | 해당 파일이 수정되었을 때만 |
+| 갱신 시점 | 해당 파일이 수정되었을 때만 — 판단 방법은 아래 "갱신 필요 판단" 참조 |
 | 갱신 불필요 | RTL만 수정되고 TB 파일 미변경 시 |
 | 저장 위치 | `.ai/analysis/tb_*.analysis.md` |
 | 참조 관계 | RTL 분석서 → DUT FSM/신호, TB 분석서 → 시퀀스/기대값/API |
+
+**갱신 필요 판단(F-175 tb_source/tb_provenance 활용)**: "해당 파일이 수정되었을 때만" 갱신한다는 규칙은 있지만, 캐시된 분석서를 재사용하려는 시점에 TB 소스가 그 사이 바뀌었는지 매번 전체 내용을 다시 읽어 비교하면 캐싱하는 의미가 없다. 대신 가벼운 체크섬만 비교한다:
+
+1. 분석서를 처음 작성할 때, 그 시점 실행의 `tb_source`/`tb_provenance`(경로+sha256 — `sim_batch_run`/`sim_regression`/`sim_bridge_run`이 이미 반환값에 포함하고 있으므로 별도 조회 불필요)를 분석서 헤더에 함께 기록해둔다.
+2. 다음 디버깅에서 캐시된 분석서를 재사용하기 전, 이번 실행의 `tb_source.sha256`과 분석서 헤더에 기록된 sha256을 비교한다.
+3. 일치하면 TB 소스가 그대로라는 뜻이므로 캐시를 그대로 재사용. 다르면(또는 분석서에 애초에 기록이 없으면 — F-175 이전에 작성된 분석서 등) TB 소스가 바뀌었을 수 있으므로 재작성한다.
+
+이건 "로컬 사본을 믿어도 되는지"와는 무관하다(0-Prep-2 참조 — 로컬 사본은 애초에 안 읽는다) — 순전히 "지금 실행이 만든 결과가 캐시된 분석서 작성 시점의 TB 소스와 같은가"를 싼 값에 판단하기 위한 용도다.
 
 ## Tool 예시
 
