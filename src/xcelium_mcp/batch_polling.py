@@ -10,6 +10,14 @@ import time as _time
 
 from xcelium_mcp.shell_utils import shell_run
 
+# F-174: bare "$finish"/"PASS"/"FAIL" substrings also match mid-run noise —
+# a TCL setup script's first-line comment (e.g. "run to $finish (no MCP
+# bridge)") gets echoed into the log before the sim starts, and individual
+# assertion lines (e.g. "[V-18] PASS: ...") appear throughout a run. Anchor
+# to the phrase xmsim only emits on actual completion, and defer PASS/FAIL
+# detection to done_file + the COMPLETE/Errors: summary line.
+_COMPLETION_MARKERS = ("Simulation complete via $finish", "COMPLETE", "Errors:")
+
 
 async def poll_batch_log(log_file: str, timeout: float, prefix: str = "") -> tuple[str, bool]:
     """Poll a batch log file until completion keywords found or timeout.
@@ -32,9 +40,7 @@ async def poll_batch_log(log_file: str, timeout: float, prefix: str = "") -> tup
             f"(tail -10 {log_file} || true); "
             f"test -f {done_file} && echo __DONE__"
         )
-        if "__DONE__" in out or any(
-            kw in out for kw in ("$finish", "COMPLETE", "PASS", "FAIL", "Errors:")
-        ):
+        if "__DONE__" in out or any(kw in out for kw in _COMPLETION_MARKERS):
             timed_out = False
             break
         # P6-1: adaptive backoff (×1.5, cap 10s)

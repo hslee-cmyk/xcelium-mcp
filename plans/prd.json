@@ -2407,6 +2407,51 @@
         "리팩터하지 않기로 결정한 경우 prd.json notes에 판단 근거 기록"
       ],
       "notes": "code-analyzer verbosity 리뷰(2026-07-02) Low #11 (경미). 에이전트도 marginal이라고 평가 — 실제 구현 시 추출이 가독성을 해치면 스킵도 허용.\n\n[검토 결과: 리팩터하지 않기로 결정] _dot_get은 parts 전체를 순회하며 각 단계에서 존재 확인(없으면 _MISSING 반환), _dot_set은 parts[:-1]만 순회하며 중간 dict가 없으면 새로 생성(auto-vivify)한 뒤 마지막 키를 설정, _dot_delete는 parts[:-1]만 순회하되 중간 dict가 없으면 실패(False) 처리 후 마지막 키가 있으면 삭제. 세 함수는 순회 범위(전체 vs [:-1]), 중간 노드 부재 시 동작(생성 vs 실패), 실패 시 반환값(_MISSING sentinel vs bool)이 모두 달라 — 공용 헬퍼로 묶으려면 이 3가지 축을 각각 파라미터화해야 하는데, 그러면 호출부마다 플래그 조합을 머릿속으로 시뮬레이션해야 이해 가능한 코드가 되어 현재의 7줄 내외 독립 함수 3개보다 오히려 가독성이 떨어짐. 표면적으로는 '순회'가 중복돼 보이지만 핵심 로직(생성/실패/반환)은 서로 달라 추출 이득이 낮다고 판단, 현행 유지."
+    },
+    {
+      "id": "F-174",
+      "title": "버그: poll_batch_log의 완료 판별 키워드($finish/PASS/FAIL substring)가 진행 중 로그에서도 오탐해 sim_batch_run이 조기 반환",
+      "priority": 1,
+      "passes": false,
+      "acceptanceCriteria": [
+        "src/xcelium_mcp/batch_polling.py:35-37의 완료 판별 키워드에서 '$finish' 단독 substring 제거 — xmsim이 실제 종료 시에만 출력하는 'Simulation complete via $finish' 문구로 앵커링",
+        "동일 위치에서 'PASS'/'FAIL' 단독 substring을 완료 신호에서 제거 — 개별 assertion 로그(예: '[V-18] PASS: ...')와 구분 불가능하므로 완료 판정 근거로 부적합. done_file(.done 마커) 및 'COMPLETE'/'Errors:' 앵커드 문구에 위임",
+        "L44-45의 최종 결과 추출 grep 패턴도 새 키워드 세트와 일관되게 갱신(불필요 시 notes에 사유 기록)",
+        "신규 테스트: tail -10 결과가 TCL 스크립트 주석 '# ... run to $finish (no MCP bridge)'만 포함할 때 poll_batch_log가 조기 종료하지 않음을 검증",
+        "신규 테스트: tail -10 결과가 개별 assertion 'PASS:' 라인만 포함(COMPLETE/Errors: 없음)할 때 조기 종료하지 않음을 검증",
+        "회귀 테스트: 'Simulation complete via $finish(1) at time ...' 포함 시 정상 완료 판정, done_file 존재 시 키워드 무관하게 즉시 완료 판정(기존 동작 유지)",
+        "pytest passes"
+      ],
+      "notes": "venezia-fpga 세션에서 TOP015(VENEZIA_TOP015_i2c_8bit_offset_test) sim_batch_run 실행 중 실전 재현(2026-07-03) — sim_batch_run이 수 초 만에 \"completed\"를 반환했으나 SSH로 직접 확인한 결과 xmsim이 95.9% CPU로 계속 실행 중이었고 실제로는 2분 30초 후에야 Errors: 0으로 정상 종료. Root cause: venezia-t0의 scripts/setup_rtl_batch.tcl 1번째 줄 주석(\"# setup_rtl_batch.tcl — batch xmsim: dump all signals + run to $finish (no MCP bridge)\")이 xmsim -input 처리 시 로그 최상단에 echo되는데, 첫 poll(P6-1 interval 2.0s 시작) 시점에 tail -10이 아직 이 주석 줄을 포함하고 있어 '$finish' substring 매칭으로 즉시(오)완료 판정됨. 상세 분석 및 대안(F-2: done_file 우선 + 키워드 2차 확인)은 docs/01-plan/features/xcelium-mcp-batch-poll-false-completion.plan.md 참조. ssh-timeout-fix가 만든 done_file 메커니즘 자체는 정상 — 그 옆의 키워드 fast-path가 별개 원인."
+    },
+    {
+      "id": "F-175",
+      "title": "기능: sim_batch_run/sim_regression/sim_bridge_run이 실행에 쓰인 TB 소스 파일의 provenance(경로+체크섬)를 결과/checkpoint 메타데이터에 기록",
+      "priority": 2,
+      "passes": false,
+      "acceptanceCriteria": [
+        "sim_batch_run/sim_regression/sim_bridge_run 3개 tool 모두 실행 시 컴파일에 쓰인 TB 소스 파일(들)의 절대경로 + sha256 체크섬을 계산해 결과(shm_path와 함께 반환되는 dict/JSON)에 포함 — 3개 모두 동일한 '컴파일+실행' 경로를 타므로 공통 헬퍼로 구현",
+        "checkpoint(action=save)의 기존 compile_hash(inca/ object mtime MD5, checkpoint_manager.py:28 compute_compile_hash)는 '재컴파일 여부'만 감지하고 '어떤 TB 소스인지'는 알려주지 않음 — 이번 신규 provenance 필드(TB 소스 경로+내용 체크섬)는 이를 대체하지 않고 보완. checkpoint manifest에도 신규 provenance 필드를 추가로 저장(기존 compile_hash 필드는 유지)",
+        "sim_regression/checkpoint(action=save)에도 동일한 provenance 필드가 저장되어, 나중에 checkpoint를 restore하거나 결과를 재분석할 때 '지금 읽는 TB 소스가 그 결과를 만든 파일과 동일한지'를 체크섬 비교로 검증 가능해야 함",
+        "provenance 필드 부재(구버전 checkpoint 등) 시에도 기존 동작이 깨지지 않아야 함(하위호환)",
+        "신규 테스트: 동일 TB 소스로 2회 실행(sim_batch_run 1회, sim_bridge_run 1회) 시 체크섬 일치, TB 소스를 수정 후 재실행 시 체크섬 변경을 검증",
+        "신규 테스트: sim_regression으로 여러 테스트 실행 시 테스트별로 각자의 TB 소스 provenance가 개별 기록되는지 검증(공통 TB 소스를 쓰는 테스트끼리는 체크섬이 같아야 함)",
+        "pytest passes"
+      ],
+      "notes": "venezia-fpga 세션에서 verilog-rtl-debugger agent를 T-002(TOP014 V-13 FIFO overflow 커버리지 갭) 실사례로 테스트하던 중 발견(2026-07-06). 로컬 venezia-fpga repo(todoc-hw-venezia-fpga, 317 lines, 2026-03-26 커밋)에 xcelium-mcp가 실제로 시뮬레이션에 쓰는 TB 소스(venezia-t0/cloud0, todoc-chip-venezia-t0, 362 lines, mtime 2026-06-15, git-untracked)와 같은 이름의 stale 사본이 있었음. TB 분석(verilog-tb-analyst)이 이 로컬 사본을 읽고 분석서를 작성했는데, 실제 파형을 만든 cloud0 TB와 test_v13_fifo_semaphore 태스크 내용이 달라(로컬은 루프 내 repeat(2) drain + 종료 시 repeat(10), cloud0는 drain 없이 종료 시 1회) 근본원인 서술이 틀어졌었다. venezia-fpga(FPGA 검증용)와 venezia-t0(ASIC 전체검증/시뮬레이션용, RTL은 이미 submodule로 공유)는 서로 다른 org의 별도 git 저장소이고, TB 실행 정본은 항상 venezia-t0/cloud0이며 로컬엔 사본을 두지 않기로 함(venezia-fpga 쪽 stale 사본은 제거함). 하지만 이런 저장소 구조 결정과 무관하게, MCP를 통해 실제로 수집한 정보가 항상 분석 근거의 기준이 되어야 한다는 게 사용자의 명시적 요구사항 — 이 provenance 캡처가 그 원칙을 시스템적으로 보장하는 방법. 참고: F-176(TB 분석 시 항상 MCP-resolve 경로를 읽도록 하는 방법론 문서화)과 짝을 이루는 코드 측 기능. [2026-07-06 추가 조사] 사용자 질문(\"sim_batch_run만 문제냐\")으로 범위 재확인 — 실제로 컴파일+실행을 새로 하는 tool은 sim_batch_run/sim_regression/sim_bridge_run 3개 전부이며 셋 다 동일한 gap(반환값에 TB provenance 없음)이 있음이 코드 확인됨(batch.py:74 sim_batch_run, batch.py:231 sim_regression, sim_lifecycle.py:228 sim_bridge_run 독스트링 \"Compile + launch + connect bridge\"). checkpoint_manager.py에 이미 compute_compile_hash()(inca/ object mtime MD5, '재컴파일 여부'만 감지)가 있으나 이건 checkpoint save/restore/cleanup 내부 전용이고 sim_batch_run 등의 반환값엔 노출 안 됨 + TB 소스 경로/내용 식별 기능 없음 — 이번 F-175는 이를 대체하지 않고 3개 tool 반환값 전체에 TB 소스 경로+체크섬을 노출하는 별개 보완 기능."
+    },
+    {
+      "id": "F-176",
+      "title": "문서: xcelium-sim skill(TB 분석 절차)에 '로컬 저장소 사본을 TB 분석 근거로 쓰지 말고 항상 sim_discover가 resolve한 실제 sim_dir을 ssh-mcp로 직접 읽어라'는 원칙을 명시",
+      "priority": 2,
+      "passes": false,
+      "acceptanceCriteria": [
+        "skill-src/xcelium-sim/references/phase-0-discovery.md(또는 phase-1-analysis.md)에 'TB 소스 분석 시 로컬 프로젝트 저장소의 동일 파일명 사본을 신뢰하지 말고, mcp_config/sim_discover가 resolve한 sim_dir 경로를 ssh-mcp(file_read/file_grep)로 직접 읽는 것을 기본 경로로 한다'는 내용 추가",
+        "verilog-tb-analyst / verilog-rtl-debugger agent(chip-design-skills 소유, 별도 저장소)가 이 원칙을 따르도록 하려면 해당 agent 문서에도 같은 원칙이 반영돼야 함을 notes에 명시(이 prd 항목은 xcelium-mcp 쪽 skill-src만 수정 대상 — chip-design-skills 쪽은 별도 처리 필요)",
+        "F-175(provenance 체크섬)가 구현되면 이 문서에 '체크섬으로 검증 가능하면 검증하고, 안 되면 최소한 MCP-resolve 경로를 1차 소스로 쓴다'는 순서로 갱신",
+        "review only — 코드 변경 없음"
+      ],
+      "notes": "F-175와 짝. venezia-fpga(todoc-hw)/venezia-t0(todoc-chip)처럼 TB 테스트 파일이 여러 저장소에 중복 존재할 수 있는 구조에서, 어떤 저장소를 쓰든 agent의 TB 분석 근거는 항상 MCP로 수집한 정보(sim_discover가 resolve한 실제 경로)여야 한다는 게 사용자가 명시적으로 확인한 원칙(2026-07-06) — 저장소 토폴로지(submodule화 여부 등)는 별도 결정 사항이고 이 원칙과 독립적으로 지켜져야 함."
     }
   ]
 }

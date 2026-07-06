@@ -1,6 +1,30 @@
 
 ---
 
+## 2026-07-06 - F-174: 버그 수정 — poll_batch_log 완료 판별 키워드 오탐(조기 반환) 수정
+
+### 배경
+venezia-fpga 세션에서 TOP015(`VENEZIA_TOP015_i2c_8bit_offset_test`) `sim_batch_run` 실행 중 실전 재현(2026-07-03). `sim_batch_run`이 xmsim이 실제로 종료되기 전(수 초 만에) "completed"를 반환했으나, SSH로 직접 확인한 결과 xmsim이 95.9% CPU로 계속 실행 중이었고 실제로는 2분 30초 후에야 `Errors: 0`으로 정상 종료. Root cause: `batch_polling.py::poll_batch_log()`의 완료 판별이 `"$finish"`/`"PASS"`/`"FAIL"` **단순 substring** 매칭이었는데, venezia-t0의 `scripts/setup_rtl_batch.tcl` 1번째 줄 주석("... run to $finish (no MCP bridge)")이 xmsim `-input` 처리 시 로그 최상단에 그대로 echo되어 첫 poll(P6-1 interval 2.0s 시작) 시점에 `tail -10`이 이 주석 줄만 포함하고 있어도 즉시 완료로 오판됨. 개별 assertion 로그(`[V-18] PASS: ...`)도 동일 계열의 잠재적 오탐 지점(별도 위험, plan §1.2(B)). 상세: `docs/01-plan/features/xcelium-mcp-batch-poll-false-completion.plan.md`.
+
+### 구현 (F-1, 필수 항목만 — F-2 2차 확인 로직은 plan에서 "검토 후 결정" 항목으로 남겨두고 이번엔 미적용)
+- `batch_polling.py`에 `_COMPLETION_MARKERS = ("Simulation complete via $finish", "COMPLETE", "Errors:")` 모듈 상수 추가
+- 완료 판별 조건을 `kw in out for kw in ("$finish", "COMPLETE", "PASS", "FAIL", "Errors:")` → `kw in out for kw in _COMPLETION_MARKERS`로 교체 — `$finish` 단독 substring 제거(xmsim이 실제 종료 시에만 출력하는 `"Simulation complete via $finish"` 고정 문구로 앵커링), `PASS`/`FAIL` 단독 substring은 완전히 제거(개별 assertion 로그와 구분 불가능 — `done_file` + `COMPLETE`/`Errors:`에 위임)
+- L44-45(최종 결과 추출 grep)는 plan F-3 판단대로 변경 없음 — 조기 종료 버그(F-1)가 해소되면 이 grep이 조기 반환된 스크립트 주석 한 줄 대신 정상적으로 전체 PASS/FAIL 요약을 받게 되므로 별도 수정 불필요
+
+### 검증
+`tests/test_poll_batch_log.py` 신규 작성(4 tests, `poll_batch_log`를 직접 단위 테스트하는 최초 파일 — 기존엔 모든 caller가 이 함수 자체를 mock만 해왔음):
+- TCL 주석에 `$finish`만 포함된 로그로 2회 poll해도 조기 종료하지 않고 timeout까지 진행하는지
+- 개별 `[V-18] PASS: ...` 라인만 있고 `COMPLETE`/`Errors:`가 없을 때 조기 종료하지 않는지
+- `"Simulation complete via $finish(1) at time ..."` 포함 시 정상적으로 완료 판정되는지(회귀 방지)
+- `done_file`(`__DONE__`) 존재 시 키워드 매칭과 무관하게 즉시 완료 판정되는 기존 동작이 유지되는지
+
+`python -m pytest` 485 passed (481→485, 신규 4개) / `python -m ruff check src/` all checks passed.
+
+### 남은 작업
+F-175(TB 소스 provenance 체크섬 기록), F-176(TB 분석 시 MCP-resolve 경로 우선 원칙 문서화, review only) — 미착수. plan의 F-2(키워드 fast-path 2차 확인)는 리스크/비용 대비 낮은 우선순위로 판단해 이번엔 스킵 — 필요 시 별도 태스크로 분리 검토.
+
+---
+
 ## 2026-07-02 - Verbosity 코드 리뷰 → F-163~173 (11건) 백로그 추가 + F-163 구현
 
 code-analyzer를 "코드가 불필요하게 길게/장황하게 작성되었는가"에만 집중하는 렌즈로 실행(23개 파일, High 2 / Medium 4 / Low 5). High-Impact #2(batch.py 검증 중복), Low #7(`_write_json` 죽은 코드), Low #9(중복 `import re`), Medium #4(`read_setup_tcl` pass-through 래퍼)는 Claude가 직접 코드를 읽어 재확인 완료. 사용자가 "모두 prd로 추가하고 고치자" 지시 → F-163~173 전부 `passes:false`로 추가, 순차적으로 `/ralph-loop --next`로 구현 시작.
