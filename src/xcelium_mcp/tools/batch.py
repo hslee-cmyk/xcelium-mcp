@@ -14,6 +14,7 @@ from xcelium_mcp.bridge_manager import BridgeManager
 from xcelium_mcp.registry import load_sim_config, resolve_sim_dir
 from xcelium_mcp.runner_detection import load_or_detect_runner
 from xcelium_mcp.shell_utils import UserInputRequired, find_shm, validate_path
+from xcelium_mcp.tb_provenance import build_tb_provenance
 from xcelium_mcp.tcl_bridge import TclError
 from xcelium_mcp.test_resolution import resolve_test_name
 
@@ -217,6 +218,9 @@ def register(
             except Exception:
                 pass
 
+        # F-175: TB source provenance — best-effort, never fails the run.
+        tb_source = await build_tb_provenance(test_name, resolved_sim_dir)
+
         parts = [
             f"sim_batch_run {test_name} completed.\n\n"
             f"shm_path: {shm_path or '(not found in dump/)'}\n\n"
@@ -225,6 +229,8 @@ def register(
         if dump_summary is not None and dump_depth == "boundary":
             import json as _json
             parts.append(f"\ndump_summary:\n{_json.dumps(dump_summary, indent=2)}")
+        if tb_source is not None:
+            parts.append(f"\ntb_source: {tb_source['path']} (sha256: {tb_source['sha256']})")
         return "".join(parts)
 
     @mcp.tool()
@@ -330,8 +336,19 @@ def register(
         except (RuntimeError, ValueError, OSError, TimeoutError) as e:
             return f"ERROR running regression: {e}"
 
+        # F-175: per-test TB source provenance — best-effort, never fails the run.
+        tb_provenances = await asyncio.gather(
+            *(build_tb_provenance(t, resolved_sim_dir) for t in test_list)
+        )
+        tb_provenance = {
+            t: p for t, p in zip(test_list, tb_provenances) if p is not None
+        }
+
         parts = [f"sim_regression completed.\n\n{summary}"]
         if dump_stats is not None:
             import json as _json
             parts.append(f"\ndump_stats:\n{_json.dumps(dump_stats, indent=2)}")
+        if tb_provenance:
+            import json as _json
+            parts.append(f"\ntb_provenance:\n{_json.dumps(tb_provenance, indent=2)}")
         return "".join(parts)

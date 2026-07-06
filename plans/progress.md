@@ -1,6 +1,41 @@
 
 ---
 
+## 2026-07-06 - F-175: 기능 — sim_batch_run/sim_regression/sim_bridge_run TB 소스 provenance(경로+sha256) 기록
+
+### 배경
+venezia-fpga 세션에서 verilog-rtl-debugger agent를 T-002(TOP014 V-13 FIFO overflow 커버리지 갭) 실사례로 테스트하던 중 발견(2026-07-06). 로컬 venezia-fpga repo에 xcelium-mcp가 실제로 시뮬레이션에 쓰는 TB 소스(venezia-t0/cloud0)와 같은 이름의 stale 사본이 있었고, 내용이 달라(로컬은 drain 로직 포함, cloud0는 미포함) TB 분석의 근본원인 서술이 틀어졌었다. "지금 분석 중인 TB 소스가 실제로 그 결과를 만든 파일과 같은지" 사후 검증할 방법이 전혀 없었던 게 근본 문제 — 이번 F-175가 그 검증 수단(경로+sha256 체크섬)을 추가한다.
+
+### 설계 결정 — 별도 필드 대신 test_discovery 확장
+초기 설계안은 "특정 test_name을 정의한 파일을 찾는 별도 함수(grep -l 재실행)"였으나, 사용자가 "이미 test_discovery가 test 목록을 만들 때 grep으로 소스를 훑는데 왜 새 매커니즘을 또 만드냐"고 지적 — 코드 확인 결과 정확히 맞는 지적이었다. `discovery.py`가 test 이름을 뽑아낼 때 이미 `grep -rh 'extends uvm_test'|'^\s*program '` (uvm/sv_directed) 또는 `ls tb_tests/*.v`(legacy)로 TB 소스를 스캔하고 있었는데, `-h`(파일명 숨김) 플래그 때문에 클래스/프로그램 **이름만** 남기고 정의 파일 경로는 버리고 있었다. `-h`→`-n`(파일명:라인번호)으로 바꾸기만 하면 같은 grep 결과에서 파일 경로까지 얻을 수 있어, 별도 grep을 추가하지 않고 기존 test_discovery 메커니즘을 확장하는 방향으로 설계를 변경했다.
+
+### 구현
+- **`test_resolution.py`**: `parse_test_discovery_output(raw, tb_type) -> dict[name, file]` 신규 — uvm(`{file}:{line}:...class {Name} extends uvm_test`)/sv_directed(`{file}:{line}:program {Name}`)/legacy(bare path, name=stem) 3가지 포맷 파싱을 한 곳에 통합. `resolve_test_name()`의 cache-miss 재실행 경로가 이 파서를 사용해 `cached_tests`뿐 아니라 신규 `cached_test_files`도 채우도록 변경.
+- **`discovery.py`**: test_cmd 생성을 `-h`+`sort -u`/`-o` 파이프라인 → `-n`(raw) 명령으로 단순화(파싱은 이제 Python 쪽 `parse_test_discovery_output`이 전담). `test_discovery` config에 `tb_type`(재파싱 시 포맷 선택용) + `cached_test_files` 필드 신규 추가.
+- **`tools/sim_lifecycle.py list_tests`**: 동일하게 cache-miss 경로에서 `cached_test_files`도 갱신하도록 변경 — discovery.py/resolve_test_name/list_tests 3곳 모두 같은 파서를 재사용(로직 중복 없음).
+- **`registry.py`**: `_PROTECTED_KEYS`에 `test_discovery.tb_type` 추가(command와 동일하게 sim_discover만 갱신 가능 — 사용자가 mcp_config로 바꾸면 파싱 포맷이 깨짐).
+- **`tb_provenance.py` 신규 모듈**: `resolve_tb_source_file()`(cached_test_files 조회) + `compute_file_sha256()`(이 코드베이스 최초의 content-hash — 기존 `compute_compile_hash`는 mtime만 해시) + `build_tb_provenance()`(둘을 묶어 `{"path", "sha256"}` 반환, 실패 시 None — best-effort, 절대 에러로 표면화하지 않음).
+- **`tools/batch.py`**: `sim_batch_run`은 반환 텍스트에 `tb_source: {path} (sha256: ...)` 블록 추가. `sim_regression`은 이미 resolve된 `test_list` 전체에 대해 병렬로 provenance를 모아 `tb_provenance: {test_name: {path, sha256}, ...}` JSON 블록 추가(테스트별 개별 기록, 공통 TB 파일 공유 테스트는 자연히 동일 체크섬).
+- **`tools/sim_lifecycle.py sim_bridge_run`**: 동일하게 반환 텍스트에 `tb_source` 추가. 추가로 `bridges.current_test_name`/`bridges.current_tb_source`에 저장(bridge 모드는 test_name 파라미터가 없는 `checkpoint(action=save)`가 나중에 참조할 수 있도록).
+- **`bridge_manager.py`**: `BridgeManager`에 `current_test_name`/`current_tb_source` 필드 신규, `set_xmsim(None)`(disconnect) 시 초기화.
+- **`checkpoint_manager.py register_checkpoint()`**: `tb_source: dict | None = None` 파라미터 추가, 제공 시 manifest entry에 저장(None이면 키 자체를 안 만들어 기존 리더와 하위호환). `compile_hash`(재컴파일 감지)를 대체하지 않고 보완.
+- **`batch_runner.py`**: regression의 L1 자동 체크포인트 등록(`save_checkpoints=True`, test_name 이미 알고 있는 유일한 checkpoint 등록 지점)에서 `build_tb_provenance()` 호출 후 `tb_source`로 전달.
+- **`tools/checkpoint.py` `_save_impl`**: bridge 모드 `checkpoint(action=save)`가 `bridges.current_test_name`/`current_tb_source`를 `register_checkpoint()`에 전달.
+
+### 하위 호환
+`cached_test_files`가 없는 기존(pre-F-175) config는 `resolve_tb_source_file()`이 `None`을 반환 → `build_tb_provenance()`도 `None` → 3개 tool 모두 `tb_source`/`tb_provenance` 섹션을 조용히 생략(에러 없음). `register_checkpoint(tb_source=None)`도 manifest에 키를 추가하지 않아 기존 스키마 소비자에 영향 없음.
+
+### 검증
+- `tests/test_tb_provenance.py` 신규 22 tests — `parse_test_discovery_output` 3개 포맷(uvm/sv_directed/legacy) + 잘못된 라인 스킵, `compute_file_sha256`(hashlib 기준값 일치/동일 내용 동일 해시/수정 후 해시 변경/파일 없음 시 None), `resolve_tb_source_file`/`build_tb_provenance`(캐시 히트/미스/config 없음, 공유 TB 파일 두 테스트 동일 체크섬 — F-175 acceptance criterion, 파일 수정 후 재실행 체크섬 변경 — F-175 acceptance criterion), `register_checkpoint(tb_source=...)` 저장/생략, `BridgeManager` 기본값/disconnect 시 초기화.
+- `tests/test_resolve_test_name_cache_miss.py` 신규 2 tests — cache-miss 시 `cached_test_files` 채워짐, cache-hit 시 재실행 없음(회귀 없음).
+- `sim_batch_run`/`sim_regression`/`sim_bridge_run` 3개 MCP tool 자체는 `register()` 클로저 내부라 직접 통합테스트 대신, 세 tool 모두가 호출하는 공유 함수 `build_tb_provenance()`를 단위 테스트로 철저히 검증하는 방식으로 동등한 보증 확보(체크섬 안정성/변경감지 로직은 3곳 모두 동일 함수를 통하므로 중복 검증 불필요).
+- `python -m pytest` 509 passed (485→509, 신규 24개) / `python -m ruff check src/` all checks passed / `python -c 'import xcelium_mcp.server'` 순환 임포트 없음 확인.
+
+### 남은 작업
+F-176(TB 분석 시 MCP-resolve 경로 우선 원칙 문서화, review only, 코드 변경 없음) — 미착수.
+
+---
+
 ## 2026-07-06 - F-174: 버그 수정 — poll_batch_log 완료 판별 키워드 오탐(조기 반환) 수정
 
 ### 배경

@@ -1,17 +1,58 @@
 """Test name and simulation parameter resolution for xcelium-mcp.
 
 Extracted from batch_runner.py (F-038 structural split).
-Contains: resolve_test_name, resolve_sim_params.
+Contains: resolve_test_name, resolve_sim_params, parse_test_discovery_output.
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime
+from pathlib import Path
 
 from xcelium_mcp.registry import load_sim_config, resolve_sim_dir, save_sim_config
 from xcelium_mcp.shell_utils import (
     shell_quote,
     shell_run,
 )
+
+# F-175: test_discovery's grep command (built in discovery.py) now emits
+# `-n` (filename:lineno:content) instead of `-h` (content only), so the file
+# that defines each test can be captured instead of discarded — needed to
+# locate a test's TB source file for provenance (build_tb_provenance).
+_UVM_TEST_LINE_RE = re.compile(r"^(?P<file>[^:]+):\d+:.*\bclass\s+(?P<name>\w+)\b")
+_SV_PROGRAM_LINE_RE = re.compile(r"^(?P<file>[^:]+):\d+:\s*program\s+(?P<name>\w+)\b")
+
+
+def parse_test_discovery_output(raw: str, tb_type: str) -> dict[str, str]:
+    """Parse test_discovery.command output into {test_name: defining_file_path}.
+
+    tb_type selects the line format the command (built in discovery.py) emits:
+      "uvm"         — "{file}:{lineno}:...class {Name} extends uvm_test..."
+      "sv_directed" — "{file}:{lineno}:program {Name}..."
+      other         — bare file paths, one per line (tb_tests/*.v listing;
+                       name = path stem)
+    Unmatched/malformed lines are silently skipped — test discovery (and the
+    TB-source lookup built on it) is best-effort, not a hard requirement.
+    """
+    if tb_type == "uvm":
+        pattern = _UVM_TEST_LINE_RE
+    elif tb_type == "sv_directed":
+        pattern = _SV_PROGRAM_LINE_RE
+    else:
+        pattern = None
+
+    names_to_files: dict[str, str] = {}
+    for line in raw.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if pattern is None:
+            names_to_files.setdefault(Path(line).stem, line)
+            continue
+        m = pattern.match(line)
+        if m:
+            names_to_files.setdefault(m.group("name"), m.group("file"))
+    return names_to_files
 
 
 def resolve_sim_params(
@@ -100,10 +141,13 @@ async def resolve_test_name(short_name: str, sim_dir: str = "") -> str:
             cmd = discovery.get("command", "")
             if cmd:
                 r = await shell_run(f"cd {shell_quote(resolved_dir)} && {cmd}", timeout=30)
-                cached = [t.strip() for t in r.strip().splitlines() if t.strip()]
+                tb_type = discovery.get("tb_type", "")
+                cached_test_files = parse_test_discovery_output(r, tb_type)
+                cached = sorted(cached_test_files.keys())
                 if cached:
                     # Cache via config_action (write centralization)
                     cfg.setdefault("test_discovery", {})["cached_tests"] = cached
+                    cfg["test_discovery"]["cached_test_files"] = cached_test_files
                     cfg["test_discovery"]["cached_at"] = datetime.now().isoformat()
                     await save_sim_config(resolved_dir, cfg)
 

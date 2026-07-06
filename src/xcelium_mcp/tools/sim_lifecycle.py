@@ -13,8 +13,9 @@ from xcelium_mcp.bridge_manager import BridgeManager, scan_ready_files
 from xcelium_mcp.discovery import run_full_discovery
 from xcelium_mcp.registry import config_action, load_sim_config, resolve_sim_dir, save_sim_config
 from xcelium_mcp.shell_utils import UserInputRequired, get_user_tmp_dir, shell_run
+from xcelium_mcp.tb_provenance import build_tb_provenance
 from xcelium_mcp.tcl_bridge import BRIDGE_ERRORS, TclBridge, TclError
-from xcelium_mcp.test_resolution import resolve_test_name
+from xcelium_mcp.test_resolution import parse_test_discovery_output, resolve_test_name
 
 # ---------------------------------------------------------------------------
 # Module-level helpers (don't need bridges closure)
@@ -145,11 +146,15 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             if not cmd:
                 return "ERROR: test_discovery.command not configured.\nSet via: mcp_config set test_discovery.command '<command>'"
             r = await shell_run(f"cd {resolved_dir} && {cmd}", timeout=30)
-            cached = [t.strip() for t in r.strip().splitlines() if t.strip()]
+            tb_type = discovery.get("tb_type", "")
+            cached_test_files = parse_test_discovery_output(r, tb_type)
+            cached = sorted(cached_test_files.keys())
             if cached:
                 # Cache via config_action (write centralization)
                 await config_action("set", "config", "test_discovery.cached_tests",
                                     json.dumps(cached))
+                await config_action("set", "config", "test_discovery.cached_test_files",
+                                    json.dumps(cached_test_files))
                 await config_action("set", "config", "test_discovery.cached_at",
                                     datetime.now().isoformat())
 
@@ -261,11 +266,25 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         except RuntimeError as e:
             return f"ERROR: {e}"
 
+        # F-175: TB source provenance — best-effort, never fails the tool call.
+        # Also stashed on bridges so checkpoint(action=save) in bridge mode
+        # (which has no test_name param of its own) can record the same info.
+        resolved_dir = sim_dir
+        tb_source = None
+        try:
+            resolved_dir = await resolve_sim_dir(sim_dir)
+            tb_source = await build_tb_provenance(test_name, resolved_dir)
+        except ValueError:
+            pass
+        bridges.current_test_name = test_name
+        bridges.current_tb_source = tb_source
+        if tb_source:
+            result += f"\ntb_source: {tb_source['path']} (sha256: {tb_source['sha256']})"
+
         if auto_boundaries and bridges.simvision_raw and bridges.simvision_raw.connected:
             try:
                 from xcelium_mcp.sim_env_detection import _boundaries_from_tcl
                 from xcelium_mcp.tcl_preprocessing import get_dump_strategy
-                resolved_dir = await resolve_sim_dir(sim_dir)
                 config = await load_sim_config(resolved_dir) or {}
                 effective_mode = sim_mode or config.get("runner", {}).get("default_mode", "rtl")
                 base_mode = "gate" if "gate" in effective_mode else "rtl"

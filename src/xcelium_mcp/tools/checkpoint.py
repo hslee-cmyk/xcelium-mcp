@@ -133,10 +133,14 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
                 except IndexError:
                     pass
             if actual_name:
+                # F-175: bridge mode has no test_name param of its own — use
+                # whatever sim_bridge_run last recorded on `bridges`.
                 await asyncio.to_thread(
                     checkpoint_manager.register_checkpoint,
                     resolved_dir, actual_name, saved_time_ns,
                     origin="bridge",
+                    test_name=bridges.current_test_name,
+                    tb_source=bridges.current_tb_source,
                 )
 
         return result

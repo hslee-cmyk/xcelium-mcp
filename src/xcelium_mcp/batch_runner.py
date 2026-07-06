@@ -895,11 +895,13 @@ async def run_batch_regression(
             # Phase 4: register L1/L2 in checkpoint manifest
             if save_checkpoints and not timed_out:
                 from xcelium_mcp import checkpoint_manager as _ckpt
+                from xcelium_mcp.tb_provenance import build_tb_provenance
                 l1_ns = _parse_l1_time_ns(l1_time)
+                tb_source = await build_tb_provenance(test_name, sim_dir)
                 await asyncio.to_thread(
                     _ckpt.register_checkpoint,
                     sim_dir, f"L1_{test_name}", l1_ns,
-                    origin="regression", test_name=test_name,
+                    origin="regression", test_name=test_name, tb_source=tb_source,
                 )
 
             # Method 6-B fallback

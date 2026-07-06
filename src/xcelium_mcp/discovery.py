@@ -44,6 +44,7 @@ from xcelium_mcp.sim_env_detection import (
     discover_sim_dir,
 )
 from xcelium_mcp.tcl_bridge import DEFAULT_BRIDGE_PORT
+from xcelium_mcp.test_resolution import parse_test_discovery_output
 
 logger = logging.getLogger(__name__)
 
@@ -419,30 +420,31 @@ async def run_full_discovery(
     if "ams_gate" in setup_tcls:
         mode_defaults["ams_gate"] = {"timeout": 3600, "probe_strategy": "selective", "extra_args": "", "dump_depth": "boundary"}
 
+    # F-175: -n (filename:lineno) instead of -h/-o so the file defining each
+    # test is captured (via parse_test_discovery_output) instead of discarded
+    # — needed to locate a test's TB source for provenance tracking.
     _sd = shell_quote(sim_dir)
     if tb_type == "uvm":
-        test_cmd = (
-            f"(grep -rh 'extends uvm_test' {_sd} --include='*.sv' --include='*.svh' || true) "
-            f"| grep -oE 'class \\w+' | sed 's/class //' | sort -u"
-        )
+        test_cmd = f"grep -rn 'extends uvm_test' {_sd} --include='*.sv' --include='*.svh' || true"
     elif tb_type == "sv_directed":
-        test_cmd = (
-            f"(grep -rh '^\\s*program ' {_sd} --include='*.sv' || true) "
-            f"| grep -oE 'program \\w+' | sed 's/program //' | sort -u"
-        )
+        test_cmd = f"grep -rn '^\\s*program ' {_sd} --include='*.sv' || true"
     else:
-        test_cmd = f"(ls {_sd}/tb_tests/*.v || true) | xargs -I{{}} basename {{}} .v"
+        test_cmd = f"ls {_sd}/tb_tests/*.v || true"
 
-    cached_tests = []
+    cached_tests: list[str] = []
+    cached_test_files: dict[str, str] = {}
     try:
         r = await shell_run(f"cd {_sd} && {test_cmd}", timeout=30)
-        cached_tests = [t.strip() for t in r.strip().splitlines() if t.strip()]
+        cached_test_files = parse_test_discovery_output(r, tb_type)
+        cached_tests = sorted(cached_test_files.keys())
     except (RuntimeError, OSError, asyncio.TimeoutError) as e:
         logger.debug("test discovery failed (non-fatal): %s", e)
 
     test_discovery = {
         "command": test_cmd,
+        "tb_type": tb_type,
         "cached_tests": cached_tests,
+        "cached_test_files": cached_test_files,
         "cached_at": datetime.now().isoformat(),
     }
 

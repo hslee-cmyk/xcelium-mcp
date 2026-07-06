@@ -91,6 +91,7 @@ def register_checkpoint(
     saved_time_ns: int = 0,
     origin: str = "bridge",
     test_name: str = "",
+    tb_source: dict | None = None,
 ) -> dict:
     """Register a saved checkpoint in the manifest.
 
@@ -100,6 +101,11 @@ def register_checkpoint(
         saved_time_ns: Simulation time at checkpoint in nanoseconds.
         origin: How the checkpoint was created — "regression", "bridge", or "single".
         test_name: Associated test name (for pattern-based cleanup).
+        tb_source: F-175 — {"path": str, "sha256": str} identifying the TB
+            source file that defined test_name, from tb_provenance.build_tb_provenance().
+            None when unavailable (e.g. resolved from a pre-F-175 config) —
+            does not replace compile_hash (which detects recompiles, not
+            which source file was used).
 
     Returns the new checkpoint entry dict.
     """
@@ -117,6 +123,8 @@ def register_checkpoint(
         "test_name": test_name,
         "path": str(Path(_checkpoint_base_dir(sim_dir)) / name),
     }
+    if tb_source is not None:
+        entry["tb_source"] = tb_source
     manifest.setdefault("checkpoints", {})[name] = entry
     _write_manifest(sim_dir, manifest)
     return entry

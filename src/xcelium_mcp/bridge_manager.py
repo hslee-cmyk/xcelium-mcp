@@ -43,6 +43,13 @@ class BridgeManager:
         self._xmsim: TclBridge | None = None
         self._simvision: TclBridge | None = None
         self.xmsim_pid: int | None = None
+        # F-175: last test started via sim_bridge_run + its TB provenance,
+        # so checkpoint(action=save) in bridge mode can record the same
+        # {"path", "sha256"} tb_source the batch tools record — bridge mode
+        # has no test_name param of its own, so this is the only way it
+        # learns which test is currently running.
+        self.current_test_name: str = ""
+        self.current_tb_source: dict | None = None
 
     @property
     def xmsim(self) -> TclBridge:
@@ -80,6 +87,8 @@ class BridgeManager:
         self._xmsim = bridge
         if bridge is None:
             self.xmsim_pid = None
+            self.current_test_name = ""
+            self.current_tb_source = None
 
     def set_simvision(self, bridge: TclBridge | None) -> None:
         self._simvision = bridge
