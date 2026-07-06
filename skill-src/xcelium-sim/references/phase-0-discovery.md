@@ -4,8 +4,8 @@
 
 검증 환경의 공유 컴포넌트와 테스트케이스는 프로젝트 수명 동안 비교적 안정적이다. 한 번 분석하고 캐시하면 이후 모든 디버깅에서 재사용한다. 이 Phase는 검증 환경 종류(Legacy directed Verilog / UVM / Directed SV / AMS / Multi-methodology)에 무관하게 동일 원칙이 적용된다.
 
-> **작성 주체(2026-07-03)**: §0A/0B(TB 분석서 작성/갱신)는 `verilog-tb-analyst` agent(신설 예정)가 전담한다 — RTL 쪽 `verilog-rtl-analyst`(Phase 1B 위임)와 대칭 구조. 이 skill이 "tool 사용법 전용"이면서 TB 분석 방법론 전체를 위임 없이 직접 안고 있던 비대칭을 해소하기 위함(`xcelium-mcp-debugging-workflow.plan.md` §Agent 위임 구조 v2.7). 이 agent는 chip-design-skills repo가 정본 관리하며 `install.py`로 user/project-level `.claude/agents/`에 배포한다 — chip-design-skills 자체가 agent를 호출/실행하는 게 아니라, 배포만 담당한다.
-> **Fallback**: 로컬에 설치돼 있지 않으면 `verilog-rtl-debugger` 또는 Claude가 아래 §0A/0B 절차를 직접 수행한다.
+> **기본 실행 주체는 Claude 자신이다**: §0A/0B(TB 분석서 작성/갱신)는 아래 절차만으로 Claude가 직접 수행 가능하다(agent 설치 여부와 무관하게 항상 동작).
+> **선택적 위임(있으면)**: `verilog-tb-analyst` agent(신설 예정 — chip-design-skills가 install.py로 user/project-level `.claude/agents/`에 배포, chip-design-skills 자체가 호출하는 게 아님)가 로컬에 설치돼 있으면 이 작업을 Task로 위임할 수 있다 — RTL 쪽 `verilog-rtl-analyst`(Phase 1B 위임)와 대칭 구조를 맞추고 여러 세션에서 일관된 품질을 내기 위한 최적화 옵션일 뿐, 필수 경로는 아니다.
 
 ## 절차
 
@@ -19,11 +19,26 @@ mcp_config(action="get", key="runner.default_mode")   # 필요 시 수동 조정
 
 `sim_discover`는 TB type을 감지해 `tb_type: ncsim_legacy | uvm | sv_directed | mixed`로 등록한다. v5.2 이후 `boundary_depth` 파라미터로 블록 경계 자동 탐색 깊이도 함께 설정 가능(Flow B — Yosys JSON lazy discovery, 실제 탐색은 이후 `sim_batch_run`에서 지연 수행).
 
+### 0-Prep-2. TB 소스 읽기 원칙 — 로컬 사본 신뢰 금지
+
+0A/0B에서 TB 소스 파일을 읽어 분석서를 작성할 때, **로컬 프로젝트 저장소에 있는 동일 파일명 사본을 신뢰하지 않는다**. 실행 정본은 항상 `sim_discover`/`mcp_config`가 resolve한 실제 `sim_dir`이며, 그 경로를 ssh-mcp(`file_read`/`file_grep`)로 직접 읽는 것이 기본 경로다.
+
+**Why**: 여러 저장소(예: FPGA 검증용 로컬 repo와 실제 시뮬레이션에 쓰이는 ASIC/venezia-t0 repo)에 같은 이름의 TB 테스트 파일이 독립적으로 존재할 수 있고, 두 파일의 내용이 서로 달라져 있을 수 있다(2026-07-06 실전 사례: 로컬 사본엔 있던 drain 로직이 실제 cloud0 TB엔 없어서, 로컬 사본을 읽고 작성한 분석서의 근본원인 서술이 실제 시뮬레이션 결과와 어긋났다). 파일명이 같다고 내용도 같다고 가정하면 안 된다 — 실제로 그 결과를 만든 파일을 읽어야 한다.
+
+**적용 순서**:
+1. `sim_batch_run`/`sim_regression`/`sim_bridge_run`의 반환 텍스트에 `tb_source`/`tb_provenance`(경로+sha256, xcelium-mcp F-175)가 있으면, 로컬 사본을 근거로 쓰기 전에 그 sha256과 로컬 사본의 체크섬을 비교해 일치하는지 먼저 확인한다.
+2. 체크섬 비교가 불가능하면(F-175 이전에 discover된 config라 provenance가 없는 경우 등) — 로컬 사본을 신뢰하지 말고, `sim_discover`가 resolve한 sim_dir 경로를 ssh-mcp(`file_read`/`file_grep`)로 직접 읽어 분석 근거로 삼는다.
+
+> **별도 저장소의 agent 문서화 필요**: `verilog-tb-analyst`/`verilog-rtl-debugger` agent(chip-design-skills repo 소유, 이 저장소와 별개)가 이 원칙을 따르게 하려면 해당 agent 문서에도 동일 원칙이 반영되어야 한다 — 이 항목은 xcelium-mcp의 skill-src만 수정 대상이며, chip-design-skills 쪽 반영은 별도 작업이다.
+
 ### 0A. 공유 컴포넌트 분석서
 
 파일 네이밍: `.ai/analysis/tb_{env}_{component_name}.analysis.md` (env prefix 항상 필수: `lgc`/`uvm`/`dsv`/`ams`)
 
-대상 식별: 테스트케이스에서 `include`/`import`/인스턴스화되는 외부 파일·패키지 중 여러 테스트에서 공통으로 쓰이는 것.
+대상 식별 절차:
+1. 테스트케이스 파일들에서 `` `include``/`import`/인스턴스화 라인 스캔(예: `grep -oE '\`include \"[^\"]+\"|import [A-Za-z_]+::' tb/**/*.sv`)
+2. 스캔 결과를 파일별로 집계 — 2개 이상 테스트케이스에서 공통으로 참조되는 파일·패키지만 "공유 컴포넌트"로 분류
+3. 단일 테스트에서만 쓰이는 것은 0A 대상이 아니며 0B(테스트케이스별 분석)에서 그 테스트 문맥으로 함께 기술
 
 필수 포함 항목: 인터페이스 API, 프로토콜/시퀀스, 타이밍, 알려진 제약, DUT 계층 참조, 상위 호출 패턴, 판정 기여.
 
@@ -31,13 +46,20 @@ mcp_config(action="get", key="runner.default_mode")   # 필요 시 수동 조정
 
 파일 네이밍: `.ai/analysis/tb_{env}_{test_name}.analysis.md`
 
-작성 절차(ncsim Legacy 기준):
+작성 절차(ncsim Legacy, env=`lgc` 기준):
 1. 테스트 파일 스캔 — DUT 신호 참조(`grep -oE 'top\.hw\.\S+'`), 사용 task, include 파일
 2. 시나리오 추출 — `run_test` task의 `test_id` + 인접 주석
 3. 시퀀스 상세 파악 — task 시퀀스 패턴(예: I2C `send_start→send_data→recv_data→send_stop`)
 4. 공통 Dump 신호 추출(regression 직전 1회) — 전체 테스트 DUT 신호 합집합 → `tb_{env}_regression_common_signals.analysis.md`
 
 필수 포함 항목(환경 무관): 테스트 목적, 사용 공유 컴포넌트, 테스트 시나리오(tid별 표), 판별 방법, 판별 신호+기대값, DUT 내부 참조, 시뮬레이션 길이, 버그 이력.
+
+**env가 `uvm`/`dsv`/`ams`일 때는 위 4단계 절차가 그대로 적용되지 않는다** — 이 절차는 legacy directed Verilog(task 기반 시퀀스)를 전제로 쓰여 있어서, UVM agent/driver/monitor/sequencer 구조나 듀얼탑(hdl_top/hvl_top) 인터페이스, AMS 아날로그 모델을 그대로 grep 패턴으로 스캔할 수 없다. 이 경우 아래 skill을 **같은 방식으로 직접 Read**해서 절차를 그 env에 맞게 재해석한다(전체 skill이 아니라 필요 절만, `verilog-tb-analyst.plan.md` FR-10/FR-11/FR-12와 동일한 근거·동일한 절 한정):
+- `~/.claude/skills/verilog-rtl/SKILL.md` §8(Verification 연계 — SVA Assertion, Coverage) + `references/covergroup-patterns.md`/`coverage-methodology.md`/`coverage-examples.md` — TB 코드 자체가 SystemVerilog 문법(covergroup/coverpoint/cross, assertion)으로 작성되므로 정확히 해석하려면 필요
+- `~/.claude/skills/chip-verification/SKILL.md` §듀얼탑 아키텍처 + `references/interface-mapping.md` — env 무관 대부분의 TB가 hdl_top(DUT+Interface)/hvl_top(UVM 또는 SV TB) 구조이므로, "필수 포함 항목"의 "인터페이스 API"/"DUT 계층 참조" 작성에 DUT 포트→Interface→Virtual Interface 매핑 이해가 필요
+- `~/.claude/skills/uvm-verification/SKILL.md` §UVM 계층 구조 + `references/component-templates.md`/`sequence-patterns.md` — env=`uvm`일 때 "사용 공유 컴포넌트"/"테스트 시나리오"/"판정 기여" 항목이 agent/driver/monitor/sequencer/scoreboard 용어로 기술되므로 필요
+
+RTL 합성·CDC 설계 규칙(verilog-rtl §1~§7, §11)이나 AMS 아날로그 모델 교체 절차(chip-verification §아날로그 모델 교체)는 TB 분석서 작성과 무관하므로 로드 범위에서 제외한다.
 
 ### 0C. 캐시 관리 규칙
 

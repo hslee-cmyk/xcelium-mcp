@@ -1,6 +1,26 @@
 
 ---
 
+## 2026-07-06 - F-176: 문서 — TB 분석 시 로컬 저장소 사본 대신 MCP-resolve 경로를 우선하는 원칙 명시 (review only)
+
+### 배경
+F-175와 짝을 이루는 문서화 태스크. venezia-fpga 세션에서 로컬 stale TB 사본을 근거로 TB 분석서를 작성했다가 실제 cloud0 TB와 내용이 달라 근본원인 서술이 틀어졌던 사례(2026-07-06) — F-175가 코드 측(체크섬 provenance)을 추가했다면, F-176은 그 provenance를 실제로 어떻게 활용해야 하는지 방법론 문서에 명시하는 짝.
+
+### 구현
+`skill-src/xcelium-sim/references/phase-0-discovery.md`에 "0-Prep-2. TB 소스 읽기 원칙 — 로컬 사본 신뢰 금지" 신규 절 추가(0-Prep과 0A 사이):
+- 원칙: 로컬 프로젝트 저장소의 동일 파일명 TB 사본을 신뢰하지 말고, `sim_discover`/`mcp_config`가 resolve한 실제 sim_dir을 ssh-mcp(`file_read`/`file_grep`)로 직접 읽는 것을 기본 경로로 함
+- 적용 순서: F-175의 `tb_source`/`tb_provenance`(경로+sha256)가 있으면 로컬 사본의 체크섬과 먼저 비교 → 일치할 때만 로컬 사본 사용. 체크섬 비교 불가 시(F-175 이전 config 등) 무조건 MCP-resolve 경로를 직접 읽음
+- `verilog-tb-analyst`/`verilog-rtl-debugger` agent(chip-design-skills repo 소유)도 같은 원칙을 따르려면 해당 문서에 별도 반영 필요함을 명시(이 태스크는 xcelium-mcp의 skill-src만 대상, chip-design-skills 쪽은 범위 밖)
+
+코드 변경 없음(review only, acceptance criteria대로).
+
+### 검증
+`python -m pytest` 510 passed(변화 없음, 문서만 수정), `python -m ruff check src/` all checks passed.
+
+이것으로 F-174~176(2026-07-02 code-analyzer 리뷰 이후 발견된 실제 버그/기능 3건) 전부 처리 완료. `prd.json`은 프로젝트 규칙상 `passes:false`로 유지 — 사용자 확인 대기.
+
+---
+
 ## 2026-07-06 - F-175: 기능 — sim_batch_run/sim_regression/sim_bridge_run TB 소스 provenance(경로+sha256) 기록
 
 ### 배경
