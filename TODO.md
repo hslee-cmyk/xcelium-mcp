@@ -31,12 +31,12 @@ handles gracefully (returns `None`, tools skip the provenance section).
 Revisit if either of these actually bites in practice; low priority since
 current behavior degrades safely rather than lying.
 
-## F-175 — TB source provenance: dependency-scan scope + performance (2026-07-06, hash-timing follow-up)
+## F-175 — TB source provenance: dependency-scan scope (2026-07-06, hash-timing follow-up)
 
 Found while discussing "hash 업데이트하는 부분에 추가로 고려할 사항" after the
 sim_regression timing fix. `build_tb_provenance()` now covers the test's own
 file plus its *direct* `` `include``/`import` references (one level deep) —
-this closed the original single-file gap, but two smaller things remain:
+this closed the original single-file gap. One smaller thing remains:
 
 - **Not recursive**: if a directly-`include`d file itself includes something
   else, that second-hop file is not scanned/hashed. A change two hops away
@@ -47,14 +47,18 @@ this closed the original single-file gap, but two smaller things remain:
   the first match `find` returns if two files share the same basename in
   different directories — same class of ambiguity as "duplicate class names"
   above, just for included files instead of test files.
-- **No caching of the dependency scan itself**: every `build_tb_provenance()`
-  call re-runs `find`/`grep -rl` shell commands for each `` `include``/`import`
-  reference in the test's file — there's no cache of "test X depends on files
-  Y, Z" analogous to `cached_test_files`. For `sim_regression` over a large
-  test_list where many tests share the same few dependencies, this repeats the
-  same `find`/`grep` many times. Not measured to be a real problem yet;
-  revisit if regression runs start showing noticeable overhead from this.
 
-Low priority — the single-file gap (test's own file unchanged, only a shared
-dependency changed) was the significant one and is now fixed; these are
-refinements on top of that fix.
+**Resolved (2026-07-06, same day)** — dependency-scan caching: `find_dependency_files()`
+(the actual `find`/`grep -rl` scan) now only runs once, at discovery/cache-miss
+time, alongside `cached_test_files` — its results are stored in a new
+`test_discovery.cached_dependency_files: {test_name: [path, ...]}` field.
+`build_tb_provenance()` no longer calls `find_dependency_files()` on the
+per-run hot path at all; it only reads `cached_dependency_files` (via
+`resolve_cached_dependency_files()`) and always re-hashes file *contents*
+fresh. Backward compat: a config without this field (pre-caching) yields an
+empty dependency list per test until `sim_discover(force=True)` re-runs —
+same degrade-safely pattern as `cached_test_files`/`tb_type`.
+
+Low priority remainder — the single-file gap and the caching cost were the
+two significant issues and both are now fixed; the two bullets above are
+refinements on top.

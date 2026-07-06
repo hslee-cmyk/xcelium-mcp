@@ -1,20 +1,29 @@
 """TB source provenance — F-175.
 
-Identifies which TB source file(s) a given test actually depends on (via
-test_discovery.cached_test_files, populated by discovery.py /
-test_resolution.py's parse_test_discovery_output, plus a one-level scan of
-the test file's own `include`/import references) and computes their sha256,
+Identifies which TB source file(s) a given test actually depends on (its own
+file via test_discovery.cached_test_files, plus its direct `include`/import
+dependencies via test_discovery.cached_dependency_files — both populated
+once at discovery/cache-miss time, see discovery.py / test_resolution.py /
+tools/sim_lifecycle.py::list_tests) and computes their sha256 on every call,
 so a result or checkpoint can later be verified against the TB source that
 actually produced it instead of trusting whatever local copy happens to be
 lying around (the motivating incident: a stale local TB copy had different
 test content than the one actually simulated on cloud0).
+
+Design split — cheap on the hot path, not just at discovery:
+  - WHERE a test's files live (cached_test_files/cached_dependency_files) is
+    resolved via find/grep exactly once, at discovery/cache-miss time — never
+    on the per-run hot path (sim_batch_run/sim_regression/sim_bridge_run).
+  - WHAT those files currently contain (the sha256 hashes) is always read
+    fresh, on every single call — content can change between runs and that
+    must be caught every time, unlike the (rarely-changing) file locations.
 
 Scope note: dependency resolution covers the test's own file plus its
 *direct* `include`/import references only (one level deep) — it does not
 recursively expand what those dependencies themselves include. A test whose
 behavior depends on a file two hops away (a shared component's own include)
 will not be covered. This mirrors the same "best-effort, not exhaustive"
-posture as the rest of test_discovery.
+posture as the rest of test_discovery. See TODO.md.
 """
 from __future__ import annotations
 
@@ -48,6 +57,26 @@ async def resolve_tb_source_file(full_test_name: str, sim_dir: str = "") -> str 
     if not cfg:
         return None
     return cfg.get("test_discovery", {}).get("cached_test_files", {}).get(full_test_name)
+
+
+async def resolve_cached_dependency_files(full_test_name: str, sim_dir: str = "") -> list[str]:
+    """Look up the cached dependency file paths for full_test_name.
+
+    Pure cache read — no find/grep here (see module docstring). Populated
+    once at discovery/cache-miss time. Backward compat: a config from before
+    this caching existed, or a test with no known dependencies, returns an
+    empty list — not an error.
+    """
+    try:
+        resolved_dir = await resolve_sim_dir(sim_dir)
+    except ValueError:
+        resolved_dir = sim_dir
+    if not resolved_dir:
+        return []
+    cfg = await load_sim_config(resolved_dir)
+    if not cfg:
+        return []
+    return cfg.get("test_discovery", {}).get("cached_dependency_files", {}).get(full_test_name, [])
 
 
 def _sha256_file(path: str) -> str:
@@ -125,15 +154,19 @@ async def find_dependency_files(test_file: str, sim_dir: str) -> list[str]:
 async def build_tb_provenance(full_test_name: str, sim_dir: str = "") -> dict | None:
     """Resolve + hash the TB source file(s) for full_test_name.
 
+    File *locations* (primary + dependencies) come from cache only — no
+    find/grep runs here (see module docstring). File *contents* are always
+    read fresh via compute_file_sha256.
+
     Returns:
         {
             "files": [{"path": str, "sha256": str}, ...],  # primary file first
             "combined_sha256": str,  # sha256 over all "path:sha256" pairs, sorted by path
         }
     or None if the primary test file can't be located or read. Dependency
-    files that can't be resolved/read are silently omitted from "files" —
-    best-effort, never surfaced as an error. Callers must treat None as "no
-    provenance available" and skip it silently.
+    files that can't be read are silently omitted from "files" — best-effort,
+    never surfaced as an error. Callers must treat None as "no provenance
+    available" and skip it silently.
     """
     primary_path = await resolve_tb_source_file(full_test_name, sim_dir)
     if not primary_path:
@@ -142,21 +175,15 @@ async def build_tb_provenance(full_test_name: str, sim_dir: str = "") -> dict | 
     if primary_checksum is None:
         return None
 
-    try:
-        resolved_dir = await resolve_sim_dir(sim_dir)
-    except ValueError:
-        resolved_dir = sim_dir or ""
-
     files = [{"path": primary_path, "sha256": primary_checksum}]
     seen_paths = {primary_path}
-    if resolved_dir:
-        for dep_path in await find_dependency_files(primary_path, resolved_dir):
-            if dep_path in seen_paths:
-                continue
-            checksum = await compute_file_sha256(dep_path)
-            if checksum is not None:
-                files.append({"path": dep_path, "sha256": checksum})
-                seen_paths.add(dep_path)
+    for dep_path in await resolve_cached_dependency_files(full_test_name, sim_dir):
+        if dep_path in seen_paths:
+            continue
+        checksum = await compute_file_sha256(dep_path)
+        if checksum is not None:
+            files.append({"path": dep_path, "sha256": checksum})
+            seen_paths.add(dep_path)
 
     combined_sha256 = hashlib.sha256(
         "\n".join(

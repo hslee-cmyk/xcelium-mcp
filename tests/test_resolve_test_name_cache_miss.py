@@ -4,7 +4,9 @@ Before F-175, a cache-miss re-run of test_discovery.command only ever cached
 test NAMES (cached_tests). It now also caches the file each test is defined
 in (cached_test_files), via the same parse_test_discovery_output() used by
 discovery.py and list_tests — the mechanism this feature extends rather than
-duplicates.
+duplicates. It also resolves and caches each test's dependency FILE LOCATIONS
+(cached_dependency_files) at this same cache-miss moment, so the per-run hot
+path (build_tb_provenance) never needs to run find/grep itself.
 """
 from __future__ import annotations
 
@@ -48,6 +50,49 @@ async def test_cache_miss_populates_cached_test_files(tmp_path) -> None:
     assert saved_cfg["test_discovery"]["cached_tests"] == ["VENEZIA_TOP015_test"]
     assert saved_cfg["test_discovery"]["cached_test_files"] == {
         "VENEZIA_TOP015_test": "/sim/tb/tests/top015_test.sv",
+    }
+
+
+@pytest.mark.asyncio
+async def test_cache_miss_populates_cached_dependency_files(tmp_path) -> None:
+    """Cache-miss resolution must also call find_dependency_files() for each
+    discovered test and store the result in cached_dependency_files — once,
+    here, so the per-run hot path (build_tb_provenance) never needs to
+    find/grep. find_dependency_files' own scanning correctness is covered
+    separately in test_tb_provenance.py::TestFindDependencyFiles; this test
+    only proves the wiring."""
+    sim_dir = str(tmp_path)
+    cfg = {
+        "test_discovery": {
+            "command": "grep -rn 'extends uvm_test' . --include='*.sv' || true",
+            "tb_type": "uvm",
+            "cached_tests": [],
+            "cached_test_files": {},
+        }
+    }
+    grep_output = "/sim/tb/tests/top015_test.sv:2:class VENEZIA_TOP015_test extends uvm_test;"
+
+    saved_cfg: dict = {}
+
+    async def _fake_save(_dir: str, data: dict) -> None:
+        saved_cfg.update(data)
+
+    with (
+        patch("xcelium_mcp.test_resolution.resolve_sim_dir", new_callable=AsyncMock,
+              return_value=sim_dir),
+        patch("xcelium_mcp.test_resolution.load_sim_config", new_callable=AsyncMock,
+              return_value=cfg),
+        patch("xcelium_mcp.test_resolution.shell_run", new_callable=AsyncMock,
+              return_value=grep_output),
+        patch("xcelium_mcp.test_resolution.find_dependency_files", new_callable=AsyncMock,
+              return_value=["/sim/tb/shared/i2c_sequence.svh"]),
+        patch("xcelium_mcp.test_resolution.save_sim_config", side_effect=_fake_save),
+    ):
+        result = await resolve_test_name("TOP015", sim_dir)
+
+    assert result == "VENEZIA_TOP015_test"
+    assert saved_cfg["test_discovery"]["cached_dependency_files"] == {
+        "VENEZIA_TOP015_test": ["/sim/tb/shared/i2c_sequence.svh"],
     }
 
 

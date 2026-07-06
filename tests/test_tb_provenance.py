@@ -24,6 +24,7 @@ from xcelium_mcp.tb_provenance import (
     compute_file_sha256,
     find_dependency_files,
     format_tb_provenance,
+    resolve_cached_dependency_files,
     resolve_tb_source_file,
 )
 from xcelium_mcp.test_resolution import parse_test_discovery_output
@@ -197,6 +198,56 @@ class TestResolveTbSourceFile:
         assert result is None
 
 
+class TestResolveCachedDependencyFiles:
+    """Pure cache read — no find/grep here. This is what makes the hot path
+    (sim_batch_run/sim_regression/sim_bridge_run) cheap: dependency file
+    *locations* are resolved once at discovery/cache-miss time and just
+    looked up here on every subsequent call."""
+
+    @pytest.mark.asyncio
+    async def test_found_in_cache(self, tmp_path) -> None:
+        cfg = {
+            "test_discovery": {
+                "cached_dependency_files": {
+                    "VENEZIA_TOP015_test": [str(tmp_path / "i2c_sequence.svh")],
+                }
+            }
+        }
+        with (
+            patch("xcelium_mcp.tb_provenance.resolve_sim_dir", new_callable=AsyncMock,
+                  return_value=str(tmp_path)),
+            patch("xcelium_mcp.tb_provenance.load_sim_config", new_callable=AsyncMock,
+                  return_value=cfg),
+        ):
+            result = await resolve_cached_dependency_files("VENEZIA_TOP015_test", str(tmp_path))
+        assert result == [str(tmp_path / "i2c_sequence.svh")]
+
+    @pytest.mark.asyncio
+    async def test_not_in_cache_returns_empty_list(self, tmp_path) -> None:
+        """Backward compat: a config from before this caching existed (or a
+        test with no dependencies) → empty list, not an error."""
+        cfg = {"test_discovery": {"cached_test_files": {"VENEZIA_TOP015_test": "/sim/tb/x.sv"}}}
+        with (
+            patch("xcelium_mcp.tb_provenance.resolve_sim_dir", new_callable=AsyncMock,
+                  return_value=str(tmp_path)),
+            patch("xcelium_mcp.tb_provenance.load_sim_config", new_callable=AsyncMock,
+                  return_value=cfg),
+        ):
+            result = await resolve_cached_dependency_files("VENEZIA_TOP015_test", str(tmp_path))
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_no_config_returns_empty_list(self, tmp_path) -> None:
+        with (
+            patch("xcelium_mcp.tb_provenance.resolve_sim_dir", new_callable=AsyncMock,
+                  return_value=str(tmp_path)),
+            patch("xcelium_mcp.tb_provenance.load_sim_config", new_callable=AsyncMock,
+                  return_value=None),
+        ):
+            result = await resolve_cached_dependency_files("VENEZIA_TOP015_test", str(tmp_path))
+        assert result == []
+
+
 class TestFindDependencyFiles:
     """find_dependency_files scans a TB file for `include`/import references
     and resolves each to an actual path — one level deep (F-175 gap fix,
@@ -280,17 +331,20 @@ class TestBuildTbProvenance:
         assert len(result["combined_sha256"]) == 64  # hex-encoded sha256
 
     @pytest.mark.asyncio
-    async def test_includes_direct_dependency_file(self, tmp_path) -> None:
-        """The test's own file `includes` a shared sequence file — both
-        must appear in "files", and the dependency's own content
-        contributes to combined_sha256."""
+    async def test_includes_cached_dependency_file(self, tmp_path) -> None:
+        """A dependency file already resolved into cached_dependency_files
+        (by discovery/cache-miss time — see TestFindDependencyFiles for the
+        scan itself) must appear in "files" alongside the primary file, with
+        no find/grep call needed here — build_tb_provenance only reads the
+        cache and hashes contents."""
         seq_file = tmp_path / "i2c_sequence.svh"
         seq_file.write_text("task send_start; endtask\n")
         tb_file = tmp_path / "top015.sv"
         tb_file.write_text('`include "i2c_sequence.svh"\nclass VENEZIA_TOP015_test extends uvm_test;\nendclass\n')
         cfg = {
             "test_discovery": {
-                "cached_test_files": {"VENEZIA_TOP015_test": str(tb_file)}
+                "cached_test_files": {"VENEZIA_TOP015_test": str(tb_file)},
+                "cached_dependency_files": {"VENEZIA_TOP015_test": [str(seq_file)]},
             }
         }
         with (
@@ -299,7 +353,7 @@ class TestBuildTbProvenance:
             patch("xcelium_mcp.tb_provenance.load_sim_config", new_callable=AsyncMock,
                   return_value=cfg),
             patch("xcelium_mcp.tb_provenance.shell_run", new_callable=AsyncMock,
-                  return_value=str(seq_file)),
+                  side_effect=AssertionError("build_tb_provenance must not call shell_run")),
         ):
             result = await build_tb_provenance("VENEZIA_TOP015_test", str(tmp_path))
 
@@ -312,14 +366,17 @@ class TestBuildTbProvenance:
     async def test_dependency_only_change_alters_combined_checksum(self, tmp_path) -> None:
         """The test's OWN file is unchanged — only the shared file it
         `include`s changes — combined_sha256 must still change (this is
-        exactly the gap single-file hashing missed)."""
+        exactly the gap single-file hashing missed). The dependency's
+        *location* comes from cache (no re-scan); only its *content* is
+        re-hashed fresh each call, which is what must catch this edit."""
         seq_file = tmp_path / "i2c_sequence.svh"
         seq_file.write_text("task send_start; endtask\n")
         tb_file = tmp_path / "top015.sv"
         tb_file.write_text('`include "i2c_sequence.svh"\nclass VENEZIA_TOP015_test extends uvm_test;\nendclass\n')
         cfg = {
             "test_discovery": {
-                "cached_test_files": {"VENEZIA_TOP015_test": str(tb_file)}
+                "cached_test_files": {"VENEZIA_TOP015_test": str(tb_file)},
+                "cached_dependency_files": {"VENEZIA_TOP015_test": [str(seq_file)]},
             }
         }
         with (
@@ -327,8 +384,6 @@ class TestBuildTbProvenance:
                   return_value=str(tmp_path)),
             patch("xcelium_mcp.tb_provenance.load_sim_config", new_callable=AsyncMock,
                   return_value=cfg),
-            patch("xcelium_mcp.tb_provenance.shell_run", new_callable=AsyncMock,
-                  return_value=str(seq_file)),
         ):
             prov_run1 = await build_tb_provenance("VENEZIA_TOP015_test", str(tmp_path))
             seq_file.write_text("task send_start; endtask\n// added a second time\ntask drain; endtask\n")

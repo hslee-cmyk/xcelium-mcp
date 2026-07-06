@@ -1,6 +1,27 @@
 
 ---
 
+## 2026-07-06 - F-175 후속: 의존 파일 위치 탐색을 discovery 시점으로 캐싱 — 매 실행마다 find/grep 반복 제거
+
+### 배경
+직전 커밋(의존 파일 스코프 확장)에서 `find_dependency_files()`가 `build_tb_provenance()` 호출마다(즉 매 `sim_batch_run`/`sim_bridge_run`, `sim_regression` 테스트마다) `find`/`grep -rl`을 새로 실행하고 있다는 걸 사용자가 지적. 사용자 제안: `cached_test_files`와 같은 시점(discovery/cache-miss)에 "어디 있나"(경로)를 캐싱하고, 시뮬레이션마다 갱신해야 하는 "내용이 뭔가"(해시)는 지금처럼 매번 새로 계산 — 이 둘의 성격이 다르다는 원칙을 그대로 적용.
+
+### 구현
+- `test_discovery`에 `cached_dependency_files: {test_name: [dependency_path, ...]}` 신규 필드 — `cached_test_files`와 나란히, **정확히 같은 3곳**(`discovery.py` 최초 discovery, `test_resolution.py::resolve_test_name` cache-miss, `tools/sim_lifecycle.py::list_tests` cache-miss)에서 `cached_test_files`를 만든 직후 각 테스트에 대해 `find_dependency_files()`를 한 번씩 실행(`asyncio.gather`로 병렬화)해서 채움. `find`/`grep -rl`은 이제 이 3곳에서만 실행됨.
+- `tb_provenance.py`: `resolve_cached_dependency_files(full_test_name, sim_dir)` 신규 — `resolve_tb_source_file()`과 대칭 구조로, `cached_dependency_files`를 순수 캐시 조회만 함(find/grep 없음). `build_tb_provenance()`가 `find_dependency_files()` 직접 호출을 이걸로 교체 — `resolved_dir` 재계산 코드도 불필요해져 함께 제거(단순화).
+- 하위 호환: `cached_dependency_files` 필드가 없는(이 캐싱 이전) config는 빈 리스트로 안전하게 처리 — `tb_type` 없을 때와 동일 패턴, `sim_discover(force=True)` 재실행 시 채워짐.
+- `find_dependency_files()` 자체(실제 스캔 로직)는 그대로 유지 — 호출 위치만 매 실행 hot path에서 discovery-time 3곳으로 이동.
+
+### 검증
+- `tests/test_tb_provenance.py`: `TestResolveCachedDependencyFiles` 신규(3 tests, `resolve_tb_source_file` 테스트들과 대칭). 기존 `TestBuildTbProvenance`의 의존파일 관련 테스트 2개를 `shell_run` mock 방식에서 `cached_dependency_files`를 config에 직접 주입하는 방식으로 갱신 — 그중 하나는 `shell_run` 호출 시 AssertionError를 던지도록 만들어 "build_tb_provenance가 절대 find/grep을 직접 호출하지 않는다"는 걸 명시적으로 회귀 방지.
+- `tests/test_resolve_test_name_cache_miss.py`: `test_cache_miss_populates_cached_dependency_files` 신규 — cache-miss 시 `find_dependency_files`가 호출되고 그 결과가 `cached_dependency_files`에 정확히 저장되는지 확인(find_dependency_files 자체의 스캔 정확성은 이미 별도 테스트로 커버되므로 여기선 배선만 검증).
+
+`python -m pytest` 525 passed(521→525, 신규 4개) / `python -m ruff check src/` all checks passed / `python -c 'import xcelium_mcp.server'` 순환 임포트 없음 확인(tb_provenance.py를 이제 discovery.py/test_resolution.py 양쪽에서 import하지만 tb_provenance.py는 registry.py/shell_utils.py 외 의존성이 없는 leaf 모듈이라 순환 없음).
+
+TODO.md 갱신 — "의존 스캔 미캐싱" 항목을 해결됨으로 표시, 남은 건 1단계 스코프 한계와 include 파일 basename 중복 두 가지만.
+
+---
+
 ## 2026-07-06 - F-175 후속: 해시가 테스트 파일 1개만 커버하던 스코프 gap 수정 — 직접 의존 파일(include/import)까지 확장
 
 ### 배경

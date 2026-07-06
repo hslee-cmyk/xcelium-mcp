@@ -5,6 +5,7 @@ Contains: resolve_test_name, resolve_sim_params, parse_test_discovery_output.
 """
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,7 @@ from xcelium_mcp.shell_utils import (
     shell_quote,
     shell_run,
 )
+from xcelium_mcp.tb_provenance import find_dependency_files
 
 # F-175: test_discovery's grep command (built in discovery.py) now emits
 # `-n` (filename:lineno:content) instead of `-h` (content only), so the file
@@ -156,10 +158,23 @@ async def resolve_test_name(short_name: str, sim_dir: str = "") -> str:
                     # re-runs and populates tb_type.
                     cached = sorted({t.strip() for t in r.strip().splitlines() if t.strip()})
                     cached_test_files = {}
+                # F-175: resolve dependency FILE LOCATIONS here, once, at
+                # cache-miss time — never on the per-run hot path. Same
+                # rationale as discovery.py's initial-discovery pass.
+                cached_dependency_files: dict[str, list[str]] = {}
+                if cached_test_files:
+                    names = list(cached_test_files.keys())
+                    dep_results = await asyncio.gather(
+                        *(find_dependency_files(cached_test_files[n], resolved_dir) for n in names)
+                    )
+                    for n, deps in zip(names, dep_results):
+                        if deps:
+                            cached_dependency_files[n] = deps
                 if cached:
                     # Cache via config_action (write centralization)
                     cfg.setdefault("test_discovery", {})["cached_tests"] = cached
                     cfg["test_discovery"]["cached_test_files"] = cached_test_files
+                    cfg["test_discovery"]["cached_dependency_files"] = cached_dependency_files
                     cfg["test_discovery"]["cached_at"] = datetime.now().isoformat()
                     await save_sim_config(resolved_dir, cfg)
 
