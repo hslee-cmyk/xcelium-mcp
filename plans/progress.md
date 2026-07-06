@@ -1,6 +1,19 @@
 
 ---
 
+## 2026-07-06 - F-176 v3: self-healing 캐시 설명을 phase-0-discovery.md에 반영
+
+### 배경
+직전 self-healing 구현(의존 파일 목록이 primary sha256 변경 시 자동 재스캔)에 대해 사용자와 문답으로 정확한 동작(primary=test_name 정의 파일, dependency 파일과 혼동 없음)을 재확인한 뒤, F-176 문서(phase-0-discovery.md §0C)도 이 최신 동작에 맞춰 갱신 요청.
+
+### 구현
+`skill-src/xcelium-sim/references/phase-0-discovery.md` §0C "갱신 필요 판단"에 새 인용구 추가 — "의존 파일 '목록' 자체도 xcelium-mcp가 자동으로 최신 상태 유지 — Claude가 신경 쓸 필요 없음". 테스트 파일에 새 include/import를 추가·삭제해도 `sim_discover(force=True)`를 수동으로 다시 돌릴 필요가 없고, `tb_provenance`가 항상 최신 의존 파일 목록을 반영한다는 걸 명시 — Claude(문서 소비자) 입장에서 내부 캐싱 메커니즘을 몰라도 되지만, "새 include를 추가했으니 재discover 해야 하나?"라는 불필요한 혼란을 막기 위한 안내.
+
+### 검증
+문서만 수정, `python -m pytest` 526 passed(변화 없음), `python -m ruff check src/` all checks passed.
+
+---
+
 ## 2026-07-06 - F-175 후속: 의존 파일 캐시에 self-healing 추가 — 테스트 파일 자체가 바뀌면(=include 목록이 바뀔 수 있는 시점) 자동 재스캔
 
 ### 배경
