@@ -147,8 +147,17 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
                 return "ERROR: test_discovery.command not configured.\nSet via: mcp_config set test_discovery.command '<command>'"
             r = await shell_run(f"cd {resolved_dir} && {cmd}", timeout=30)
             tb_type = discovery.get("tb_type", "")
-            cached_test_files = parse_test_discovery_output(r, tb_type)
-            cached = sorted(cached_test_files.keys())
+            if tb_type:
+                cached_test_files = parse_test_discovery_output(r, tb_type)
+                cached = sorted(cached_test_files.keys())
+            else:
+                # Pre-F-175 config: no tb_type means `cmd` is the OLD
+                # name-only pipeline, not the new -n (file:lineno) format —
+                # see resolve_test_name() for the full explanation. Fall
+                # back to a plain name split; no file mapping until
+                # sim_discover re-runs and populates tb_type.
+                cached = sorted({t.strip() for t in r.strip().splitlines() if t.strip()})
+                cached_test_files = {}
             if cached:
                 # Cache via config_action (write centralization)
                 await config_action("set", "config", "test_discovery.cached_tests",

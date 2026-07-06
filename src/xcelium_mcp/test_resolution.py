@@ -142,8 +142,20 @@ async def resolve_test_name(short_name: str, sim_dir: str = "") -> str:
             if cmd:
                 r = await shell_run(f"cd {shell_quote(resolved_dir)} && {cmd}", timeout=30)
                 tb_type = discovery.get("tb_type", "")
-                cached_test_files = parse_test_discovery_output(r, tb_type)
-                cached = sorted(cached_test_files.keys())
+                if tb_type:
+                    cached_test_files = parse_test_discovery_output(r, tb_type)
+                    cached = sorted(cached_test_files.keys())
+                else:
+                    # Pre-F-175 config: no tb_type means `cmd` is the OLD
+                    # name-only pipeline (sort -u over bare names), not the
+                    # new -n (file:lineno) format. Running it through
+                    # parse_test_discovery_output would treat each bare name
+                    # as a fake "file path" (Path(name).stem == name) — a
+                    # wrong 1:1 mapping, not just a missing one. Fall back to
+                    # the old plain split; no file mapping until sim_discover
+                    # re-runs and populates tb_type.
+                    cached = sorted({t.strip() for t in r.strip().splitlines() if t.strip()})
+                    cached_test_files = {}
                 if cached:
                     # Cache via config_action (write centralization)
                     cfg.setdefault("test_discovery", {})["cached_tests"] = cached

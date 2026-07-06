@@ -52,6 +52,51 @@ async def test_cache_miss_populates_cached_test_files(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_pre_f175_config_falls_back_without_corrupting_file_map(tmp_path) -> None:
+    """A config discovered BEFORE F-175 has no tb_type and its stored
+    `command` is the OLD name-only pipeline (grep -rh | grep -oE | sed |
+    sort -u) — bare test names, not `file:lineno:content` lines. Without a
+    guard, running that old-format output through parse_test_discovery_output
+    (which needs tb_type to pick a parser) falls through to the "bare file
+    path" branch and stores {name: name} — a wrong mapping (the test name
+    masquerading as its own file path), not merely a missing one. Must
+    instead fall back to plain name extraction with an empty file map."""
+    sim_dir = str(tmp_path)
+    cfg = {
+        "test_discovery": {
+            # Old-format command: no tb_type key stored alongside it.
+            "command": "(grep -rh 'extends uvm_test' . || true) | grep -oE 'class \\w+' | sed 's/class //' | sort -u",
+            "cached_tests": [],
+        }
+    }
+    # Old command's actual output shape: bare sorted names, no file info.
+    old_format_output = "VENEZIA_TOP014_test\nVENEZIA_TOP015_i2c_8bit_offset_test\n"
+
+    saved_cfg: dict = {}
+
+    async def _fake_save(_dir: str, data: dict) -> None:
+        saved_cfg.update(data)
+
+    with (
+        patch("xcelium_mcp.test_resolution.resolve_sim_dir", new_callable=AsyncMock,
+              return_value=sim_dir),
+        patch("xcelium_mcp.test_resolution.load_sim_config", new_callable=AsyncMock,
+              return_value=cfg),
+        patch("xcelium_mcp.test_resolution.shell_run", new_callable=AsyncMock,
+              return_value=old_format_output),
+        patch("xcelium_mcp.test_resolution.save_sim_config", side_effect=_fake_save),
+    ):
+        result = await resolve_test_name("TOP015", sim_dir)
+
+    assert result == "VENEZIA_TOP015_i2c_8bit_offset_test"
+    assert saved_cfg["test_discovery"]["cached_tests"] == [
+        "VENEZIA_TOP014_test", "VENEZIA_TOP015_i2c_8bit_offset_test",
+    ]
+    # The critical assertion: no bogus name->name "file" entries.
+    assert saved_cfg["test_discovery"]["cached_test_files"] == {}
+
+
+@pytest.mark.asyncio
 async def test_exact_match_short_circuits_without_rerunning_discovery(tmp_path) -> None:
     """A cache hit must not touch cached_test_files at all — no regression
     in the existing fast path."""
