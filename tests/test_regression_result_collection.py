@@ -61,7 +61,7 @@ async def test_per_test_results_not_mixed_up_under_concurrent_collection() -> No
         patch("xcelium_mcp.batch_runner._preprocess_setup_tcl", new_callable=AsyncMock,
               return_value=(None, None)),
     ):
-        log_str, _dump_stats = await run_batch_regression(
+        log_str, _dump_stats, _tb_provenance = await run_batch_regression(
             sim_dir="/sim",
             test_list=["T1", "T2", "T3"],
             runner=runner,
@@ -106,7 +106,7 @@ async def test_missing_log_file_for_one_test_does_not_affect_others() -> None:
         patch("xcelium_mcp.batch_runner._preprocess_setup_tcl", new_callable=AsyncMock,
               return_value=(None, None)),
     ):
-        log_str, _dump_stats = await run_batch_regression(
+        log_str, _dump_stats, _tb_provenance = await run_batch_regression(
             sim_dir="/sim",
             test_list=["T1", "T2", "T3"],
             runner=runner,

@@ -316,7 +316,7 @@ def register(
                 dump_window = _build_dump_window(dump_window_start_ms, dump_window_end_ms)
             except ValueError as e:
                 return str(e)
-            summary, dump_stats = await run_batch_regression(
+            summary, dump_stats, tb_provenance = await run_batch_regression(
                 sim_dir=resolved_sim_dir,
                 test_list=test_list,
                 runner=runner,
@@ -336,14 +336,10 @@ def register(
         except (RuntimeError, ValueError, OSError, TimeoutError) as e:
             return f"ERROR running regression: {e}"
 
-        # F-175: per-test TB source provenance — best-effort, never fails the run.
-        tb_provenances = await asyncio.gather(
-            *(build_tb_provenance(t, resolved_sim_dir) for t in test_list)
-        )
-        tb_provenance = {
-            t: p for t, p in zip(test_list, tb_provenances) if p is not None
-        }
-
+        # F-175: tb_provenance is captured per-test inside run_batch_regression,
+        # right after each test's own run — not recomputed here at the end,
+        # so a shared TB file edited mid-regression can't get attributed to
+        # an earlier test that already finished (see run_batch_regression docstring).
         parts = [f"sim_regression completed.\n\n{summary}"]
         if dump_stats is not None:
             import json as _json

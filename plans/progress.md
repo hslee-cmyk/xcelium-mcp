@@ -1,6 +1,25 @@
 
 ---
 
+## 2026-07-06 - F-175 후속: sim_regression의 tb_provenance 계산 타이밍 버그 수정
+
+### 배경
+사용자가 "checksum이 만들어지는 시점"을 캐물으면서 발견. `sim_regression`은 `run_batch_regression` 완료 후 **한 번에 test_list 전체**의 provenance를 `asyncio.gather`로 계산하고 있었음(F-175 최초 구현 당시 `tools/batch.py` 쪽 코드). 즉 test A, B가 같은 공유 TB 파일을 쓸 때, A가 끝나고 B가 실행되는 도중 그 파일이 수정되면 — A의 provenance로 기록되는 sha256이 실제 A 컴파일 시점이 아니라 **regression 전체가 끝난 시점(=B 실행 후 최종 상태)**을 반영하는 부정확성이 있었음. `sim_batch_run`/`sim_bridge_run`은 테스트 1개만 다루므로 이 문제가 없었지만 `sim_regression`만 해당.
+
+### 구현
+- `batch_runner.py::run_batch_regression()`: 반환 타입을 `tuple[str, dict|None]` → `tuple[str, dict|None, dict[str, dict]]`로 확장. per-test 루프 안, `completed_tests.append(test_name)` 직후(해당 테스트 자신의 poll 완료 직후, 다음 테스트로 넘어가기 전)에 `build_tb_provenance()`를 호출해 `per_test_tb_provenance[test_name]`에 즉시 기록 — 이전엔 이 호출이 `save_checkpoints=True`일 때만 체크포인트 등록 블록 안에서 이뤄졌는데, 이제 무조건 한 번만 계산해서 체크포인트 등록에도 재사용(중복 계산 제거).
+- `tools/batch.py::sim_regression`: `run_batch_regression`이 돌려주는 `tb_provenance`를 그대로 사용하도록 변경 — 기존에 있던, regression 완료 후 `test_list` 전체를 다시 `asyncio.gather`로 훑는 별도 계산 블록 삭제.
+- 기존 테스트 2곳(`test_dump_history_stats.py`, `test_regression_result_collection.py`)의 3-tuple unpacking 업데이트.
+
+### 검증
+`tests/test_regression_tb_provenance_timing.py` 신규 작성(2 tests):
+- provenance 계산이 T1 poll 완료 직후 곧바로 일어나고(T2가 시작되기도 전에), T2도 마찬가지 순서로 일어나는지 call-order로 직접 검증
+- T1·T2가 같은 TB 파일을 공유하고 그 사이 파일이 바뀌는 상황을 mock으로 재현 — T1의 provenance가 T2 실행 후의 최신 값이 아니라 T1 자신이 실행됐을 때의 값(OLD_HASH)으로 정확히 기록되는지 확인(수정 전이었다면 이 assertion이 실패했을 것)
+
+`python -m pytest` 512 passed(510→512, 신규 2개) / `python -m ruff check src/` all checks passed / `python -c 'import xcelium_mcp.server'` 순환 임포트 없음 확인.
+
+---
+
 ## 2026-07-06 - F-176 v2: 체크섬의 실제 용도 재정정 — "로컬 사본 검증"이 아니라 "캐시된 분석서 staleness 판단"
 
 ### 배경

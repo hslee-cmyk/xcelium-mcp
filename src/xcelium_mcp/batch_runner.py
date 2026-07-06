@@ -685,7 +685,7 @@ async def run_batch_regression(
     sdf_corner: str = "max",
     dump_scopes: dict | None = None,
     use_dump_history: bool = False,
-) -> tuple[str, dict | None]:
+) -> tuple[str, dict | None, dict[str, dict]]:
     """Execute regression tests via nohup batch with job resume.
 
     nohup + PID watcher + adaptive log polling (P6-1/P6-2/P6-5).
@@ -700,6 +700,12 @@ async def run_batch_regression(
       L2_{test}: saved just before $finish (test completion).
       These checkpoints are used later by sim_batch_run(from_checkpoint=...)
       for faster debugging (skip compile+init).
+
+    Returns: (log_str, dump_stats, tb_provenance). tb_provenance is captured
+    per-test right after that test's own run (F-175) — not batched at the
+    end after the whole regression completes — so a shared TB source file
+    edited mid-regression can't get attributed to an earlier test that had
+    already finished running against the old content.
     """
     user_tmp = await get_user_tmp_dir()
     job_file = f"{user_tmp}/regression_job.json"
@@ -728,6 +734,9 @@ async def run_batch_regression(
 
     # v5.2: per-test dump_summary accumulator for dump_stats
     per_test_dump_summaries: dict[str, dict] = {}
+    # F-175: per-test TB source provenance, captured immediately after each
+    # test's own run (see docstring) rather than batched at the end.
+    per_test_tb_provenance: dict[str, dict] = {}
 
     # Phase 4: prepare checkpoint setup (read + strip run/exit once)
     chk_dir = f"{sim_dir}/checkpoints"
@@ -892,12 +901,20 @@ async def run_batch_regression(
 
             completed_tests.append(test_name)
 
+            # F-175: TB source provenance, captured right after this test's
+            # own run — not batched at the end after the whole regression
+            # completes, so a shared TB file edited between this test and a
+            # later one can't get attributed back to this (already-finished)
+            # test. Reused below for the checkpoint entry (single computation).
+            from xcelium_mcp.tb_provenance import build_tb_provenance
+            tb_source = await build_tb_provenance(test_name, sim_dir)
+            if tb_source is not None:
+                per_test_tb_provenance[test_name] = tb_source
+
             # Phase 4: register L1/L2 in checkpoint manifest
             if save_checkpoints and not timed_out:
                 from xcelium_mcp import checkpoint_manager as _ckpt
-                from xcelium_mcp.tb_provenance import build_tb_provenance
                 l1_ns = _parse_l1_time_ns(l1_time)
-                tb_source = await build_tb_provenance(test_name, sim_dir)
                 await asyncio.to_thread(
                     _ckpt.register_checkpoint,
                     sim_dir, f"L1_{test_name}", l1_ns,
@@ -959,4 +976,4 @@ async def run_batch_regression(
     # v5.2: aggregate dump_stats across per-test summaries (F-155: extracted to a pure function)
     dump_stats = aggregate_dump_stats(per_test_dump_summaries)
 
-    return log_str, dump_stats
+    return log_str, dump_stats, per_test_tb_provenance
