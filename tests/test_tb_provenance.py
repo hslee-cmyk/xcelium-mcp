@@ -22,6 +22,8 @@ from xcelium_mcp.bridge_manager import BridgeManager
 from xcelium_mcp.tb_provenance import (
     build_tb_provenance,
     compute_file_sha256,
+    find_dependency_files,
+    format_tb_provenance,
     resolve_tb_source_file,
 )
 from xcelium_mcp.test_resolution import parse_test_discovery_output
@@ -195,9 +197,67 @@ class TestResolveTbSourceFile:
         assert result is None
 
 
+class TestFindDependencyFiles:
+    """find_dependency_files scans a TB file for `include`/import references
+    and resolves each to an actual path — one level deep (F-175 gap fix,
+    2026-07-06): a test's own file may be unchanged while a shared component
+    it `includes` changes, and that must still be detectable."""
+
+    @pytest.mark.asyncio
+    async def test_no_references_returns_empty(self, tmp_path) -> None:
+        f = tmp_path / "top015.sv"
+        f.write_text("class VENEZIA_TOP015_test extends uvm_test;\nendclass\n")
+        result = await find_dependency_files(str(f), str(tmp_path))
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_backtick_include_resolved_by_basename(self, tmp_path) -> None:
+        f = tmp_path / "top015.sv"
+        f.write_text('`include "i2c_sequence.svh"\nclass TEST extends uvm_test;\nendclass\n')
+        seq_file = tmp_path / "shared" / "i2c_sequence.svh"
+        seq_file.parent.mkdir()
+        seq_file.write_text("// sequence body\n")
+
+        with patch("xcelium_mcp.tb_provenance.shell_run", new_callable=AsyncMock,
+                    return_value=str(seq_file)):
+            result = await find_dependency_files(str(f), str(tmp_path))
+
+        assert result == [str(seq_file)]
+
+    @pytest.mark.asyncio
+    async def test_import_package_resolved_via_grep(self, tmp_path) -> None:
+        f = tmp_path / "top015.sv"
+        f.write_text("import i2c_pkg::*;\nclass TEST extends uvm_test;\nendclass\n")
+        pkg_file = tmp_path / "i2c_pkg.sv"
+        pkg_file.write_text("package i2c_pkg;\nendpackage\n")
+
+        with patch("xcelium_mcp.tb_provenance.shell_run", new_callable=AsyncMock,
+                    return_value=str(pkg_file)):
+            result = await find_dependency_files(str(f), str(tmp_path))
+
+        assert result == [str(pkg_file)]
+
+    @pytest.mark.asyncio
+    async def test_unresolvable_reference_silently_skipped(self, tmp_path) -> None:
+        f = tmp_path / "top015.sv"
+        f.write_text('`include "missing_file.svh"\nclass TEST extends uvm_test;\nendclass\n')
+
+        with patch("xcelium_mcp.tb_provenance.shell_run", new_callable=AsyncMock,
+                    return_value=""):
+            result = await find_dependency_files(str(f), str(tmp_path))
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_unreadable_test_file_returns_empty(self, tmp_path) -> None:
+        missing = tmp_path / "does_not_exist.sv"
+        result = await find_dependency_files(str(missing), str(tmp_path))
+        assert result == []
+
+
 class TestBuildTbProvenance:
     @pytest.mark.asyncio
-    async def test_returns_path_and_sha256(self, tmp_path) -> None:
+    async def test_returns_files_and_combined_sha256(self, tmp_path) -> None:
         tb_file = tmp_path / "top015.sv"
         tb_file.write_text("class VENEZIA_TOP015_test extends uvm_test;\nendclass\n")
         cfg = {
@@ -214,8 +274,72 @@ class TestBuildTbProvenance:
             result = await build_tb_provenance("VENEZIA_TOP015_test", str(tmp_path))
 
         assert result is not None
-        assert result["path"] == str(tb_file)
-        assert len(result["sha256"]) == 64  # hex-encoded sha256
+        assert result["files"] == [
+            {"path": str(tb_file), "sha256": await compute_file_sha256(str(tb_file))}
+        ]
+        assert len(result["combined_sha256"]) == 64  # hex-encoded sha256
+
+    @pytest.mark.asyncio
+    async def test_includes_direct_dependency_file(self, tmp_path) -> None:
+        """The test's own file `includes` a shared sequence file — both
+        must appear in "files", and the dependency's own content
+        contributes to combined_sha256."""
+        seq_file = tmp_path / "i2c_sequence.svh"
+        seq_file.write_text("task send_start; endtask\n")
+        tb_file = tmp_path / "top015.sv"
+        tb_file.write_text('`include "i2c_sequence.svh"\nclass VENEZIA_TOP015_test extends uvm_test;\nendclass\n')
+        cfg = {
+            "test_discovery": {
+                "cached_test_files": {"VENEZIA_TOP015_test": str(tb_file)}
+            }
+        }
+        with (
+            patch("xcelium_mcp.tb_provenance.resolve_sim_dir", new_callable=AsyncMock,
+                  return_value=str(tmp_path)),
+            patch("xcelium_mcp.tb_provenance.load_sim_config", new_callable=AsyncMock,
+                  return_value=cfg),
+            patch("xcelium_mcp.tb_provenance.shell_run", new_callable=AsyncMock,
+                  return_value=str(seq_file)),
+        ):
+            result = await build_tb_provenance("VENEZIA_TOP015_test", str(tmp_path))
+
+        paths = {f["path"] for f in result["files"]}
+        assert paths == {str(tb_file), str(seq_file)}
+        # primary file listed first
+        assert result["files"][0]["path"] == str(tb_file)
+
+    @pytest.mark.asyncio
+    async def test_dependency_only_change_alters_combined_checksum(self, tmp_path) -> None:
+        """The test's OWN file is unchanged — only the shared file it
+        `include`s changes — combined_sha256 must still change (this is
+        exactly the gap single-file hashing missed)."""
+        seq_file = tmp_path / "i2c_sequence.svh"
+        seq_file.write_text("task send_start; endtask\n")
+        tb_file = tmp_path / "top015.sv"
+        tb_file.write_text('`include "i2c_sequence.svh"\nclass VENEZIA_TOP015_test extends uvm_test;\nendclass\n')
+        cfg = {
+            "test_discovery": {
+                "cached_test_files": {"VENEZIA_TOP015_test": str(tb_file)}
+            }
+        }
+        with (
+            patch("xcelium_mcp.tb_provenance.resolve_sim_dir", new_callable=AsyncMock,
+                  return_value=str(tmp_path)),
+            patch("xcelium_mcp.tb_provenance.load_sim_config", new_callable=AsyncMock,
+                  return_value=cfg),
+            patch("xcelium_mcp.tb_provenance.shell_run", new_callable=AsyncMock,
+                  return_value=str(seq_file)),
+        ):
+            prov_run1 = await build_tb_provenance("VENEZIA_TOP015_test", str(tmp_path))
+            seq_file.write_text("task send_start; endtask\n// added a second time\ntask drain; endtask\n")
+            prov_run2 = await build_tb_provenance("VENEZIA_TOP015_test", str(tmp_path))
+
+        assert prov_run1["combined_sha256"] != prov_run2["combined_sha256"]
+        # the test's own file hash is unchanged — proves the *dependency's*
+        # content is what moved the combined checksum, not the primary file
+        primary1 = next(f for f in prov_run1["files"] if f["path"] == str(tb_file))
+        primary2 = next(f for f in prov_run2["files"] if f["path"] == str(tb_file))
+        assert primary1["sha256"] == primary2["sha256"]
 
     @pytest.mark.asyncio
     async def test_shared_tb_file_two_tests_same_checksum(self, tmp_path) -> None:
@@ -244,8 +368,8 @@ class TestBuildTbProvenance:
             prov_a = await build_tb_provenance("TEST_A", str(tmp_path))
             prov_b = await build_tb_provenance("TEST_B", str(tmp_path))
 
-        assert prov_a["sha256"] == prov_b["sha256"]
-        assert prov_a["path"] == prov_b["path"]
+        assert prov_a["combined_sha256"] == prov_b["combined_sha256"]
+        assert prov_a["files"] == prov_b["files"]
 
     @pytest.mark.asyncio
     async def test_file_modified_between_runs_changes_checksum(self, tmp_path) -> None:
@@ -268,8 +392,8 @@ class TestBuildTbProvenance:
             tb_file.write_text("class VENEZIA_TOP015_test extends uvm_test;\n  // v2\nendclass\n")
             prov_run2 = await build_tb_provenance("VENEZIA_TOP015_test", str(tmp_path))
 
-        assert prov_run1["sha256"] != prov_run2["sha256"]
-        assert prov_run1["path"] == prov_run2["path"]
+        assert prov_run1["combined_sha256"] != prov_run2["combined_sha256"]
+        assert prov_run1["files"][0]["path"] == prov_run2["files"][0]["path"]
 
     @pytest.mark.asyncio
     async def test_no_file_found_returns_none(self, tmp_path) -> None:
@@ -282,6 +406,30 @@ class TestBuildTbProvenance:
         ):
             result = await build_tb_provenance("UNKNOWN_TEST", str(tmp_path))
         assert result is None
+
+
+class TestFormatTbProvenance:
+    def test_single_file(self) -> None:
+        provenance = {
+            "files": [{"path": "/sim/tb/top015.sv", "sha256": "a" * 64}],
+            "combined_sha256": "b" * 64,
+        }
+        text = format_tb_provenance(provenance)
+        assert "/sim/tb/top015.sv" in text
+        assert "a" * 64 in text
+        assert "combined_sha256: " + "b" * 64 in text
+
+    def test_multiple_files_all_listed(self) -> None:
+        provenance = {
+            "files": [
+                {"path": "/sim/tb/top015.sv", "sha256": "a" * 64},
+                {"path": "/sim/tb/i2c_sequence.svh", "sha256": "c" * 64},
+            ],
+            "combined_sha256": "b" * 64,
+        }
+        text = format_tb_provenance(provenance)
+        assert "/sim/tb/top015.sv" in text
+        assert "/sim/tb/i2c_sequence.svh" in text
 
 
 # ---------------------------------------------------------------------------

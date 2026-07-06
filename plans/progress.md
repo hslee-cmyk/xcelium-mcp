@@ -1,6 +1,32 @@
 
 ---
 
+## 2026-07-06 - F-175 후속: 해시가 테스트 파일 1개만 커버하던 스코프 gap 수정 — 직접 의존 파일(include/import)까지 확장
+
+### 배경
+사용자가 "hash 업데이트하는 부분에 추가로 고려할 사항"을 물어서 재검토하다 발견. F-175 prd 항목은 원래 "TB 소스 파일(들)"이라고 복수로 적혀 있었는데, 실제 구현은 `class Name extends uvm_test` 선언이 있는 파일 **하나만** 해싱하고 있었음. 실제 UVM 테스트는 보통 0A(공유 컴포넌트) — `` `include``/`import`되는 인터페이스·시퀀스·스코어보드 등 — 에 의존하므로, **테스트 자신의 파일은 안 바뀌고 그 테스트가 쓰는 공유 컴포넌트만 수정되면 이전 구현은 이 변경을 전혀 감지하지 못했음**.
+
+### 구현
+- `tb_provenance.py`에 `find_dependency_files(test_file, sim_dir)` 신규 — 테스트 파일 내용에서 `` `include "..."``/`import pkg::*;` 참조를 정규식으로 스캔한 뒤, `find {sim_dir} -name {basename}`(include) / `grep -rl 'package {pkg}'`(import)로 실제 경로를 best-effort 해석. **1단계만**(의존 파일이 또 무엇을 include하는지는 재귀적으로 안 펼침 — TODO.md에 스코프 명시).
+- `build_tb_provenance()` 반환 형태 변경: `{"path": str, "sha256": str}` (단일) → `{"files": [{"path", "sha256"}, ...], "combined_sha256": str}`(테스트 자신의 파일이 첫 번째, 그 뒤로 해석된 의존 파일들 — `combined_sha256`은 전체 파일 목록을 path 정렬 후 이어붙여 재해시한 값, 하나라도 바뀌면 같이 바뀜).
+- 신규 `format_tb_provenance()` 헬퍼 — MCP tool 출력 텍스트 포맷팅을 한 곳에 모아 `sim_batch_run`/`sim_bridge_run` 양쪽에서 재사용(기존엔 각자 f-string으로 중복 포맷).
+- `tools/batch.py`/`tools/sim_lifecycle.py`의 `tb_source['path']`/`tb_source['sha256']` 직접 접근을 `format_tb_provenance()` 호출로 교체.
+- `phase-0-discovery.md` 0C 절 갱신 — 비교 대상이 `tb_source.sha256`(단일)에서 `tb_source.combined_sha256`(집계)으로 바뀌었음을 반영, 1단계 스코프 한계 명시.
+
+### 검증
+`tests/test_tb_provenance.py`에 신규 클래스 2개 추가:
+- `TestFindDependencyFiles`(5 tests) — include 없음/`` `include`` basename 해석/`import` package 해석/미해석 참조 스킵/파일 못 읽음
+- `TestBuildTbProvenance`에 2개 추가 — 의존 파일이 `files`에 포함되는지, **테스트 자신의 파일은 그대로인데 의존 파일만 바뀌어도 `combined_sha256`이 바뀌는지**(이번에 고친 gap의 핵심 회귀 방지 assertion)
+- `TestFormatTbProvenance`(2 tests) 신규
+- 기존 provenance 관련 테스트들의 `path`/`sha256` 단일 필드 assertion을 `files`/`combined_sha256`로 갱신
+
+`python -m pytest` 521 passed(512→521, 신규 9개) / `python -m ruff check src/` all checks passed / `python -c 'import xcelium_mcp.server'` 순환 임포트 없음 확인.
+
+### 남은 작업
+TODO.md에 이어서 기록: (1) 의존 스캔이 1단계까지만이라 2단계 이상 떨어진 의존성은 미검출, (2) include 파일 basename 중복 시 첫 매치 채택(기존 클래스명 중복과 동일 계열 리스크), (3) 의존 스캔 자체가 캐싱 안 돼서 매 호출마다 find/grep 재실행(성능, 실측된 문제는 아직 아님) — 전부 낮은 우선순위로 보류.
+
+---
+
 ## 2026-07-06 - F-175 후속: sim_regression의 tb_provenance 계산 타이밍 버그 수정
 
 ### 배경

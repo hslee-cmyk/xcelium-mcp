@@ -14,7 +14,7 @@ from xcelium_mcp.bridge_manager import BridgeManager
 from xcelium_mcp.registry import load_sim_config, resolve_sim_dir
 from xcelium_mcp.runner_detection import load_or_detect_runner
 from xcelium_mcp.shell_utils import UserInputRequired, find_shm, validate_path
-from xcelium_mcp.tb_provenance import build_tb_provenance
+from xcelium_mcp.tb_provenance import build_tb_provenance, format_tb_provenance
 from xcelium_mcp.tcl_bridge import TclError
 from xcelium_mcp.test_resolution import resolve_test_name
 
@@ -230,7 +230,7 @@ def register(
             import json as _json
             parts.append(f"\ndump_summary:\n{_json.dumps(dump_summary, indent=2)}")
         if tb_source is not None:
-            parts.append(f"\ntb_source: {tb_source['path']} (sha256: {tb_source['sha256']})")
+            parts.append(f"\n{format_tb_provenance(tb_source)}")
         return "".join(parts)
 
     @mcp.tool()

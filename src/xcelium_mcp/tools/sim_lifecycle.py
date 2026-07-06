@@ -13,7 +13,7 @@ from xcelium_mcp.bridge_manager import BridgeManager, scan_ready_files
 from xcelium_mcp.discovery import run_full_discovery
 from xcelium_mcp.registry import config_action, load_sim_config, resolve_sim_dir, save_sim_config
 from xcelium_mcp.shell_utils import UserInputRequired, get_user_tmp_dir, shell_run
-from xcelium_mcp.tb_provenance import build_tb_provenance
+from xcelium_mcp.tb_provenance import build_tb_provenance, format_tb_provenance
 from xcelium_mcp.tcl_bridge import BRIDGE_ERRORS, TclBridge, TclError
 from xcelium_mcp.test_resolution import parse_test_discovery_output, resolve_test_name
 
@@ -288,7 +288,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         bridges.current_test_name = test_name
         bridges.current_tb_source = tb_source
         if tb_source:
-            result += f"\ntb_source: {tb_source['path']} (sha256: {tb_source['sha256']})"
+            result += f"\n{format_tb_provenance(tb_source)}"
 
         if auto_boundaries and bridges.simvision_raw and bridges.simvision_raw.connected:
             try:
