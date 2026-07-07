@@ -237,6 +237,7 @@ async def test_sim_run_accepts_duration_with_unit() -> None:
 async def test_sim_run_timeout_returns_actionable_error() -> None:
     """asyncio.TimeoutError from bridge should surface as ERROR with timeout guidance."""
     import asyncio as _asyncio
+
     from xcelium_mcp.tools.sim_lifecycle import register
 
     mock_mcp = _MockMCP()
@@ -565,3 +566,71 @@ async def test_auto_connect_all_ambiguous_type_fails_loud_without_overwriting() 
     assert "sim_dir" in result
     # Must not silently connect to either candidate and clobber bridges.xmsim.
     mock_bridges.set_xmsim.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# F-D (session-state-reattach): connect_simulator restores current_test_name/
+# current_tb_source onto a fresh BridgeManager via the F-C direct-hit path.
+# Design ref: docs/02-design/features/xcelium-mcp-session-state-reattach.design.md §5.2
+# Plan SC: T-2
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_connect_simulator_sim_dir_restores_session_state() -> None:
+    """T-2: F-C direct-hit reconnect restores test_name/tb_source from the
+    registry onto the (fresh) BridgeManager — this is what lets a subsequent
+    checkpoint(action=save) record correct TB provenance after a worker
+    restart."""
+    from xcelium_mcp.tools.sim_lifecycle import register
+
+    mock_mcp = _MockMCP()
+    mock_bridges = MagicMock()
+    mock_bridges.current_test_name = ""
+    mock_bridges.current_tb_source = None
+
+    mock_bridge_inst = MagicMock()
+    mock_bridge_inst.connect = AsyncMock(return_value="pong")
+    mock_bridge_inst.execute = AsyncMock(return_value="Time: 0 NS")
+
+    tb_source = {"files": [{"path": "/proj/tb/top015.sv", "sha256": "abc"}], "combined_sha256": "def"}
+
+    with patch("xcelium_mcp.tools.sim_lifecycle.get_bridge_port",
+               new_callable=AsyncMock, return_value=9881), \
+         patch("xcelium_mcp.tools.sim_lifecycle.get_session_state",
+               new_callable=AsyncMock, return_value=("TOP015", tb_source)) as mock_get_state, \
+         patch("xcelium_mcp.tools.sim_lifecycle.TclBridge", return_value=mock_bridge_inst), \
+         patch("xcelium_mcp.tools.sim_lifecycle._get_pid_for_port",
+               new_callable=AsyncMock, return_value=555):
+        register(mock_mcp, mock_bridges)
+        await mock_mcp.tools["connect_simulator"](sim_dir="/proj/sim")
+
+    mock_get_state.assert_awaited_once_with("/proj/sim")
+    assert mock_bridges.current_test_name == "TOP015"
+    assert mock_bridges.current_tb_source == tb_source
+
+
+@pytest.mark.asyncio
+async def test_connect_simulator_auto_path_does_not_restore_session_state() -> None:
+    """Reattachment via the legacy auto-scan path (no sim_dir) has no sim_dir
+    to look up session state with — must not attempt to restore anything
+    (out of scope per plan.md §2 F-D, verified here as a negative test)."""
+    from xcelium_mcp.tools.sim_lifecycle import register
+
+    mock_mcp = _MockMCP()
+    mock_bridges = MagicMock()
+
+    mock_bridge_inst = MagicMock()
+    mock_bridge_inst.connect = AsyncMock(return_value="pong")
+
+    with patch("xcelium_mcp.tools.sim_lifecycle.scan_ready_files",
+               new_callable=AsyncMock, return_value=[(9876, "xmsim")]), \
+         patch("xcelium_mcp.tools.sim_lifecycle.TclBridge", return_value=mock_bridge_inst), \
+         patch("xcelium_mcp.tools.sim_lifecycle._get_pid_for_port",
+               new_callable=AsyncMock, return_value=123), \
+         patch("xcelium_mcp.tools.sim_lifecycle.get_session_state",
+               new_callable=AsyncMock) as mock_get_state:
+        register(mock_mcp, mock_bridges)
+        await mock_mcp.tools["connect_simulator"](port=0, target="auto")
+
+    mock_get_state.assert_not_awaited()

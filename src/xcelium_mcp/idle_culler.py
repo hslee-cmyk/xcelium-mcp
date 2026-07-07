@@ -31,6 +31,7 @@ POSIX only (/proc) — see design.md §8 Test Plan; verification happens on clou
 """
 from __future__ import annotations
 
+import json
 import os
 import signal
 import sys
@@ -45,6 +46,18 @@ SUPERVISOR_CMDLINE_MARKERS = (b"xcelium_mcp.supervisor", b"xcelium-mcp-superviso
 IDLE_THRESHOLD_SEC = int(os.environ.get("XCELIUM_MCP_IDLE_THRESHOLD_SEC", 6 * 3600))
 KILL_GRACE_SEC = 5
 _TCP_ESTABLISHED = "01"
+
+# F-E (session-state-reattach.design.md §5.3): job files written by
+# batch_runner.py's launch_nohup_job() — same path pattern as
+# shell_utils.get_user_tmp_dir(), reconstructed here without importing that
+# (async, shell_run-based) module — idle_culler stays a dependency-free sync
+# script (design.md §1.2 "무변경 우선" carried over from the parent feature).
+_BATCH_JOB_FILES = ("batch_job.json", "regression_job.json")
+# Comfortably larger than the largest per-call timeout in batch_runner.py
+# (3600s) — a job file older than this is treated as stale/abandoned rather
+# than a currently-running job, so a corrupt or leftover file can't disable
+# idle-culling forever (Checkpoint 3, design.md §2 Option C).
+STALE_JOB_FILE_SEC = 4 * 3600
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +198,65 @@ def process_age_seconds(pid: int) -> float:
 
 
 # ---------------------------------------------------------------------------
+# F-E: batch/regression job awareness (session-state-reattach.design.md §5.3)
+# ---------------------------------------------------------------------------
+
+
+def _default_user_tmp_dir() -> Path:
+    """Same path pattern as shell_utils.get_user_tmp_dir() — /tmp/xcelium_mcp_{uid}/.
+
+    Only called from has_live_batch_job() when the caller doesn't supply an
+    explicit dir (i.e. real runs via main()) — os.getuid() doesn't exist on
+    Windows, so tests always pass user_tmp_dir explicitly instead of hitting
+    this function, keeping has_live_batch_job() itself platform-independent.
+    """
+    return Path(f"/tmp/xcelium_mcp_{os.getuid()}")
+
+
+def _pid_alive(pid: int) -> bool:
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return True  # owned by another uid — reused pid, treat as alive (conservative)
+    except OSError:
+        # ProcessLookupError (pid doesn't exist, the common case) is an OSError
+        # subclass and lands here too. Anything else os.kill(pid, 0) could
+        # raise for a pid we don't recognize is treated the same way — "can't
+        # confirm alive" — rather than risking a spurious platform-specific
+        # exception type ever propagating out of a conservative safety check.
+        return False
+
+
+def has_live_batch_job(user_tmp_dir: Path | None = None) -> bool:
+    """Whether a still-running sim_batch_run/sim_regression job exists.
+
+    idle_culler must not cull a worker that's mid-poll on a long batch/regression
+    run — those workers hold no TCP bridge at all (has_established_tcp() would
+    wrongly say "idle"), since batch mode is pure shell_run log polling, not a
+    Tcl bridge connection (see plan.md §1.4 for the full investigation). Job
+    files are written by batch_runner.py's launch_nohup_job() and already carry
+    a "pid" field for exactly this kind of liveness check.
+    """
+    user_tmp_dir = user_tmp_dir if user_tmp_dir is not None else _default_user_tmp_dir()
+    now = time.time()
+    for name in _BATCH_JOB_FILES:
+        path = user_tmp_dir / name
+        try:
+            mtime = path.stat().st_mtime
+            if now - mtime > STALE_JOB_FILE_SEC:
+                continue  # stale/abandoned job file — don't let it block culling forever
+            data = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if _pid_alive(data.get("pid", 0)):
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Cull decision + entry point
 # ---------------------------------------------------------------------------
 
@@ -215,6 +287,14 @@ def main() -> int:
     if sys.platform == "win32":
         print("xcelium-mcp-culler requires /proc — Linux/cloud0 only.", file=sys.stderr)
         return 1
+
+    if has_live_batch_job():
+        # F-E: a live batch/regression job exists somewhere for this user — we
+        # can't tell which worker (if any) is polling it (job_file records the
+        # nohup'd simulation's pid, not the MCP worker's — they aren't in a
+        # parent-child relationship, same reason as F-A/F-B's split), so skip
+        # this entire round conservatively rather than risk culling it.
+        return 0
 
     supervisor_pid = find_supervisor_pid()
     if supervisor_pid is None:

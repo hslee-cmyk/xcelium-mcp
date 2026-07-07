@@ -74,3 +74,38 @@ Low priority remainder — the single-file gap, the caching cost, and the
 staleness blind spot were the three significant issues and all three are now
 fixed; the two bullets above (non-recursive scan, duplicate basenames) are
 refinements on top.
+
+## `parse_existing_job()` — silent full re-run if completion markers aren't found (2026-07-07)
+
+Found while investigating `xcelium-mcp-session-state-reattach` (F-D/F-E) — specifically
+the "SSH disconnects, batch simulation finishes on its own while disconnected, client
+reconnects and re-issues `sim_batch_run`" scenario (`batch_runner.py:191-227`).
+
+When the resumed job's PID is dead ("finished while disconnected"), the code greps the
+saved log for completion markers:
+
+```python
+result = await shell_run(
+    f"(grep -E 'PASS|FAIL|Errors:|\\$finish|COMPLETE' {saved_log} || true) | tail -30"
+)
+if result.strip():
+    ...
+    return f"(Completed while disconnected)\n{result}"
+```
+
+If **none** of those keywords appear in the log (non-standard TB harness output format,
+or an unusual abnormal exit that doesn't print any of them), `result.strip()` is empty,
+the `if` is skipped, `job_file` is deleted anyway, and `parse_existing_job()` returns
+`None` — `run_batch_single()` then falls through to **launching the test again from
+scratch**, silently. Not a wrong-*result* class of bug (the re-run will itself complete
+correctly and report accurately) but it does waste a full simulation's worth of compute
+time without telling the caller why a re-run happened.
+
+Low priority — this repo's actual TB harnesses do emit one of these markers in practice
+(that's how the keyword list was derived), and `run_batch_single`/`run_batch_regression`
+are mature, already-hardened modules (F-174's completion-keyword false-positive fix, P6-1/
+P6-2/P6-5 polling refinements) that this project's Design work has deliberately chosen not
+to touch for small, unrelated fixes (see `xcelium-mcp-session-state-reattach.design.md`
+§2 Checkpoint 3 — Option C explicitly avoids `batch_runner.py` changes to keep its
+regression risk low). Revisit only if a real TB harness is found whose log genuinely
+lacks all five markers on completion.

@@ -207,6 +207,45 @@ async def get_bridge_port(sim_dir: str) -> int | None:
     return env.get("bridge_port")
 
 
+async def update_session_state(sim_dir: str, test_name: str, tb_source: dict | None) -> None:
+    """Write-back TB provenance session state (F-D, session-state-reattach.design.md §5.1).
+
+    sim_bridge_run() already stashes test_name/tb_source on the live BridgeManager
+    (bridges.current_test_name/current_tb_source) for checkpoint(action=save) in
+    bridge mode to read — but that's pure in-process memory, lost if the worker
+    restarts. Persist the same values into the same sim_dir-keyed registry entry
+    F-C already uses for bridge_port, so a reconnected worker can restore them
+    (see get_session_state / connect_simulator's F-C direct-hit path).
+    """
+    project_root = await _resolve_project_root(sim_dir)
+    resolved_sim_dir = str(Path(sim_dir).resolve())
+
+    registry = await asyncio.to_thread(_load_registry_sync)
+    projects = registry.setdefault("projects", {})
+    project = projects.setdefault(project_root, {"environments": {}})
+    envs = project.setdefault("environments", {})
+    env = envs.setdefault(resolved_sim_dir, {})
+    env["current_test_name"] = test_name
+    env["current_tb_source"] = tb_source
+
+    await asyncio.to_thread(_save_registry_sync, registry)
+
+
+async def get_session_state(sim_dir: str) -> tuple[str, dict | None]:
+    """Look up TB provenance session state for sim_dir (F-D).
+
+    Returns ("", None) if sim_dir has no registry entry or no session state was
+    ever recorded for it — matches BridgeManager's own fresh-instance defaults,
+    so callers can assign this directly without a None-check.
+    """
+    project_root = await _resolve_project_root(sim_dir)
+    resolved_sim_dir = str(Path(sim_dir).resolve())
+
+    registry = await asyncio.to_thread(_load_registry_sync)
+    env = registry.get("projects", {}).get(project_root, {}).get("environments", {}).get(resolved_sim_dir, {})
+    return env.get("current_test_name", ""), env.get("current_tb_source")
+
+
 # ---------------------------------------------------------------------------
 # Dot-notation helpers for config_action
 # ---------------------------------------------------------------------------

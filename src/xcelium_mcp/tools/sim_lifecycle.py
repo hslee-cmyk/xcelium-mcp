@@ -14,9 +14,11 @@ from xcelium_mcp.discovery import run_full_discovery
 from xcelium_mcp.registry import (
     config_action,
     get_bridge_port,
+    get_session_state,
     load_sim_config,
     resolve_sim_dir,
     save_sim_config,
+    update_session_state,
 )
 from xcelium_mcp.shell_utils import UserInputRequired, get_user_tmp_dir, shell_run
 from xcelium_mcp.tb_provenance import build_tb_provenance, format_tb_provenance, scan_test_dependencies
@@ -324,6 +326,14 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             pass
         bridges.current_test_name = test_name
         bridges.current_tb_source = tb_source
+        # F-D (session-state-reattach): also persist to the sim_dir-keyed registry
+        # so a worker that reconnects after a restart (SSH drop, idle-culler) can
+        # restore these onto its own fresh BridgeManager — see connect_simulator's
+        # F-C direct-hit branch below. Best-effort like TB provenance itself above.
+        try:
+            await update_session_state(resolved_dir, test_name, tb_source)
+        except OSError:
+            pass
         if tb_source:
             result += f"\n{format_tb_provenance(tb_source)}"
 
@@ -382,10 +392,12 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
                      port=0 + target=auto → scan all ready files, connect each to slot.
             timeout: Connection timeout in seconds.
         """
+        f_c_direct_hit = False
         if sim_dir and port == 0:
             registry_port = await get_bridge_port(sim_dir)
             if registry_port is not None:
                 port = registry_port
+                f_c_direct_hit = True
                 if target == "auto":
                     target = "xmsim"  # registry only tracks the xmsim bridge port (F-C)
 
@@ -412,6 +424,19 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         else:
             bridges.set_xmsim(bridge)
             bridges.xmsim_pid = await _get_pid_for_port(port)
+            if f_c_direct_hit:
+                # F-D: reattaching to an already-running xmsim via F-C's sim_dir
+                # registry lookup — restore whatever sim_bridge_run last recorded
+                # for this sim_dir onto this (fresh) BridgeManager, so a
+                # subsequent checkpoint(action=save) still records correct TB
+                # provenance even though this worker never called sim_bridge_run
+                # itself. Best-effort like TB provenance recording elsewhere.
+                try:
+                    bridges.current_test_name, bridges.current_tb_source = (
+                        await get_session_state(sim_dir)
+                    )
+                except OSError:
+                    pass
 
         try:
             where = await bridge.execute("where")

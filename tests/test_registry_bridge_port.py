@@ -121,3 +121,78 @@ async def test_two_sim_dirs_get_independent_ports() -> None:
 
     assert port_a == 9876
     assert port_b == 9877
+
+
+# ---------------------------------------------------------------------------
+# F-D (session-state-reattach): update_session_state/get_session_state
+# Design ref: docs/02-design/features/xcelium-mcp-session-state-reattach.design.md §5.1
+# Plan SC: T-1/T-4
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_update_session_state_then_get_session_state_roundtrip() -> None:
+    """T-1: sim_bridge_run's write path round-trips through get_session_state."""
+    from xcelium_mcp.registry import get_session_state, update_session_state
+
+    store: dict = {}
+
+    def _fake_load() -> dict:
+        return store.get("registry", {"version": 1, "projects": {}})
+
+    def _fake_save(reg: dict) -> None:
+        store["registry"] = reg
+
+    tb_source = {
+        "files": [{"path": "/projects/E/tb/top015_test.sv", "sha256": "abc123"}],
+        "combined_sha256": "def456",
+    }
+
+    with _patch_git_root("/projects/E"), \
+         patch("xcelium_mcp.registry._load_registry_sync", side_effect=_fake_load), \
+         patch("xcelium_mcp.registry._save_registry_sync", side_effect=_fake_save):
+        await update_session_state("/projects/E/sim", "TOP015", tb_source)
+        test_name, restored_tb_source = await get_session_state("/projects/E/sim")
+
+    assert test_name == "TOP015"
+    assert restored_tb_source == tb_source
+
+
+@pytest.mark.asyncio
+async def test_get_session_state_returns_defaults_when_no_entry() -> None:
+    """T-4: a sim_dir with no recorded session state returns ("", None) —
+    matches BridgeManager's own fresh-instance defaults, no None-check needed
+    by callers."""
+    from xcelium_mcp.registry import get_session_state
+
+    with _patch_git_root("/projects/F"), \
+         patch("xcelium_mcp.registry._load_registry_sync",
+               return_value={"version": 1, "projects": {}}):
+        test_name, tb_source = await get_session_state("/projects/F/sim")
+
+    assert test_name == ""
+    assert tb_source is None
+
+
+@pytest.mark.asyncio
+async def test_update_session_state_preserves_bridge_port_sibling_field() -> None:
+    """F-D and F-C write to the same registry entry — one must not clobber
+    the other's field."""
+    from xcelium_mcp.registry import get_bridge_port, update_bridge_port, update_session_state
+
+    store: dict = {}
+
+    def _fake_load() -> dict:
+        return store.get("registry", {"version": 1, "projects": {}})
+
+    def _fake_save(reg: dict) -> None:
+        store["registry"] = reg
+
+    with _patch_git_root("/projects/G"), \
+         patch("xcelium_mcp.registry._load_registry_sync", side_effect=_fake_load), \
+         patch("xcelium_mcp.registry._save_registry_sync", side_effect=_fake_save):
+        await update_bridge_port("/projects/G/sim", 9876)
+        await update_session_state("/projects/G/sim", "TOP015", None)
+        port = await get_bridge_port("/projects/G/sim")
+
+    assert port == 9876
