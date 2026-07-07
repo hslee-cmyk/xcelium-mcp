@@ -516,7 +516,7 @@ class TestResolveEdaToolsShellSyntax:
 
         with patch("xcelium_mcp.runner_detection.shell_run", side_effect=_fake_shell_run):
             from xcelium_mcp.runner_detection import resolve_eda_tools
-            result = await resolve_eda_tools({"env_shell": "/bin/sh", "login_shell": "/bin/bash"})
+            await resolve_eda_tools({"env_shell": "/bin/sh", "login_shell": "/bin/bash"})
 
         assert "$(which simvisdbutil)" in captured[0]
 
@@ -949,7 +949,9 @@ async def test_start_simvision_removes_stale_ready_file_on_connection_failure() 
 def _make_inspect_tool(fake_bridges):
     """Register inspect_signal and return the tool fn."""
     from unittest.mock import patch
+
     from mcp.server.fastmcp import FastMCP
+
     from xcelium_mcp.tools.signal_inspection import register
 
     with patch("xcelium_mcp.tools.signal_inspection.sanitize_signal_name", side_effect=lambda s: s):

@@ -1,14 +1,12 @@
 """Tests for F-136 (checkpoint /tmp fallback removal) and F-137 (tmp cleanup)."""
 from __future__ import annotations
 
-import asyncio
 import os
 import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # F-136: restore_checkpoint_impl — no /tmp fallback on ValueError
@@ -54,7 +52,7 @@ class TestRestoreCheckpointImplF136:
                 return_value={"checkpoints": {}},
             ),
         ):
-            result = await restore_checkpoint_impl(bridges, "", "/project/sim")
+            await restore_checkpoint_impl(bridges, "", "/project/sim")
 
         # Should reach xmsim.execute with project-based path (normalize separators)
         call_args = mock_bridge.execute.call_args[0][0].replace("\\", "/")

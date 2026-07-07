@@ -9,7 +9,6 @@ import pytest
 
 from xcelium_mcp.batch_runner import _COMPLETE_RE
 
-
 # ---------------------------------------------------------------------------
 # F-085: _COMPLETE_RE parses COMPLETE. Errors: N verdict lines
 # ---------------------------------------------------------------------------
@@ -208,6 +207,7 @@ async def test_run_full_discovery_uses_registry_default_sim_dir() -> None:
 async def test_detect_run_dir_uses_hint_directly() -> None:
     """When run_dir hint provided, detect_run_dir returns it (skips dir scanning)."""
     from unittest.mock import AsyncMock, patch
+
     from xcelium_mcp.sim_env_detection import detect_run_dir
 
     # Grep returns empty (no cd line) — script_has_cd should be False.
@@ -225,6 +225,7 @@ async def test_detect_run_dir_uses_hint_directly() -> None:
 async def test_detect_run_dir_hint_skips_dir_scan() -> None:
     """With run_dir hint, only the script_has_cd grep runs (no find/cds.lib calls)."""
     from unittest.mock import AsyncMock, patch
+
     from xcelium_mcp.sim_env_detection import detect_run_dir
 
     # Script has a cd run/ line → script_has_cd=True.

@@ -8,7 +8,7 @@ before this change.
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -86,6 +86,7 @@ class _FakeBridge:
 async def test_deposit_signal_accepts_decimal_value() -> None:
     """End-to-end: deposit_signal(value='3.3') on a real/wreal net must pass validation."""
     from mcp.server.fastmcp import FastMCP
+
     from xcelium_mcp.tools.signal_inspection import register
 
     fake_bridge = _FakeBridge()
@@ -106,6 +107,7 @@ async def test_deposit_signal_accepts_decimal_value() -> None:
 async def test_deposit_signal_rejects_injection_payload() -> None:
     """value with a Tcl metacharacter must be rejected before reaching the bridge."""
     from mcp.server.fastmcp import FastMCP
+
     from xcelium_mcp.tools.signal_inspection import register
 
     fake_bridge = _FakeBridge()
@@ -126,6 +128,7 @@ async def test_deposit_signal_rejects_injection_payload() -> None:
 async def test_deposit_signal_still_accepts_digital_literal() -> None:
     """Regression: existing digital-literal deposits must keep working."""
     from mcp.server.fastmcp import FastMCP
+
     from xcelium_mcp.tools.signal_inspection import register
 
     fake_bridge = _FakeBridge()
@@ -147,6 +150,7 @@ async def test_deposit_signal_rejects_embedded_newline_in_signal_name() -> None:
     reaching the bridge — otherwise it smuggles a second Tcl command past the
     line-framed bridge protocol (tcl_bridge.py's `command + "\\n"` framing)."""
     from mcp.server.fastmcp import FastMCP
+
     from xcelium_mcp.tools.signal_inspection import register
 
     fake_bridge = _FakeBridge()

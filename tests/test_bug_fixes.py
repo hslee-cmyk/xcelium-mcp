@@ -106,7 +106,7 @@ class TestRealpathNormalization:
         with patch("os.path.realpath", return_value=real_path) as mock_rp, \
              patch("xcelium_mcp.discovery.load_sim_config", new_callable=AsyncMock,
                    return_value={"version": 2}) as mock_load:
-            result = await run_full_discovery(sim_dir=symlink_input, force=False)
+            await run_full_discovery(sim_dir=symlink_input, force=False)
 
         # realpath must be called with the expanded input
         mock_rp.assert_called()
@@ -120,11 +120,11 @@ class TestRealpathNormalization:
     async def test_update_registry_uses_resolved_paths_as_keys(self) -> None:
         """Registry keys must use Path.resolve() — mock resolve() to verify."""
         from pathlib import Path
+
         from xcelium_mcp.registry import _update_registry_from_config
 
         # Use paths that look like symlinks resolved by git
         raw_root = "/projects/real"
-        resolved_root = "/projects/real"   # resolve() returns same for non-symlinks on Linux
         sim_dir_arg = "/projects/real/ncsim"
 
         git_root_bytes = f"{raw_root}\n".encode()

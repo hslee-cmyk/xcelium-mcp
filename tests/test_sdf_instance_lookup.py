@@ -9,7 +9,7 @@ leak into a sibling instance's slot.
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
