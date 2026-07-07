@@ -9,6 +9,8 @@ Linux-only — verified on cloud0 per design.md §8 Test Plan, not here.
 from __future__ import annotations
 
 from xcelium_mcp.idle_culler import (
+    is_supervisor_argv,
+    parse_cmdline_argv,
     parse_stat_starttime,
     parse_tcp_table_established_inodes,
     parse_uptime_seconds,
@@ -72,3 +74,56 @@ class TestParseTcpTableEstablishedInodes:
             for i, inode in enumerate((111, 222, 333))
         )
         assert parse_tcp_table_established_inodes(self._HEADER + rows) == {111, 222, 333}
+
+
+# ---------------------------------------------------------------------------
+# Regression: 2026-07-07 cloud0 실측 — flock wrapper false-positive
+#
+# deploy/crontab.example launches the supervisor as
+# `flock -n <lock> python3 -m xcelium_mcp.supervisor`. flock's own argv
+# contains the whole wrapped command as a literal substring, so a naive
+# substring match over the joined cmdline bytes returns flock's pid instead
+# of the real supervisor's — which then makes find_worker_pids() look at
+# flock's one child (the supervisor itself) instead of the supervisor's
+# actual fork-per-connection workers, and could get the supervisor killed as
+# if it were an idle worker.
+# ---------------------------------------------------------------------------
+
+
+class TestParseCmdlineArgv:
+    def test_splits_on_nul_and_drops_trailing_empty(self) -> None:
+        raw = b"/opt/mcp-env/bin/python3\x00-m\x00xcelium_mcp.supervisor\x00"
+        assert parse_cmdline_argv(raw) == [
+            b"/opt/mcp-env/bin/python3", b"-m", b"xcelium_mcp.supervisor",
+        ]
+
+    def test_empty_cmdline(self) -> None:
+        assert parse_cmdline_argv(b"") == []
+
+
+class TestIsSupervisorArgv:
+    _REAL_SUPERVISOR = [b"/opt/mcp-env/bin/python3", b"-m", b"xcelium_mcp.supervisor"]
+    _FLOCK_WRAPPER = [
+        b"/usr/bin/flock", b"-n",
+        b"/users/hoseung.lee/.xcelium_mcp/run/supervisor.lock",
+        b"/opt/mcp-env/bin/python3", b"-m", b"xcelium_mcp.supervisor",
+    ]
+
+    def test_real_supervisor_matches(self) -> None:
+        assert is_supervisor_argv(self._REAL_SUPERVISOR) is True
+
+    def test_flock_wrapper_excluded_even_though_it_contains_the_marker(self) -> None:
+        """The exact cloud0 bug: flock's argv contains 'xcelium_mcp.supervisor'
+        too, but flock itself must never be mistaken for the supervisor."""
+        assert is_supervisor_argv(self._FLOCK_WRAPPER) is False
+
+    def test_console_script_form_also_matches(self) -> None:
+        """design.md §7.3 systemd promotion path uses the hyphenated
+        console-script name instead of `-m` — must still be recognized."""
+        assert is_supervisor_argv([b"/opt/mcp-env/bin/xcelium-mcp-supervisor"]) is True
+
+    def test_unrelated_process_excluded(self) -> None:
+        assert is_supervisor_argv([b"/usr/sbin/sshd", b"-D"]) is False
+
+    def test_empty_argv_excluded(self) -> None:
+        assert is_supervisor_argv([]) is False

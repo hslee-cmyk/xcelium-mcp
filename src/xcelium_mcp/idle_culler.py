@@ -16,6 +16,17 @@ same host-wide TCP table through that file. Filtering by pid therefore requires
 cross-referencing the pid's own open socket file descriptors (/proc/<pid>/fd/*)
 against that table's inode column — see has_established_tcp() below.
 
+2026-07-07 cloud0 실측 정정: the deployed crontab wraps the supervisor as
+`flock -n <lock> python3 -m xcelium_mcp.supervisor` (deploy/crontab.example,
+root-owned /opt/mcp-env/bin/ ruled out the console-script name this marker
+originally assumed). A naive substring search over the raw cmdline bytes also
+matches the *flock* process itself, since flock's own argv literally contains
+the whole wrapped command as one of its arguments — find_supervisor_pid() must
+parse argv and explicitly skip any process whose own argv[0] is the flock
+wrapper, or it returns the wrong pid (flock's, not python's), which then makes
+find_worker_pids() look at flock's single child (the real supervisor) instead
+of the supervisor's actual fork-per-connection worker children.
+
 POSIX only (/proc) — see design.md §8 Test Plan; verification happens on cloud0.
 """
 from __future__ import annotations
@@ -26,7 +37,11 @@ import sys
 import time
 from pathlib import Path
 
-SUPERVISOR_CMDLINE_MARKER = b"xcelium-mcp-supervisor"
+# Matches both the `python3 -m xcelium_mcp.supervisor` invocation actually used
+# today (deploy/crontab.example) and the hyphenated console-script name from
+# the optional systemd promotion path (design.md §7.3), in case that's ever
+# installed instead.
+SUPERVISOR_CMDLINE_MARKERS = (b"xcelium_mcp.supervisor", b"xcelium-mcp-supervisor")
 IDLE_THRESHOLD_SEC = int(os.environ.get("XCELIUM_MCP_IDLE_THRESHOLD_SEC", 6 * 3600))
 KILL_GRACE_SEC = 5
 _TCP_ESTABLISHED = "01"
@@ -77,17 +92,40 @@ def parse_tcp_table_established_inodes(tcp_text: str) -> set[int]:
 # ---------------------------------------------------------------------------
 
 
+def parse_cmdline_argv(cmdline_bytes: bytes) -> list[bytes]:
+    """Split raw /proc/<pid>/cmdline content (NUL-separated) into argv tokens."""
+    return [a for a in cmdline_bytes.split(b"\x00") if a]
+
+
+def is_supervisor_argv(argv: list[bytes]) -> bool:
+    """Whether argv (as parsed by parse_cmdline_argv) is the real supervisor
+    process — not the `flock -n <lock> python3 -m xcelium_mcp.supervisor`
+    wrapper cron actually launches it through (deploy/crontab.example).
+
+    flock's own argv contains the whole wrapped command as a literal
+    substring, so a naive substring match over the joined cmdline would return
+    flock's pid instead of the real supervisor's (see module docstring,
+    2026-07-07 cloud0 실측) — exclude by checking argv[0]'s basename instead.
+    """
+    if not argv:
+        return False
+    if Path(argv[0].decode(errors="replace")).name == "flock":
+        return False
+    joined = b" ".join(argv)
+    return any(marker in joined for marker in SUPERVISOR_CMDLINE_MARKERS)
+
+
 def find_supervisor_pid() -> int | None:
-    """Scan /proc/*/cmdline for the xcelium-mcp-supervisor process."""
+    """Scan /proc/*/cmdline for the real xcelium-mcp-supervisor process."""
     proc = Path("/proc")
     for entry in proc.iterdir():
         if not entry.name.isdigit():
             continue
         try:
-            cmdline = (entry / "cmdline").read_bytes()
+            argv = parse_cmdline_argv((entry / "cmdline").read_bytes())
         except OSError:
             continue  # pid exited between listdir() and read — not fatal
-        if SUPERVISOR_CMDLINE_MARKER in cmdline:
+        if is_supervisor_argv(argv):
             return int(entry.name)
     return None
 
