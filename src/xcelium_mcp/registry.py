@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -244,6 +245,49 @@ async def get_session_state(sim_dir: str) -> tuple[str, dict | None]:
     registry = await asyncio.to_thread(_load_registry_sync)
     env = registry.get("projects", {}).get(project_root, {}).get("environments", {}).get(resolved_sim_dir, {})
     return env.get("current_test_name", ""), env.get("current_tb_source")
+
+
+# ---------------------------------------------------------------------------
+# F-2 (sim-session-reaper.design.md §4.1): bridge activity tracking
+# ---------------------------------------------------------------------------
+
+_ACTIVITY_THROTTLE_SEC = 60  # minimum interval between disk writes per sim_dir
+
+
+async def touch_activity(sim_dir: str) -> None:
+    """Record bridge command activity for sim_dir, throttled to limit disk I/O.
+
+    Called from TclBridge.execute_safe() on every bridge command when the
+    bridge instance knows its sim_dir. sim_session_reaper.py reads
+    "last_activity" to decide whether a bridge session has been abandoned
+    long enough to auto-shutdown (TTL). Also resets "ttl_miss_count" back to
+    0 — any real activity means the session is not idle, regardless of how
+    many consecutive TTL-exceeded checks the reaper previously recorded.
+
+    Best-effort: failures are swallowed (same convention as
+    update_session_state) so activity tracking never blocks an actual tool
+    call.
+    """
+    try:
+        project_root = await _resolve_project_root(sim_dir)
+        resolved_sim_dir = str(Path(sim_dir).resolve())
+
+        registry = await asyncio.to_thread(_load_registry_sync)
+        projects = registry.setdefault("projects", {})
+        project = projects.setdefault(project_root, {"environments": {}})
+        envs = project.setdefault("environments", {})
+        env = envs.setdefault(resolved_sim_dir, {})
+
+        now = time.time()
+        last = env.get("last_activity")
+        if last is not None and (now - last) < _ACTIVITY_THROTTLE_SEC:
+            return
+        env["last_activity"] = now
+        env["ttl_miss_count"] = 0
+
+        await asyncio.to_thread(_save_registry_sync, registry)
+    except OSError:
+        pass
 
 
 # ---------------------------------------------------------------------------

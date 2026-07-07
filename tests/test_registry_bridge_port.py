@@ -196,3 +196,79 @@ async def test_update_session_state_preserves_bridge_port_sibling_field() -> Non
         port = await get_bridge_port("/projects/G/sim")
 
     assert port == 9876
+
+
+# ---------------------------------------------------------------------------
+# F-2 (sim-session-reaper): touch_activity
+# Design ref: docs/02-design/features/xcelium-mcp-sim-session-reaper.design.md §4.1
+# Plan SC: T-1/T-2
+# ---------------------------------------------------------------------------
+
+
+def _sole_env(registry: dict) -> dict:
+    """Fetch the single environment dict in a test registry, regardless of the
+    exact resolved sim_dir key Path.resolve() produces on this OS (Windows
+    normalizes a POSIX-style literal like "/projects/H/sim" to
+    "C:\\projects\\H\\sim" — asserting via a hand-typed literal key would
+    silently miss the real write and pass against a stale pre-seeded dict)."""
+    project = next(iter(registry["projects"].values()))
+    return next(iter(project["environments"].values()))
+
+
+@pytest.mark.asyncio
+async def test_touch_activity_records_last_activity_and_resets_miss_count() -> None:
+    """T-1: first call records last_activity and zeroes ttl_miss_count."""
+    from xcelium_mcp.registry import touch_activity, update_bridge_port
+
+    store: dict = {}
+
+    def _fake_load() -> dict:
+        return store.get("registry", {"version": 1, "projects": {}})
+
+    def _fake_save(reg: dict) -> None:
+        store["registry"] = reg
+
+    with _patch_git_root("/projects/H"), \
+         patch("xcelium_mcp.registry._load_registry_sync", side_effect=_fake_load), \
+         patch("xcelium_mcp.registry._save_registry_sync", side_effect=_fake_save):
+        await update_bridge_port("/projects/H/sim", 9876)  # seed a bridge session, sibling field
+        with patch("xcelium_mcp.registry.time.time", return_value=1000.0):
+            await touch_activity("/projects/H/sim")
+
+    env = _sole_env(store["registry"])
+    assert env["last_activity"] == 1000.0
+    assert env["ttl_miss_count"] == 0
+    assert env["bridge_port"] == 9876  # sibling field preserved
+
+
+@pytest.mark.asyncio
+async def test_touch_activity_throttles_rapid_successive_calls() -> None:
+    """T-2: a second call within the throttle window must not rewrite
+    last_activity (no disk write triggered)."""
+    from xcelium_mcp.registry import touch_activity, update_bridge_port
+
+    store: dict = {}
+    save_calls = []
+
+    def _fake_load() -> dict:
+        return store.get("registry", {"version": 1, "projects": {}})
+
+    def _fake_save(reg: dict) -> None:
+        save_calls.append(reg)
+        store["registry"] = reg
+
+    with _patch_git_root("/projects/I"), \
+         patch("xcelium_mcp.registry._load_registry_sync", side_effect=_fake_load), \
+         patch("xcelium_mcp.registry._save_registry_sync", side_effect=_fake_save):
+        await update_bridge_port("/projects/I/sim", 9876)  # seed, not counted below
+        save_calls.clear()
+
+        with patch("xcelium_mcp.registry.time.time", return_value=1000.0):
+            await touch_activity("/projects/I/sim")
+
+        with patch("xcelium_mcp.registry.time.time", return_value=1010.0):  # +10s, within 60s throttle
+            await touch_activity("/projects/I/sim")
+
+    assert len(save_calls) == 1
+    env = _sole_env(store["registry"])
+    assert env["last_activity"] == 1000.0  # unchanged by the throttled second call

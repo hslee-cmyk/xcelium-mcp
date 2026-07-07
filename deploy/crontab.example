@@ -15,3 +15,9 @@
 @reboot         /usr/bin/flock -n $HOME/.xcelium_mcp/run/supervisor.lock /opt/mcp-env/bin/python3 -m xcelium_mcp.supervisor
 * * * * *       /usr/bin/flock -n $HOME/.xcelium_mcp/run/supervisor.lock /opt/mcp-env/bin/python3 -m xcelium_mcp.supervisor
 */5 * * * *     /opt/mcp-env/bin/python3 -m xcelium_mcp.idle_culler
+
+# sim_session_reaper (F-2, xcelium-mcp-sim-session-reaper.design.md): TTL-based
+# auto-shutdown of abandoned bridge-mode xmsim sessions (real disk-exhaustion
+# incident — see plan.md). Default TTL is 48h; override with
+# XCELIUM_MCP_SIM_TTL_HOURS=<hours> before the command below if needed.
+*/30 * * * *    /opt/mcp-env/bin/python3 -m xcelium_mcp.sim_session_reaper

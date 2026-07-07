@@ -1,6 +1,6 @@
 {
   "version": "3.0",
-  "lastUpdated": "2026-07-07T17:00:00.000Z",
+  "lastUpdated": "2026-07-07T13:27:27.802Z",
   "activeFeatures": [
     "tools",
     "xcelium_mcp",
@@ -10,7 +10,8 @@
     "xcelium-mcp-debug-workflow-v2",
     "xcelium-mcp-tool-usage-guide",
     "xcelium-mcp-server-process-lifecycle",
-    "xcelium-mcp-session-state-reattach"
+    "xcelium-mcp-session-state-reattach",
+    "xcelium-mcp-sim-session-reaper"
   ],
   "primaryFeature": "tools",
   "features": {
@@ -408,6 +409,55 @@
       "automationLevel": 2,
       "previousPhase": "check",
       "autoAdvanced": true
+    },
+    "xcelium-mcp-sim-session-reaper": {
+      "phase": "check",
+      "phaseNumber": 4,
+      "matchRate": 97,
+      "iterationCount": 0,
+      "requirements": [
+        "F-1",
+        "F-2",
+        "F-3"
+      ],
+      "documents": {
+        "plan": "docs/01-plan/features/xcelium-mcp-sim-session-reaper.plan.md",
+        "design": "docs/02-design/features/xcelium-mcp-sim-session-reaper.design.md",
+        "analysis": "docs/03-analysis/xcelium-mcp-sim-session-reaper.analysis.md"
+      },
+      "timestamps": {
+        "started": "2026-07-07T19:00:00.000Z",
+        "lastUpdated": "2026-07-07T20:00:00.000Z"
+      },
+      "lastFile": "docs/03-analysis/xcelium-mcp-sim-session-reaper.analysis.md",
+      "stateMachine": {
+        "currentState": "check",
+        "previousState": "do",
+        "stateHistory": [
+          "plan",
+          "design",
+          "do"
+        ],
+        "retryCount": 0,
+        "maxRetries": 5,
+        "circuitBreakerOpen": false
+      },
+      "metrics": {
+        "qualityScore": 97,
+        "conventionCompliance": null,
+        "apiCompliance": null,
+        "cycleTimeMs": null,
+        "iterationEfficiency": null
+      },
+      "phaseTimestamps": {
+        "plan": "2026-07-07T19:00:00.000Z",
+        "design": "2026-07-07T19:15:00.000Z",
+        "do": "2026-07-07T19:30:00.000Z",
+        "check": "2026-07-07T20:00:00.000Z"
+      },
+      "automationLevel": 2,
+      "previousPhase": "design",
+      "autoAdvanced": true
     }
   },
   "pipeline": {
@@ -418,21 +468,9 @@
   "session": {
     "startedAt": "2026-04-10T04:10:48.003Z",
     "onboardingCompleted": false,
-    "lastActivity": "2026-07-07T12:00:11.356Z"
+    "lastActivity": "2026-07-07T13:27:27.802Z"
   },
   "history": [
-    {
-      "timestamp": "2026-04-15T12:56:44.559Z",
-      "feature": "xcelium_mcp",
-      "phase": "do",
-      "action": "updated"
-    },
-    {
-      "timestamp": "2026-04-15T12:56:59.571Z",
-      "feature": "xcelium_mcp",
-      "phase": "do",
-      "action": "updated"
-    },
     {
       "timestamp": "2026-04-15T12:57:04.810Z",
       "feature": "xcelium_mcp",
@@ -1020,6 +1058,18 @@
       "feature": "xcelium-mcp-session-state-reattach",
       "phase": "act",
       "action": "updated"
+    },
+    {
+      "timestamp": "2026-07-07T13:20:14.465Z",
+      "feature": "xcelium-mcp-sim-session-reaper",
+      "phase": "design",
+      "action": "updated"
+    },
+    {
+      "timestamp": "2026-07-07T13:27:27.801Z",
+      "feature": "xcelium-mcp-sim-session-reaper",
+      "phase": "do",
+      "action": "updated"
     }
   ],
   "stateMachine": {
@@ -1146,6 +1196,30 @@
       "phase": "report",
       "feature": "xcelium-mcp-session-state-reattach",
       "createdAt": "2026-07-07T12:05:10.075Z"
+    },
+    {
+      "taskId": "12",
+      "phase": "plan",
+      "feature": "xcelium-mcp-sim-session-reaper",
+      "createdAt": "2026-07-07T13:04:58.912Z"
+    },
+    {
+      "taskId": "13",
+      "phase": "design",
+      "feature": "xcelium-mcp-sim-session-reaper",
+      "createdAt": "2026-07-07T13:20:15.477Z"
+    },
+    {
+      "taskId": "14",
+      "phase": "do",
+      "feature": "xcelium-mcp-sim-session-reaper",
+      "createdAt": "2026-07-07T13:27:29.918Z"
+    },
+    {
+      "taskId": "15",
+      "phase": "check",
+      "feature": "xcelium-mcp-sim-session-reaper",
+      "createdAt": "2026-07-07T13:43:06.684Z"
     }
   ]
 }

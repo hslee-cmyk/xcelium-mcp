@@ -634,3 +634,149 @@ async def test_connect_simulator_auto_path_does_not_restore_session_state() -> N
         await mock_mcp.tools["connect_simulator"](port=0, target="auto")
 
     mock_get_state.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# F-2 (sim-session-reaper): bridge instances learn their sim_dir so
+# TclBridge.execute_safe() can record activity for the reaper's TTL tracking.
+# Design ref: docs/02-design/features/xcelium-mcp-sim-session-reaper.design.md §8
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_connect_simulator_sim_dir_sets_bridge_sim_dir() -> None:
+    """F-C direct-hit reconnect must stamp the resolved sim_dir onto the bridge
+    instance so activity tracking (registry.touch_activity) has something to
+    key off of."""
+    from xcelium_mcp.tools.sim_lifecycle import register
+
+    mock_mcp = _MockMCP()
+    mock_bridges = MagicMock()
+    mock_bridges.current_test_name = ""
+    mock_bridges.current_tb_source = None
+
+    mock_bridge_inst = MagicMock()
+    mock_bridge_inst.connect = AsyncMock(return_value="pong")
+    mock_bridge_inst.execute = AsyncMock(return_value="Time: 0 NS")
+
+    with patch("xcelium_mcp.tools.sim_lifecycle.get_bridge_port",
+               new_callable=AsyncMock, return_value=9881), \
+         patch("xcelium_mcp.tools.sim_lifecycle.get_session_state",
+               new_callable=AsyncMock, return_value=("", None)), \
+         patch("xcelium_mcp.tools.sim_lifecycle.TclBridge", return_value=mock_bridge_inst), \
+         patch("xcelium_mcp.tools.sim_lifecycle._get_pid_for_port",
+               new_callable=AsyncMock, return_value=555):
+        register(mock_mcp, mock_bridges)
+        await mock_mcp.tools["connect_simulator"](sim_dir="/proj/sim")
+
+    assert mock_bridge_inst.sim_dir == "/proj/sim"
+
+
+@pytest.mark.asyncio
+async def test_connect_simulator_auto_path_does_not_set_bridge_sim_dir() -> None:
+    """No sim_dir known (legacy auto-scan) — must not stamp a sim_dir attribute
+    that would make activity-tracking key off garbage."""
+    from xcelium_mcp.tools.sim_lifecycle import register
+
+    mock_mcp = _MockMCP()
+    mock_bridges = MagicMock()
+
+    mock_bridge_inst = MagicMock()
+    mock_bridge_inst.connect = AsyncMock(return_value="pong")
+
+    with patch("xcelium_mcp.tools.sim_lifecycle.scan_ready_files",
+               new_callable=AsyncMock, return_value=[(9876, "xmsim")]), \
+         patch("xcelium_mcp.tools.sim_lifecycle.TclBridge", return_value=mock_bridge_inst), \
+         patch("xcelium_mcp.tools.sim_lifecycle._get_pid_for_port",
+               new_callable=AsyncMock, return_value=123):
+        register(mock_mcp, mock_bridges)
+        await mock_mcp.tools["connect_simulator"](port=0, target="auto")
+
+    # MagicMock auto-creates attributes on access, so assert it was never
+    # explicitly assigned rather than checking for AttributeError.
+    assert not hasattr(mock_bridge_inst, "sim_dir") or isinstance(mock_bridge_inst.sim_dir, MagicMock)
+
+
+# ---------------------------------------------------------------------------
+# F-3 (sim-session-reaper): list_active_sessions
+# Design ref: docs/02-design/features/xcelium-mcp-sim-session-reaper.design.md §4.3
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_active_sessions_reports_ttl_remaining() -> None:
+    """T-9: a fresh bridge session reports TTL remaining, not exceeded."""
+    from xcelium_mcp.tools.sim_lifecycle import register
+
+    mock_mcp = _MockMCP()
+    mock_bridges = MagicMock()
+    now = 100_000.0
+    registry = {
+        "projects": {
+            "/proj": {
+                "environments": {
+                    "/proj/sim": {
+                        "bridge_port": 9876,
+                        "current_test_name": "TOP015",
+                        "last_activity": now - 10,
+                    }
+                }
+            }
+        }
+    }
+
+    with patch("xcelium_mcp.tools.sim_lifecycle.load_registry", return_value=registry), \
+         patch("xcelium_mcp.sim_session_reaper.time.time", return_value=now), \
+         patch("xcelium_mcp.tools.sim_lifecycle._time.time", return_value=now):
+        register(mock_mcp, mock_bridges)
+        result = await mock_mcp.tools["list_active_sessions"]()
+
+    assert "/proj/sim" in result
+    assert "TTL remaining" in result
+    assert "TOP015" in result
+
+
+@pytest.mark.asyncio
+async def test_list_active_sessions_flags_ttl_exceeded() -> None:
+    """T-9: a session past TTL is flagged as pending auto-shutdown."""
+    from xcelium_mcp.tools.sim_lifecycle import register
+
+    mock_mcp = _MockMCP()
+    mock_bridges = MagicMock()
+    now = 100_000.0
+    registry = {
+        "projects": {
+            "/proj": {
+                "environments": {
+                    "/proj/sim": {"bridge_port": 9876, "last_activity": now - 999_999_999}
+                }
+            }
+        }
+    }
+
+    with patch("xcelium_mcp.tools.sim_lifecycle.load_registry", return_value=registry), \
+         patch("xcelium_mcp.tools.sim_lifecycle._time.time", return_value=now):
+        register(mock_mcp, mock_bridges)
+        result = await mock_mcp.tools["list_active_sessions"]()
+
+    assert "auto-shutdown" in result
+
+
+@pytest.mark.asyncio
+async def test_list_active_sessions_skips_batch_only_entries() -> None:
+    """batch/regression-only registry entries (no bridge_port) must not appear."""
+    from xcelium_mcp.tools.sim_lifecycle import register
+
+    mock_mcp = _MockMCP()
+    mock_bridges = MagicMock()
+    registry = {
+        "projects": {
+            "/proj": {"environments": {"/proj/sim": {"current_test_name": "TOP015"}}}
+        }
+    }
+
+    with patch("xcelium_mcp.tools.sim_lifecycle.load_registry", return_value=registry):
+        register(mock_mcp, mock_bridges)
+        result = await mock_mcp.tools["list_active_sessions"]()
+
+    assert "No active bridge sessions" in result

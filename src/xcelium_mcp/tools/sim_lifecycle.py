@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time as _time
 from datetime import datetime
 
 from mcp.server.fastmcp import FastMCP
@@ -15,6 +16,7 @@ from xcelium_mcp.registry import (
     config_action,
     get_bridge_port,
     get_session_state,
+    load_registry,
     load_sim_config,
     resolve_sim_dir,
     save_sim_config,
@@ -326,6 +328,10 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             pass
         bridges.current_test_name = test_name
         bridges.current_tb_source = tb_source
+        # F-2 (sim-session-reaper): let the bridge record activity against this
+        # sim_dir so the reaper's TTL tracking sees this session.
+        if bridges.xmsim is not None and resolved_dir:
+            bridges.xmsim.sim_dir = resolved_dir
         # F-D (session-state-reattach): also persist to the sim_dir-keyed registry
         # so a worker that reconnects after a restart (SSH drop, idle-culler) can
         # restore these onto its own fresh BridgeManager — see connect_simulator's
@@ -424,6 +430,11 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         else:
             bridges.set_xmsim(bridge)
             bridges.xmsim_pid = await _get_pid_for_port(port)
+            # F-2 (sim-session-reaper): only when sim_dir is actually known —
+            # the ambiguous auto-connect path never reaches this branch, and a
+            # caller could still pass port= explicitly without sim_dir.
+            if sim_dir:
+                bridge.sim_dir = sim_dir
             if f_c_direct_hit:
                 # F-D: reattaching to an already-running xmsim via F-C's sim_dir
                 # registry lookup — restore whatever sim_bridge_run last recorded
@@ -450,6 +461,49 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
                 f"Current position: {where}"
             )
         return f"Connected to {target} at {host}:{port} (ping={ping})\nCurrent position: {where}"
+
+    @mcp.tool()
+    async def list_active_sessions() -> str:
+        """List all registered bridge sessions with their last activity and
+        TTL status (F-3, sim-session-reaper.design.md §4.3).
+
+        Read-only — does not modify the registry. Lets a user check for
+        abandoned bridge-mode sessions (connect_simulator/sim_bridge_run) and
+        manually shut them down with sim_disconnect(action="shutdown") before
+        the automatic TTL-based reaper would.
+
+        batch/regression sessions (sim_batch_run/sim_regression) never appear
+        here — they have no bridge_port registry entry and are not this
+        reaper's concern (see F-E, idle_culler.py's separate job-file check).
+        """
+        from xcelium_mcp.sim_session_reaper import effective_ttl_seconds
+
+        registry = await asyncio.to_thread(load_registry)
+        ttl_seconds = effective_ttl_seconds()
+        now = _time.time()
+
+        lines = []
+        for proj in registry.get("projects", {}).values():
+            for env_sim_dir, env in proj.get("environments", {}).items():
+                port = env.get("bridge_port")
+                if not port:
+                    continue  # not a bridge session
+                last_activity = env.get("last_activity")
+                if last_activity is None:
+                    status = "no activity recorded yet"
+                else:
+                    remaining = ttl_seconds - (now - last_activity)
+                    if remaining > 0:
+                        status = f"TTL remaining: {remaining / 3600:.1f}h"
+                    else:
+                        status = "TTL exceeded — will be auto-shutdown by reaper"
+                lines.append(
+                    f"{env_sim_dir}  port={port}  test={env.get('current_test_name', '')!r}  {status}"
+                )
+
+        if not lines:
+            return "No active bridge sessions registered."
+        return "\n".join(lines)
 
     @mcp.tool()
     async def sim_disconnect(

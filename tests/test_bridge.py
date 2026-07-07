@@ -224,3 +224,43 @@ class TestForceClose:
         with pytest.raises((ConnectionError, OSError)):
             await b.execute("drop_cmd")
         assert not b.connected
+
+
+class TestActivityHook:
+    """F-2 (sim-session-reaper): execute_safe() records bridge activity for
+    the reaper's TTL tracking when the instance knows its sim_dir.
+
+    Design ref: docs/02-design/features/xcelium-mcp-sim-session-reaper.design.md §4.1
+    """
+
+    async def test_execute_calls_touch_activity_when_sim_dir_set(
+        self, mock_server: MockTclServer
+    ):
+        from unittest.mock import AsyncMock, patch
+
+        b = TclBridge(host="127.0.0.1", port=mock_server.port, timeout=5.0, sim_dir="/proj/sim")
+        await b.connect()  # __PING__ during connect() also has sim_dir set — expect >=1 call
+        try:
+            with patch("xcelium_mcp.registry.touch_activity", new_callable=AsyncMock) as mock_touch:
+                mock_server.set_response("where", "100ns : /tb/dut")
+                await b.execute("where")
+        finally:
+            await b.disconnect()
+
+        mock_touch.assert_awaited_with("/proj/sim")
+
+    async def test_execute_skips_touch_activity_when_sim_dir_empty(
+        self, bridge: TclBridge, mock_server: MockTclServer
+    ):
+        """Default (no sim_dir passed to TclBridge()) — the common case for
+        bridges created via the F-C ambiguous auto-connect path — never calls
+        touch_activity, so registration.py's registry never sees a bogus
+        empty-string sim_dir entry."""
+        from unittest.mock import AsyncMock, patch
+
+        assert bridge.sim_dir == ""
+        with patch("xcelium_mcp.registry.touch_activity", new_callable=AsyncMock) as mock_touch:
+            mock_server.set_response("where", "100ns : /tb/dut")
+            await bridge.execute("where")
+
+        mock_touch.assert_not_awaited()

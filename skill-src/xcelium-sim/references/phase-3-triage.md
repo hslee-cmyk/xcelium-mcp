@@ -14,7 +14,7 @@ grep -E "PASS|FAIL|Errors:|COMPLETE" logs/ncsim_${TEST_NAME}.log
 
 | 로그 내용 | 판정 | 다음 단계 |
 |-----------|------|----------|
-| `Errors: 0` + 모든 PASS | **PASS** | Phase 5E(보고서 갱신) |
+| `Errors: 0` + 모든 PASS | **PASS** | Phase 5E(보고서 갱신) → 5F(세션 종료 정리, 필수) |
 | `FAIL` 또는 `Errors: N (N>0)` | **FAIL** | Phase 4(waveform 분석) |
 | `COMPLETE`만, PASS/FAIL 표시 없음 | **불확정** | Phase 4 |
 | "verify in waveform" 문구 | **불확정** | Phase 4 |
@@ -32,4 +32,4 @@ uvm_report_server.get_severity_count(UVM_ERROR)   # 0이면 PASS 후보
 
 ## 다음 단계
 
-PASS → Phase 5E. FAIL/불확정 → phase-4-waveform.md.
+PASS → Phase 5E → 5F(세션 종료 시 `sim_disconnect(action="shutdown")` 필수 — phase-5-fix-regression.md 참조). FAIL/불확정 → phase-4-waveform.md.

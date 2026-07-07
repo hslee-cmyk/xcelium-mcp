@@ -36,10 +36,15 @@ class TclBridge:
     """
 
     def __init__(self, host: str = "localhost", port: int = DEFAULT_BRIDGE_PORT,
-                 timeout: float = 30.0):
+                 timeout: float = 30.0, sim_dir: str = ""):
         self.host = host
         self.port = port
         self.timeout = timeout
+        # F-2 (sim-session-reaper.design.md §4.1): set by sim_lifecycle.py after
+        # connect when sim_dir is known, so execute_safe() can record activity
+        # for the reaper's TTL tracking. Empty ("") when unknown (e.g. the F-C
+        # ambiguous auto-connect path) — those sessions simply aren't tracked.
+        self.sim_dir = sim_dir
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._lock = asyncio.Lock()
@@ -92,6 +97,12 @@ class TclBridge:
         """Send a command and return a TclResponse (does not raise on Tcl errors)."""
         if not self.connected:
             raise ConnectionError("Not connected to SimVision bridge")
+
+        if self.sim_dir:
+            # F-2: lazy import to avoid a circular import (registry.py imports
+            # DEFAULT_BRIDGE_PORT from this module).
+            from xcelium_mcp.registry import touch_activity
+            await touch_activity(self.sim_dir)
 
         effective_timeout = timeout if timeout is not None else self.timeout
         async with self._lock:

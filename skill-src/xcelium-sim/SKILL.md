@@ -13,6 +13,13 @@ user-invocable: false
 
 xcelium-mcp(Cadence Xcelium/SimVision MCP 서버)의 24개 tool을 RTL 디버깅 workflow의 phase별로 언제·어떻게 쓸지 안내한다. `~/.claude/skills/xcelium-sim/`(user-level)에 배포되어, xcelium-mcp를 사용하는 모든 RTL 프로젝트 세션(venezia-fpga 등)에서 동작한다.
 
+> ⚠️ **세션을 끝내기 전에 항상 확인**: `connect_simulator`/`sim_bridge_run`(bridge 모드)으로 붙인
+> xmsim/SimVision은 MCP worker의 자식 프로세스가 아니다 — 세션 종료 시 `sim_disconnect(action="shutdown", target="all")`을
+> 명시적으로 호출하지 않으면 host에 프로세스가 무기한 방치되어 disk를 소진할 수 있다(실제 발생 이력 있음).
+> **Phase 0~4 중 어디서 대화가 끝나든(Phase 5까지 못 가더라도) 이 확인은 생략하지 않는다.**
+> 상세: `references/phase-5-fix-regression.md` §5F. batch/regression 모드(`sim_batch_run`/`sim_regression`)는
+> 자체 정리 로직이 있어 이 확인 대상이 아니다.
+
 ## Phase 1 — Tool 사용법 가이드 (이 문서 소관)
 
 이 skill은 6-phase 디버깅 workflow를 phase별 reference로 안내한다. 관련 키워드(위 트리거 목록)가 대화에 등장하면, 현재 상황(로그/dump 유무 등)을 보고 해당 phase reference를 로드한다.
@@ -24,7 +31,7 @@ xcelium-mcp(Cadence Xcelium/SimVision MCP 서버)의 24개 tool을 RTL 디버깅
 | Phase 2 | `references/phase-2-simulation.md` | 시뮬레이션 실행(Batch/Bridge, sentinel 중단) |
 | Phase 3 | `references/phase-3-triage.md` | 1차 판별(로그 기반) |
 | Phase 4 | `references/phase-4-waveform.md` | 2차 판별(waveform CSV, bisect, FSM 전이 대조) |
-| Phase 5 | `references/phase-5-fix-regression.md` | 수정 + Regression + 문서 갱신 |
+| Phase 5 | `references/phase-5-fix-regression.md` | 수정 + Regression + 문서 갱신 + **세션 종료 시뮬레이션 정리(5F, 필수)** |
 | — | `references/tool-map.md` | 24개 tool 전체 결정 매트릭스 (모든 phase에서 참조) |
 
 ### 사용 절차
