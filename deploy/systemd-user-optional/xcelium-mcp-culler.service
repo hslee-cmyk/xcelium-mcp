@@ -1,0 +1,9 @@
+# Companion to xcelium-mcp-culler.timer — see that file and
+# design.md §7.3 for the (optional, linger-gated) systemd --user promotion path.
+
+[Unit]
+Description=xcelium-mcp idle worker culler (one-shot, triggered by the .timer)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/mcp-env/bin/xcelium-mcp-culler

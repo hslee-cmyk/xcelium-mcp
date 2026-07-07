@@ -1,0 +1,16 @@
+# OPTIONAL promotion path — design.md §7.3. Requires `loginctl enable-linger`
+# to have been run first (see xcelium-mcp-supervisor.service in this directory).
+# Install: copy both this file and xcelium-mcp-culler.service to
+# ~/.config/systemd/user/, then
+#   systemctl --user enable --now xcelium-mcp-culler.timer
+# and remove the crontab.example line for the culler.
+
+[Unit]
+Description=Run xcelium-mcp-culler every 5 minutes
+
+[Timer]
+OnUnitActiveSec=5min
+OnBootSec=5min
+
+[Install]
+WantedBy=timers.target

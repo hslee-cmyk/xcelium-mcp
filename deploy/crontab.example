@@ -1,0 +1,11 @@
+# xcelium-mcp supervisor watchdog + idle-culler (cron-based, root/admin not required).
+#
+# See docs/02-design/features/xcelium-mcp-server-process-lifecycle.design.md §7.2.
+# Install with: crontab -e   (as the same user xcelium-mcp runs as, e.g. hoseung.lee)
+#
+# Do not `crontab this-file` blindly if you already have other cron entries —
+# merge these lines into your existing crontab instead of overwriting it.
+
+@reboot         /usr/bin/flock -n $HOME/.xcelium_mcp/run/supervisor.lock /opt/mcp-env/bin/xcelium-mcp-supervisor
+* * * * *       /usr/bin/flock -n $HOME/.xcelium_mcp/run/supervisor.lock /opt/mcp-env/bin/xcelium-mcp-supervisor
+*/5 * * * *     /opt/mcp-env/bin/xcelium-mcp-culler

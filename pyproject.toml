@@ -27,6 +27,8 @@ ignore = ["E501"]
 
 [project.scripts]
 xcelium-mcp = "xcelium_mcp.server:main"
+xcelium-mcp-supervisor = "xcelium_mcp.supervisor:main"
+xcelium-mcp-culler = "xcelium_mcp.idle_culler:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/xcelium_mcp"]

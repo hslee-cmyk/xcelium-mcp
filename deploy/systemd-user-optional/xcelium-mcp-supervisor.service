@@ -1,0 +1,19 @@
+# OPTIONAL promotion path — design.md §7.3. Only usable after an admin runs
+# `loginctl enable-linger <user>` once (root, or the user's own interactive
+# session — NOT possible from a plain non-interactive ssh command, see
+# design.md §1.3). Until then, use deploy/crontab.example instead.
+#
+# Install (after linger is enabled): copy to ~/.config/systemd/user/, then
+#   systemctl --user enable --now xcelium-mcp-supervisor.service
+# and remove the crontab.example lines for the supervisor.
+
+[Unit]
+Description=xcelium-mcp prefork supervisor
+
+[Service]
+ExecStart=/opt/mcp-env/bin/xcelium-mcp-supervisor
+Restart=on-failure
+UMask=0177
+
+[Install]
+WantedBy=default.target

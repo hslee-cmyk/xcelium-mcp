@@ -11,7 +11,7 @@ import logging
 from xcelium_mcp.batch_runner import validate_extra_args
 from xcelium_mcp.bridge_manager import BridgeManager, scan_ready_files
 from xcelium_mcp.discovery import run_full_discovery
-from xcelium_mcp.registry import load_sim_config, resolve_sim_dir
+from xcelium_mcp.registry import load_sim_config, resolve_sim_dir, update_bridge_port
 from xcelium_mcp.shell_utils import (
     build_redirect,
     find_shm,
@@ -290,6 +290,7 @@ async def _start_bridge(
             if bridges is not None:
                 bridges.set_xmsim(new_bridge)
                 bridges.xmsim_pid = await _get_pid_for_port(port)
+            await update_bridge_port(sim_dir, port)  # F-C: write-back actual runtime port
             xpid = bridges.xmsim_pid if bridges is not None else None
             return (
                 f"Simulation started and connected (bridge mode, {sim_mode}).\n"
@@ -315,6 +316,7 @@ async def _start_bridge(
                 if bridges is not None:
                     bridges.set_xmsim(new_bridge)
                     bridges.xmsim_pid = await _get_pid_for_port(actual_port)
+                await update_bridge_port(sim_dir, actual_port)  # F-C: write-back actual runtime port
                 xpid = bridges.xmsim_pid if bridges is not None else None
                 return (
                     f"Simulation started and connected (bridge mode, {sim_mode}).\n"

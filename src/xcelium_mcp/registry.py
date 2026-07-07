@@ -126,11 +126,11 @@ def _write_json_sync(path, data: dict) -> None:
     Path(str(path)).write_text(json.dumps(data, indent=2))
 
 
-async def _update_registry_from_config(sim_dir: str, tb_type: str, config: dict) -> None:
-    """Register sim environment in mcp_registry.json.
+async def _resolve_project_root(sim_dir: str) -> str:
+    """Resolve the git project root for sim_dir (falls back to $HOME if not a git repo).
 
-    This is the ONLY function that writes to mcp_registry.json
-    (besides mcp_config tool). Replaces v3's _update_registry_env().
+    Shared by _update_registry_from_config/update_bridge_port/get_bridge_port so all
+    three agree on the same project_root key for a given sim_dir.
     """
     proc = await asyncio.create_subprocess_exec(
         "git", "rev-parse", "--show-toplevel",
@@ -140,8 +140,16 @@ async def _update_registry_from_config(sim_dir: str, tb_type: str, config: dict)
     )
     stdout, _ = await proc.communicate()
     raw_root = stdout.decode().strip() if proc.returncode == 0 else str(Path.home())
-    # Normalize both paths so symlink vs realpath variants map to the same key.
-    project_root = str(Path(raw_root).resolve())
+    return str(Path(raw_root).resolve())
+
+
+async def _update_registry_from_config(sim_dir: str, tb_type: str, config: dict) -> None:
+    """Register sim environment in mcp_registry.json.
+
+    This is the ONLY function that writes to mcp_registry.json
+    (besides mcp_config tool). Replaces v3's _update_registry_env().
+    """
+    project_root = await _resolve_project_root(sim_dir)
     sim_dir = str(Path(sim_dir).resolve())
 
     registry = await asyncio.to_thread(_load_registry_sync)
@@ -157,6 +165,46 @@ async def _update_registry_from_config(sim_dir: str, tb_type: str, config: dict)
     }
 
     await asyncio.to_thread(_save_registry_sync, registry)
+
+
+async def update_bridge_port(sim_dir: str, port: int) -> None:
+    """Write-back the actual runtime bridge port for sim_dir into mcp_registry.json.
+
+    F-C (attach 모호성 해소, design.md §4.1): the "bridge_port" field written by
+    _update_registry_from_config() is only the *configured* value from
+    .mcp_sim_config.json at sim_discover time — mcp_bridge.tcl's P1-2 auto-range
+    may bind a different port at runtime. Call this right after a successful
+    connect so later connect_simulator(sim_dir=...) calls can look up the real port
+    instead of guessing via bridge_ready_* glob scans.
+    """
+    project_root = await _resolve_project_root(sim_dir)
+    resolved_sim_dir = str(Path(sim_dir).resolve())
+
+    registry = await asyncio.to_thread(_load_registry_sync)
+    projects = registry.setdefault("projects", {})
+    project = projects.setdefault(project_root, {"environments": {}})
+    envs = project.setdefault("environments", {})
+    env = envs.setdefault(resolved_sim_dir, {})
+    env["bridge_port"] = port
+
+    await asyncio.to_thread(_save_registry_sync, registry)
+
+
+async def get_bridge_port(sim_dir: str) -> int | None:
+    """Look up the last known bridge port for sim_dir from mcp_registry.json.
+
+    Returns None if sim_dir has no registry entry (e.g. sim_discover/sim_bridge_run
+    never ran for it) rather than falling back to DEFAULT_BRIDGE_PORT — callers
+    decide whether to fall back to scan_ready_files() on a miss.
+    """
+    project_root = await _resolve_project_root(sim_dir)
+    resolved_sim_dir = str(Path(sim_dir).resolve())
+
+    registry = await asyncio.to_thread(_load_registry_sync)
+    env = registry.get("projects", {}).get(project_root, {}).get("environments", {}).get(resolved_sim_dir)
+    if env is None:
+        return None
+    return env.get("bridge_port")
 
 
 # ---------------------------------------------------------------------------

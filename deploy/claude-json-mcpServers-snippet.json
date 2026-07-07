@@ -1,0 +1,15 @@
+{
+  "xcelium-mcp": {
+    "type": "stdio",
+    "command": "ssh",
+    "args": [
+      "-o", "BatchMode=yes",
+      "-o", "ServerAliveInterval=30",
+      "-o", "ServerAliveCountMax=3",
+      "cloud0",
+      "/opt/mcp-env/bin/python", "-m", "xcelium_mcp.stdio_forward",
+      "/home/<user>/.xcelium_mcp/run/xcelium-mcp.sock"
+    ],
+    "env": {}
+  }
+}

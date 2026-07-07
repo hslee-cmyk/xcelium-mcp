@@ -1,0 +1,195 @@
+"""idle_culler.py — /proc-only idle worker detection and cleanup (F-B, 안C+).
+
+design.md §1.4 (0.3): no heartbeat file/thread of any kind — this script alone,
+run periodically by cron (§7.2), decides which xcelium-mcp workers are idle by
+reading kernel-maintained /proc state. Nothing is added to the worker or the
+supervisor.
+
+A worker counts as idle when BOTH are true:
+  1. it holds no ESTABLISHED TCP connection at all (i.e. no live xmsim/SimVision
+     bridge — a worker mid-simulation always has one)
+  2. it has been running longer than IDLE_THRESHOLD_SEC
+
+Design-doc refinement: `/proc/<pid>/net/tcp(+tcp6)` is NOT scoped per-process —
+every pid on a host that shares the default network namespace sees the exact
+same host-wide TCP table through that file. Filtering by pid therefore requires
+cross-referencing the pid's own open socket file descriptors (/proc/<pid>/fd/*)
+against that table's inode column — see has_established_tcp() below.
+
+POSIX only (/proc) — see design.md §8 Test Plan; verification happens on cloud0.
+"""
+from __future__ import annotations
+
+import os
+import signal
+import sys
+import time
+from pathlib import Path
+
+SUPERVISOR_CMDLINE_MARKER = b"xcelium-mcp-supervisor"
+IDLE_THRESHOLD_SEC = int(os.environ.get("XCELIUM_MCP_IDLE_THRESHOLD_SEC", 6 * 3600))
+KILL_GRACE_SEC = 5
+_TCP_ESTABLISHED = "01"
+
+
+# ---------------------------------------------------------------------------
+# Pure parsing helpers — no /proc access, unit-testable on any platform.
+# ---------------------------------------------------------------------------
+
+
+def parse_stat_starttime(stat_text: str) -> int:
+    """Extract starttime (clock ticks since boot) from /proc/<pid>/stat content.
+
+    Format: "pid (comm) state ppid ... starttime ...". comm can itself contain
+    spaces/parens, so skip past the *last* ')' rather than splitting naively.
+    starttime is the 22nd whitespace-separated field overall — the 20th field
+    after the trailing ')'.
+    """
+    _, _, rest = stat_text.rpartition(")")
+    fields = rest.split()
+    return int(fields[19])
+
+
+def parse_uptime_seconds(uptime_text: str) -> float:
+    """Extract system uptime (seconds) from /proc/uptime content."""
+    return float(uptime_text.split()[0])
+
+
+def parse_tcp_table_established_inodes(tcp_text: str) -> set[int]:
+    """Return the set of socket inode numbers in ESTABLISHED state from the
+    content of /proc/net/tcp or /proc/net/tcp6 (header line included or not)."""
+    inodes: set[int] = set()
+    for line in tcp_text.splitlines():
+        fields = line.split()
+        if len(fields) < 10 or fields[0] == "sl":  # header row starts with "sl"
+            continue
+        state, inode = fields[3], fields[9]
+        if state == _TCP_ESTABLISHED:
+            try:
+                inodes.add(int(inode))
+            except ValueError:
+                continue
+    return inodes
+
+
+# ---------------------------------------------------------------------------
+# /proc-backed lookups — Linux only, exercised on cloud0.
+# ---------------------------------------------------------------------------
+
+
+def find_supervisor_pid() -> int | None:
+    """Scan /proc/*/cmdline for the xcelium-mcp-supervisor process."""
+    proc = Path("/proc")
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            cmdline = (entry / "cmdline").read_bytes()
+        except OSError:
+            continue  # pid exited between listdir() and read — not fatal
+        if SUPERVISOR_CMDLINE_MARKER in cmdline:
+            return int(entry.name)
+    return None
+
+
+def find_worker_pids(supervisor_pid: int) -> list[int]:
+    """Direct children of the supervisor = the currently-alive fork workers."""
+    children_path = Path(f"/proc/{supervisor_pid}/task/{supervisor_pid}/children")
+    try:
+        text = children_path.read_text().strip()
+    except OSError:
+        return []
+    return [int(p) for p in text.split()] if text else []
+
+
+def _socket_inodes_for_pid(pid: int) -> set[int]:
+    """Inode numbers of every socket fd this pid currently has open."""
+    inodes: set[int] = set()
+    fd_dir = Path(f"/proc/{pid}/fd")
+    try:
+        entries = list(fd_dir.iterdir())
+    except OSError:
+        return inodes
+    for fd_link in entries:
+        try:
+            target = os.readlink(fd_link)
+        except OSError:
+            continue
+        if target.startswith("socket:[") and target.endswith("]"):
+            try:
+                inodes.add(int(target[len("socket:["):-1]))
+            except ValueError:
+                continue
+    return inodes
+
+
+def has_established_tcp(pid: int) -> bool:
+    """Whether pid currently holds an ESTABLISHED TCP connection (v4 or v6)."""
+    inodes = _socket_inodes_for_pid(pid)
+    if not inodes:
+        return False
+    for tcp_file in (f"/proc/{pid}/net/tcp", f"/proc/{pid}/net/tcp6"):
+        try:
+            text = Path(tcp_file).read_text()
+        except OSError:
+            continue
+        if inodes & parse_tcp_table_established_inodes(text):
+            return True
+    return False
+
+
+def process_age_seconds(pid: int) -> float:
+    stat_text = Path(f"/proc/{pid}/stat").read_text()
+    uptime_text = Path("/proc/uptime").read_text()
+    starttime_ticks = parse_stat_starttime(stat_text)
+    clk_tck = os.sysconf("SC_CLK_TCK")
+    return parse_uptime_seconds(uptime_text) - (starttime_ticks / clk_tck)
+
+
+# ---------------------------------------------------------------------------
+# Cull decision + entry point
+# ---------------------------------------------------------------------------
+
+
+def _cull_if_idle(pid: int) -> None:
+    if has_established_tcp(pid):
+        return
+    if process_age_seconds(pid) <= IDLE_THRESHOLD_SEC:
+        return
+
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+
+    time.sleep(KILL_GRACE_SEC)
+    try:
+        os.kill(pid, 0)  # still alive?
+    except ProcessLookupError:
+        return
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def main() -> int:
+    if sys.platform == "win32":
+        print("xcelium-mcp-culler requires /proc — Linux/cloud0 only.", file=sys.stderr)
+        return 1
+
+    supervisor_pid = find_supervisor_pid()
+    if supervisor_pid is None:
+        return 0  # supervisor not running — cron watchdog (§7.2) handles restart, not us
+
+    for pid in find_worker_pids(supervisor_pid):
+        try:
+            _cull_if_idle(pid)
+        except (OSError, ValueError, IndexError):
+            continue  # pid exited between listing and inspection — not fatal
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -448,3 +448,120 @@ class TestParseChunkedRunReport:
         raw = "CHUNKED_RUN_REPORT\nsim_time:0ns\nrequested:10000000ns\nstatus:error\nerror:some error\n"
         result = _parse_chunked_run_report(raw)
         assert "ERROR" in result
+
+
+# ---------------------------------------------------------------------------
+# F-C: attach 모호성 해소 — connect_simulator(sim_dir=...) + _auto_connect_all
+# ambiguity fail-loud (design.md §5.6/§5.3, plan.md T-4/T-5)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_connect_simulator_sim_dir_uses_registry_port() -> None:
+    """sim_dir with a known registry bridge_port connects directly to that port
+    — must not fall through to the ambiguous ready-file scan."""
+    from xcelium_mcp.tools.sim_lifecycle import register
+
+    mock_mcp = _MockMCP()
+    mock_bridges = MagicMock()
+    mock_bridges.xmsim_pid = None
+
+    mock_bridge_inst = MagicMock()
+    mock_bridge_inst.connect = AsyncMock(return_value="pong")
+    mock_bridge_inst.execute = AsyncMock(return_value="Time: 0 NS")
+
+    with patch("xcelium_mcp.tools.sim_lifecycle.get_bridge_port",
+               new_callable=AsyncMock, return_value=9881) as mock_get_port, \
+         patch("xcelium_mcp.tools.sim_lifecycle.TclBridge",
+               return_value=mock_bridge_inst) as mock_tcl_bridge, \
+         patch("xcelium_mcp.tools.sim_lifecycle._get_pid_for_port",
+               new_callable=AsyncMock, return_value=555), \
+         patch("xcelium_mcp.tools.sim_lifecycle.scan_ready_files",
+               new_callable=AsyncMock) as mock_scan:
+        register(mock_mcp, mock_bridges)
+        result = await mock_mcp.tools["connect_simulator"](sim_dir="/projects/A/sim")
+
+    mock_get_port.assert_awaited_once_with("/projects/A/sim")
+    mock_tcl_bridge.assert_called_once()
+    assert mock_tcl_bridge.call_args.kwargs["port"] == 9881
+    mock_scan.assert_not_called()  # no ambiguous glob scan when sim_dir resolves directly
+    assert "Connected to xmsim at localhost:9881" in result
+
+
+@pytest.mark.asyncio
+async def test_connect_simulator_sim_dir_miss_falls_back_to_scan() -> None:
+    """sim_dir with no registry entry falls back to the existing auto-scan path
+    (single candidate — behavior unchanged from before F-C)."""
+    from xcelium_mcp.tools.sim_lifecycle import register
+
+    mock_mcp = _MockMCP()
+    mock_bridges = MagicMock()
+
+    mock_bridge_inst = MagicMock()
+    mock_bridge_inst.connect = AsyncMock(return_value="pong")
+
+    with patch("xcelium_mcp.tools.sim_lifecycle.get_bridge_port",
+               new_callable=AsyncMock, return_value=None), \
+         patch("xcelium_mcp.tools.sim_lifecycle.scan_ready_files",
+               new_callable=AsyncMock, return_value=[(9876, "xmsim")]), \
+         patch("xcelium_mcp.tools.sim_lifecycle.TclBridge", return_value=mock_bridge_inst), \
+         patch("xcelium_mcp.tools.sim_lifecycle._get_pid_for_port",
+               new_callable=AsyncMock, return_value=123):
+        register(mock_mcp, mock_bridges)
+        result = await mock_mcp.tools["connect_simulator"](sim_dir="/projects/unknown/sim")
+
+    assert "Connected:" in result
+    assert "xmsim:9876" in result
+
+
+@pytest.mark.asyncio
+async def test_auto_connect_all_single_candidate_per_type_unchanged() -> None:
+    """Regression: exactly one ready file per type still connects normally
+    (this is the common single-session case covered before F-C)."""
+    from xcelium_mcp.tools.sim_lifecycle import register
+
+    mock_mcp = _MockMCP()
+    mock_bridges = MagicMock()
+
+    mock_bridge_inst = MagicMock()
+    mock_bridge_inst.connect = AsyncMock(return_value="pong")
+
+    with patch("xcelium_mcp.tools.sim_lifecycle.scan_ready_files",
+               new_callable=AsyncMock, return_value=[(9876, "xmsim"), (9877, "simvision")]), \
+         patch("xcelium_mcp.tools.sim_lifecycle.TclBridge", return_value=mock_bridge_inst), \
+         patch("xcelium_mcp.tools.sim_lifecycle._get_pid_for_port",
+               new_callable=AsyncMock, return_value=123):
+        register(mock_mcp, mock_bridges)
+        result = await mock_mcp.tools["connect_simulator"](port=0, target="auto")
+
+    assert "AMBIGUOUS" not in result
+    assert "xmsim:9876" in result
+    assert "simvision:9877" in result
+    mock_bridges.set_xmsim.assert_called_once()
+    mock_bridges.set_simvision.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_auto_connect_all_ambiguous_type_fails_loud_without_overwriting() -> None:
+    """Two live xmsim bridges (two concurrently-debugged sim_dirs) must not be
+    silently connected-and-overwritten — F-C requires an explicit ambiguity
+    error instead (plan.md T-5)."""
+    from xcelium_mcp.tools.sim_lifecycle import register
+
+    mock_mcp = _MockMCP()
+    mock_bridges = MagicMock()
+
+    mock_bridge_inst = MagicMock()
+    mock_bridge_inst.connect = AsyncMock(return_value="pong")
+
+    with patch("xcelium_mcp.tools.sim_lifecycle.scan_ready_files",
+               new_callable=AsyncMock, return_value=[(9876, "xmsim"), (9877, "xmsim")]), \
+         patch("xcelium_mcp.tools.sim_lifecycle.TclBridge", return_value=mock_bridge_inst):
+        register(mock_mcp, mock_bridges)
+        result = await mock_mcp.tools["connect_simulator"](port=0, target="auto")
+
+    assert "AMBIGUOUS" in result
+    assert "9876" in result and "9877" in result
+    assert "sim_dir" in result
+    # Must not silently connect to either candidate and clobber bridges.xmsim.
+    mock_bridges.set_xmsim.assert_not_called()

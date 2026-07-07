@@ -11,7 +11,13 @@ from mcp.server.fastmcp import FastMCP
 from xcelium_mcp.bridge_lifecycle import _get_pid_for_port, start_bridge_simulation
 from xcelium_mcp.bridge_manager import BridgeManager, scan_ready_files
 from xcelium_mcp.discovery import run_full_discovery
-from xcelium_mcp.registry import config_action, load_sim_config, resolve_sim_dir, save_sim_config
+from xcelium_mcp.registry import (
+    config_action,
+    get_bridge_port,
+    load_sim_config,
+    resolve_sim_dir,
+    save_sim_config,
+)
 from xcelium_mcp.shell_utils import UserInputRequired, get_user_tmp_dir, shell_run
 from xcelium_mcp.tb_provenance import build_tb_provenance, format_tb_provenance, scan_test_dependencies
 from xcelium_mcp.tcl_bridge import BRIDGE_ERRORS, TclBridge, TclError
@@ -44,13 +50,31 @@ async def _read_bridge_type(port: int) -> str:
 # ---------------------------------------------------------------------------
 
 async def _auto_connect_all(bridges: BridgeManager, host: str, timeout: float) -> str:
-    """Scan all ready files, connect to each, assign to appropriate slot."""
+    """Scan all ready files, connect to each, assign to appropriate slot.
+
+    F-C (attach 모호성 해소): if more than one ready file exists for the same
+    bridge type (e.g. two xmsim instances from two concurrently-debugged
+    sim_dirs), connecting to both would silently overwrite bridges.xmsim with
+    whichever one connects last. Flag that type as ambiguous instead and ask
+    the caller to pass sim_dir (or an explicit port) — see connect_simulator.
+    """
     entries = await scan_ready_files()
     if not entries:
         return "No bridges found. Run sim_bridge_run or simvision_start first."
 
-    results = []
+    by_type: dict[str, list[int]] = {}
     for p, btype in entries:
+        by_type.setdefault(btype, []).append(p)
+
+    results = []
+    for btype, ports in by_type.items():
+        if len(ports) > 1:
+            results.append(
+                f"  {btype}: AMBIGUOUS — {len(ports)} bridges detected on ports {ports}. "
+                f"Specify sim_dir (or an explicit port) to disambiguate."
+            )
+            continue
+        p = ports[0]
         bridge = TclBridge(host=host, port=p, timeout=timeout)
         try:
             ping = await bridge.connect()
@@ -335,6 +359,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
 
     @mcp.tool()
     async def connect_simulator(
+        sim_dir: str = "",
         host: str = "localhost",
         port: int = 0,
         target: str = "auto",
@@ -343,14 +368,27 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         """Connect to simulator bridge(s).
 
         v4.1: Multi-bridge support. Reads ready file for port + type auto-detection.
+        F-C: sim_dir lets a caller with multiple concurrent sim_dirs pick the
+        right bridge deterministically instead of relying on ready-file scans.
 
         Args:
+            sim_dir: Simulation directory. If a registry bridge_port entry exists
+                     for it (written by sim_bridge_run — see registry.update_bridge_port),
+                     connect directly to that port instead of scanning ready files.
+                     Avoids the ambiguity when multiple bridges are live at once.
             host:    Bridge host (default localhost).
-            port:    Bridge port. 0 = auto-detect from ready files.
+            port:    Bridge port. 0 = auto-detect from ready files (or from sim_dir above).
             target:  "xmsim" | "simvision" | "auto". auto = ready file type.
                      port=0 + target=auto → scan all ready files, connect each to slot.
             timeout: Connection timeout in seconds.
         """
+        if sim_dir and port == 0:
+            registry_port = await get_bridge_port(sim_dir)
+            if registry_port is not None:
+                port = registry_port
+                if target == "auto":
+                    target = "xmsim"  # registry only tracks the xmsim bridge port (F-C)
+
         if port == 0 and target == "auto":
             return await _auto_connect_all(bridges, host, timeout)
 
