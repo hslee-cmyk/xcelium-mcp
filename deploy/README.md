@@ -11,15 +11,26 @@ no `socat`). This is the default and only supported path in this repo; the
 `systemd-user-optional/` units are a later upgrade an admin can opt into once
 they've run `loginctl enable-linger <user>` — do not use them before that.
 
-## 1. Install the package on cloud0 (as before, plus the new entry points)
+## 1. No install step needed for the new modules (2026-07-07 실측)
+
+`/opt/mcp-env/` on cloud0 is **root-owned and not writable** by a regular user
+(confirmed: `touch /opt/mcp-env/bin/x` → Permission denied). This means
+`pip install -e .` cannot generate the `xcelium-mcp-supervisor`/`xcelium-mcp-culler`
+console-script wrappers declared in `pyproject.toml` — those files would need
+to be created under `/opt/mcp-env/bin/`, which requires root.
+
+This is not a blocker: the editable install (`/opt/xcelium-mcp` → already on
+`sys.path` via the existing `pip install -e`) already makes the new modules
+importable right now. `crontab.example` and the `systemd-user-optional/` units
+were updated to invoke them via `python3 -m` instead of a console script:
 
 ```bash
-ssh cloud0
-/opt/mcp-env/bin/pip install -e /path/to/xcelium-mcp   # picks up the 2 new
-                                                         # [project.scripts]:
-                                                         # xcelium-mcp-supervisor,
-                                                         # xcelium-mcp-culler
+/opt/mcp-env/bin/python3 -m xcelium_mcp.supervisor
+/opt/mcp-env/bin/python3 -m xcelium_mcp.idle_culler
 ```
+
+`git pull` on cloud0 is the only "install" step — no `pip install` re-run needed
+unless `pyproject.toml`'s dependencies themselves changed.
 
 ## 2. Register the cron watchdog (cloud0, your own user — no sudo)
 
@@ -39,9 +50,12 @@ environment if needed).
 ## 3. Switch the client's `~/.claude.json`
 
 Replace the `xcelium-mcp` entry with `claude-json-mcpServers-snippet.json`'s
-content, filling in `<user>` with the actual remote username (the socket path
-is a literal ssh argv element — it cannot use `$HOME`, which is a *local*
-shell variable and never reaches the remote `ssh` argv).
+content, filling in `<remote $HOME>` with the actual remote home directory —
+**check it first with `ssh cloud0 'echo $HOME'`, don't assume `/home/<user>`**
+(on this cloud0, hoseung.lee's home is `/users/hoseung.lee`, not
+`/home/hoseung.lee` — design.md's original example guessed wrong). The socket
+path is a literal ssh argv element — it cannot use a bare `$HOME`, which is a
+*local* shell variable and never reaches the remote `ssh` argv.
 
 Reconnect Claude Code (or restart the session) to pick up the new config.
 
@@ -49,14 +63,14 @@ Reconnect Claude Code (or restart the session) to pick up the new config.
 
 ```bash
 # T-1: repeated connect/disconnect shouldn't accumulate workers
-ps -ef | grep xcelium-mcp   # before vs. after a few Claude Code reconnects
+ps -ef | grep xcelium_mcp.supervisor   # before vs. after a few Claude Code reconnects
 
 # T-7: kill the supervisor, confirm cron restarts it within ~1 minute
-pkill -f xcelium-mcp-supervisor
-sleep 70 && ps -ef | grep xcelium-mcp-supervisor
+pkill -f xcelium_mcp.supervisor
+sleep 70 && ps -ef | grep xcelium_mcp.supervisor
 
 # T-8: the forwarder works standalone (no socat involved)
-/opt/mcp-env/bin/python -m xcelium_mcp.stdio_forward $HOME/.xcelium_mcp/run/xcelium-mcp.sock
+/opt/mcp-env/bin/python3 -m xcelium_mcp.stdio_forward $HOME/.xcelium_mcp/run/xcelium-mcp.sock
 ```
 
 ## Rollback

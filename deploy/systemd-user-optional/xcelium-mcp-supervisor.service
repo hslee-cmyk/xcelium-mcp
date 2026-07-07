@@ -11,7 +11,10 @@
 Description=xcelium-mcp prefork supervisor
 
 [Service]
-ExecStart=/opt/mcp-env/bin/xcelium-mcp-supervisor
+# 2026-07-07: /opt/mcp-env/bin/ is root-owned, so the xcelium-mcp-supervisor
+# console-script wrapper can't be (re)generated there without root — invoke
+# the module directly instead (works with the existing editable install).
+ExecStart=/opt/mcp-env/bin/python3 -m xcelium_mcp.supervisor
 Restart=on-failure
 UMask=0177
 

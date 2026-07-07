@@ -5,7 +5,13 @@
 #
 # Do not `crontab this-file` blindly if you already have other cron entries —
 # merge these lines into your existing crontab instead of overwriting it.
+#
+# 2026-07-07 cloud0 실측 정정: `/opt/mcp-env/bin/` is root-owned and NOT writable
+# by a regular user (confirmed on cloud0), so `pip install -e .` cannot generate
+# the xcelium-mcp-supervisor/xcelium-mcp-culler console-script wrappers there.
+# Invoke the modules directly via `python3 -m` instead — this works today with
+# the existing editable install, no new files needed under /opt/mcp-env/bin/.
 
-@reboot         /usr/bin/flock -n $HOME/.xcelium_mcp/run/supervisor.lock /opt/mcp-env/bin/xcelium-mcp-supervisor
-* * * * *       /usr/bin/flock -n $HOME/.xcelium_mcp/run/supervisor.lock /opt/mcp-env/bin/xcelium-mcp-supervisor
-*/5 * * * *     /opt/mcp-env/bin/xcelium-mcp-culler
+@reboot         /usr/bin/flock -n $HOME/.xcelium_mcp/run/supervisor.lock /opt/mcp-env/bin/python3 -m xcelium_mcp.supervisor
+* * * * *       /usr/bin/flock -n $HOME/.xcelium_mcp/run/supervisor.lock /opt/mcp-env/bin/python3 -m xcelium_mcp.supervisor
+*/5 * * * *     /opt/mcp-env/bin/python3 -m xcelium_mcp.idle_culler

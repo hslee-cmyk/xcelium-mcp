@@ -6,4 +6,5 @@ Description=xcelium-mcp idle worker culler (one-shot, triggered by the .timer)
 
 [Service]
 Type=oneshot
-ExecStart=/opt/mcp-env/bin/xcelium-mcp-culler
+# 2026-07-07: see xcelium-mcp-supervisor.service — same root-owned-bin-dir reason.
+ExecStart=/opt/mcp-env/bin/python3 -m xcelium_mcp.idle_culler

@@ -8,7 +8,7 @@
       "-o", "ServerAliveCountMax=3",
       "cloud0",
       "/opt/mcp-env/bin/python", "-m", "xcelium_mcp.stdio_forward",
-      "/home/<user>/.xcelium_mcp/run/xcelium-mcp.sock"
+      "<remote $HOME>/.xcelium_mcp/run/xcelium-mcp.sock"
     ],
     "env": {}
   }
