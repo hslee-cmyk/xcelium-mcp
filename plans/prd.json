@@ -2022,7 +2022,9 @@
         "tests/test_bisect.py에 소수점 신호값 케이스 추가 — gt/lt/eq/ne 4개 op 전부 (현재 gt/lt는 정수값에 대해서도 테스트가 전무했으므로 함께 보강)",
         "pytest passes"
       ],
-      "notes": "사용자 버그 리포트: 'bisect를 csv 파일로 처리할 때 소수점 자리가 지원이 안 되는 문제'. Explore 에이전트 조사(2026-07-02) + 직접 코드 확인으로 원인 2곳 확정:\n1. csv_cache.py:246,266 — `ns = int(raw_time)` / `s_ns = int(raw_t)`가 simvisdbutil이 소수점 SimTime을 내보내는 경우 uncaught ValueError로 bisect_signal_dump 전체가 크래시.\n2. csv_cache.py:311-312 — `_eval_condition()`의 `int(cur_val, 0)`/`int(target, 0)`가 소수점 문자열을 거부(base-0 int parsing은 '3.3' 파싱 불가). except에서 조용히 삼켜지고(321-322) String fallback(325-329)으로 빠지는데, 이 fallback은 eq/ne만 구현되어 있어 gt/lt는 소수점 값에 대해 항상 False 반환 — AMS/analog 신호(실수값)에서 gt/lt bisect가 항상 '찾을 수 없음'으로 보고됨. 에러 메시지도 없이 조용히 실패해 사용자가 원인을 알기 어려움.\n테스트 갭: tests/test_bisect.py는 정수 SimTime/정수 값만 커버, gt/lt op 자체가 한 번도 테스트된 적 없음.\n관련이지만 범위 밖(별도 검토 필요): shell_utils.py _parse_time_ns(:369-383), tcl_preprocessing.py _parse_l1_time_ns(:20-31)도 \\d+-only 정규식이라 동일한 소수점 미지원 패턴이지만, 이건 bisect CSV 경로가 아니라 bridge/checkpoint 시간 파싱이라 이번 버그 리포트 범위 밖으로 분리함(F-146). waveform.py:15 _TIME_RE(`^\\d+(\\.\\d+)?...`)는 이미 소수점을 정상 지원하는 대조군.\n전체 코드 소수점 취약 지점 광범위 조사(2026-07-02) 결과 F-145/F-146/F-147로 분리 추가함 — 상세 내역은 각 태스크 notes 참조. [2026-07-08 cloud0 라이브 검증: NOT-LIVE-VERIFIABLE, passes는 false로 유지] venezia-t0 환경의 덤프 CSV time(ns) 컬럼은 항상 정수(설계 precision이 1ns — sim_run(duration='0.5ns') 실행해도 진행 없음으로 확인)라 소수점 SimTime이 애초에 발생하지 않음. bisect_signal 자체는 정상 동작(w_scl 엣지를 100155ns에서 정확히 탐색) 확인했으나 이 버그의 핵심인 '소수점 SimTime' 경로는 이 프로젝트 데이터로는 재현 불가 — 인위적으로 소수점을 주입해 억지 재현하지 않기로 함(로컬 pytest 신규 테스트로만 커버됨, 코드 수정 자체는 이미 커밋됨). 다른 프로젝트(실제 소수점 SimTime을 내보내는 simvisdbutil 환경)에서 재검증 기회가 있으면 그때 라이브 확인 가능."
+      "notes": "사용자 버그 리포트: 'bisect를 csv 파일로 처리할 때 소수점 자리가 지원이 안 되는 문제'. Explore 에이전트 조사(2026-07-02) + 직접 코드 확인으로 원인 2곳 확정:\n1. csv_cache.py:246,266 — `ns = int(raw_time)` / `s_ns = int(raw_t)`가 simvisdbutil이 소수점 SimTime을 내보내는 경우 uncaught ValueError로 bisect_signal_dump 전체가 크래시.\n2. csv_cache.py:311-312 — `_eval_condition()`의 `int(cur_val, 0)`/`int(target, 0)`가 소수점 문자열을 거부(base-0 int parsing은 '3.3' 파싱 불가). except에서 조용히 삼켜지고(321-322) String fallback(325-329)으로 빠지는데, 이 fallback은 eq/ne만 구현되어 있어 gt/lt는 소수점 값에 대해 항상 False 반환 — AMS/analog 신호(실수값)에서 gt/lt bisect가 항상 '찾을 수 없음'으로 보고됨. 에러 메시지도 없이 조용히 실패해 사용자가 원인을 알기 어려움.\n테스트 갭: tests/test_bisect.py는 정수 SimTime/정수 값만 커버, gt/lt op 자체가 한 번도 테스트된 적 없음.\n관련이지만 범위 밖(별도 검토 필요): shell_utils.py _parse_time_ns(:369-383), tcl_preprocessing.py _parse_l1_time_ns(:20-31)도 \\d+-only 정규식이라 동일한 소수점 미지원 패턴이지만, 이건 bisect CSV 경로가 아니라 bridge/checkpoint 시간 파싱이라 이번 버그 리포트 범위 밖으로 분리함(F-146). waveform.py:15 _TIME_RE(`^\\d+(\\.\\d+)?...`)는 이미 소수점을 정상 지원하는 대조군.\n전체 코드 소수점 취약 지점 광범위 조사(2026-07-02) 결과 F-145/F-146/F-147로 분리 추가함 — 상세 내역은 각 태스크 notes 참조. [2026-07-08 cloud0 라이브 검증: NOT-LIVE-VERIFIABLE, passes는 false로 유지] venezia-t0 환경의 덤프 CSV time(ns) 컬럼은 항상 정수(설계 precision이 1ns — sim_run(duration='0.5ns') 실행해도 진행 없음으로 확인)라 소수점 SimTime이 애초에 발생하지 않음. bisect_signal 자체는 정상 동작(w_scl 엣지를 100155ns에서 정확히 탐색) 확인했으나 이 버그의 핵심인 '소수점 SimTime' 경로는 이 프로젝트 데이터로는 재현 불가 — 인위적으로 소수점을 주입해 억지 재현하지 않기로 함(로컬 pytest 신규 테스트로만 커버됨, 코드 수정 자체는 이미 커밋됨). 다른 프로젝트(실제 소수점 SimTime을 내보내는 simvisdbutil 환경)에서 재검증 기회가 있으면 그때 라이브 확인 가능.",
+      "skip": true,
+      "skip_reason": "사용자 지시(2026-07-08): F-144/F-145(bisect/compare_waveforms 소수점 SimTime)는 다른 프로젝트(venezia-fpga 등 실제 AMS/analog 신호 있는 환경)에서 직접 검증할 예정 -- ralph-loop 자동 대상 아님."
     },
     {
       "id": "F-145",
@@ -2036,7 +2038,9 @@
         "tests/에 소수점 SimTime을 가진 두 CSV를 비교하는 compare_csv_diff 테스트 추가 (기존엔 simvision_ops.py에 대한 단위 테스트 자체가 부족했을 가능성 — 확인 후 신규 테스트 파일 필요 시 생성)",
         "pytest passes"
       ],
-      "notes": "F-144 조사 중 사용자 요청으로 전체 코드 광범위 재조사(2026-07-02) — F-144와 완전히 독립적으로 구현된 두 번째 'SimTime → int()' 크래시 지점 발견. simvision_ops.py:395-402 `_load_rows()`가 compare_csv_diff()(→ compare_waveforms MCP tool)에서 사용되는데, csv_cache.py의 bisect_csv()와 똑같이 `int(raw_time)`을 try/except 없이 호출함 — 두 파일이 SimTime 파싱 로직을 독립적으로 각자 구현해서 같은 버그가 두 곳에 따로 존재하게 된 것. F-144 구현 시 공용 헬퍼(예: csv_cache.py에 `_parse_sim_time_ns(raw: str) -> int`)로 추출해 이 파일에서도 import해서 쓰면 재발 방지에 유리 — 구현 순서상 F-144를 먼저 하고 F-145에서 그 헬퍼를 재사용하는 것을 권장. [2026-07-08 cloud0 라이브 검증: NOT-LIVE-VERIFIABLE, passes는 false로 유지] F-144와 같은 이유 — venezia-t0의 유일한 real 타입 net(top.hw.r_Rect_V)이 실행한 디지털 테스트(i2c/gating) 동안 계속 0.0으로 고정돼 있어 덤프 데이터 자체에 소수점 값이 없음. compare_waveforms가 비교할 소수점 데이터가 없어 이 경로를 라이브로 재현할 수 없음(억지 주입 안 함) — 로컬 pytest 신규 테스트로만 커버됨."
+      "notes": "F-144 조사 중 사용자 요청으로 전체 코드 광범위 재조사(2026-07-02) — F-144와 완전히 독립적으로 구현된 두 번째 'SimTime → int()' 크래시 지점 발견. simvision_ops.py:395-402 `_load_rows()`가 compare_csv_diff()(→ compare_waveforms MCP tool)에서 사용되는데, csv_cache.py의 bisect_csv()와 똑같이 `int(raw_time)`을 try/except 없이 호출함 — 두 파일이 SimTime 파싱 로직을 독립적으로 각자 구현해서 같은 버그가 두 곳에 따로 존재하게 된 것. F-144 구현 시 공용 헬퍼(예: csv_cache.py에 `_parse_sim_time_ns(raw: str) -> int`)로 추출해 이 파일에서도 import해서 쓰면 재발 방지에 유리 — 구현 순서상 F-144를 먼저 하고 F-145에서 그 헬퍼를 재사용하는 것을 권장. [2026-07-08 cloud0 라이브 검증: NOT-LIVE-VERIFIABLE, passes는 false로 유지] F-144와 같은 이유 — venezia-t0의 유일한 real 타입 net(top.hw.r_Rect_V)이 실행한 디지털 테스트(i2c/gating) 동안 계속 0.0으로 고정돼 있어 덤프 데이터 자체에 소수점 값이 없음. compare_waveforms가 비교할 소수점 데이터가 없어 이 경로를 라이브로 재현할 수 없음(억지 주입 안 함) — 로컬 pytest 신규 테스트로만 커버됨.",
+      "skip": true,
+      "skip_reason": "사용자 지시(2026-07-08): F-144/F-145(bisect/compare_waveforms 소수점 SimTime)는 다른 프로젝트(venezia-fpga 등 실제 AMS/analog 신호 있는 환경)에서 직접 검증할 예정 -- ralph-loop 자동 대상 아님."
     },
     {
       "id": "F-146",
@@ -2502,6 +2506,38 @@
         "pytest passes, ruff check src/ clean"
       ],
       "notes": "venezia-fpga 세션에서 verilog-rtl-debugger agent가 F-175 schema migration gap(commit b6ad3c0) 검증 중 실전 재현(2026-07-08) — venezia-t0 프로젝트에 'VENEZIA_TOP015_i2c_8bit_offset_test' 등 TOP01x 테스트가 실제로 cached_tests에 존재하는데도 list_tests(pattern=\"*TOP01*\")가 \"No tests found (pattern=*TOP01*)\"를 반환. Root cause: L186이 `pattern in t` 순수 substring 매칭만 하는데, 테스트명은 'VENEZIA_TOP015_...'처럼 리터럴 '*'를 포함하지 않으므로 매칭 실패. sim_batch_run(정확한 전체 테스트명)으로 우회 검증해 F-175 자체는 정상 동작 확인됐고 이 버그는 F-175와 무관한 별개 이슈. docstring이 substring인지 glob인지 명시하지 않아 MCP 호출 agent(사람 유사)가 자연스럽게 glob 문법을 쓰다 조용히 빈 결과를 받는 UX 함정 — 에러 없이 빈 리스트만 반환해 디버깅 시 혼란 유발."
+    },
+    {
+      "id": "F-178",
+      "title": "아키텍처: schema_migration.py가 discovery.py Phase A를 거의 그대로 복제 + parse_test_discovery_output이 잘못된 모듈(test_resolution.py)에 있어 순환 임포트 유발",
+      "priority": 2,
+      "passes": true,
+      "acceptanceCriteria": [
+        "parse_test_discovery_output()와 test-discovery 커맨드 빌더(_build_test_discovery_cmd)를 의존성 없는 신규 저수준 모듈(예: test_discovery_scan.py)로 이동 -- shell_utils/tb_provenance.scan_test_dependencies 외 다른 프로젝트 내부 모듈 의존 없음",
+        "신규 모듈에 build_test_discovery_dict(sim_dir, tb_type) -> dict 공용 함수 추가 -- command 실행+파싱+cached_tests/cached_test_files 계산+의존성 스캔(best-effort)까지 한 번에 수행, discovery.py Phase A와 schema_migration._migrate_v1_add_tb_type_and_file_map 양쪽에서 재사용. 의존성 스캔 실패는 기존처럼 non-fatal(빈 dict)로 유지, 주 스캔(test_cmd 실행) 실패는 예외를 그대로 전파해 호출부가 각자 정책(discovery.py는 non-fatal 빈 결과, schema_migration은 F-1(_MigrationIncomplete)으로 재시도)을 적용하도록 함",
+        "discovery.py::run_full_discovery의 test_discovery dict 조립 시 schema_version=CURRENT_TEST_DISCOVERY_SCHEMA_VERSION을 명시적으로 포함 -- 현재 discovery.py가 만드는 config엔 schema_version이 없어서, 신규 discovery 직후에도 ensure_test_discovery_current가 v1으로 오인해 매번 불필요한 전체 재마이그레이션이 발생하는 drift 버그 수정(discovery.py가 schema_migration.CURRENT_TEST_DISCOVERY_SCHEMA_VERSION을 import -- schema_migration은 discovery를 더 이상 import하지 않으므로 순환 아님)",
+        "test_resolution.py::resolve_test_name()의 schema_migration.ensure_test_discovery_current 로컬(함수 내부) import를 모듈 레벨 import로 변경 -- schema_migration이 더 이상 test_resolution에 의존하지 않으므로 순환이 해소됨",
+        "discovery.py는 test_resolution을 더 이상 import하지 않음(parse_test_discovery_output이 이동했으므로)",
+        "tests/test_tb_provenance.py의 parse_test_discovery_output import 경로 갱신",
+        "tests/test_schema_migration.py / tests/test_resolve_test_name_cache_miss.py의 mock patch 대상(xcelium_mcp.schema_migration.shell_run 등)을 새 모듈 구조에 맞게 갱신 -- 기존 시나리오(마이그레이션 성공/실패/재시도, no-op) 전부 회귀 없이 통과",
+        "python -c \"import xcelium_mcp.server\" 성공 (순환 임포트 없음)",
+        "pytest passes, ruff check src/ clean"
+      ],
+      "notes": "code-analyzer agent 리뷰(2026-07-08, F-175/F-177 커밋 아키텍처+중복코드 리뷰) Major #1+#2 -- 두 findings가 하나의 근본 수정(leaf 함수 이동 + 공용 builder 추출)으로 함께 해소됨. 상세: schema_migration.py:47-104가 discovery.py:427-468과 거의 동일(command shape 완전 동일, docstring도 복제를 인정), discovery.py의 test_discovery dict에 schema_version 누락으로 인한 재마이그레이션 낭비 발견. Confidence 88%/90%.",
+      "completed_at": "2026-07-08"
+    },
+    {
+      "id": "F-179",
+      "title": "중복코드: list_tests()/resolve_test_name()의 마이그레이션 호출+비교+조건부 저장 3단계 패턴이 두 파일에 중복",
+      "priority": 3,
+      "passes": true,
+      "acceptanceCriteria": [
+        "schema_migration.py(F-178 정리 후)에 async def ensure_and_persist_test_discovery(resolved_dir: str, config: dict) -> list[str] 헬퍼 추가 -- discovery = config.get(\"test_discovery\", {}) 조회, ensure_test_discovery_current() 호출, migrated != discovery면 config[\"test_discovery\"]=migrated + save_sim_config() 호출, cached_tests 반환",
+        "tools/sim_lifecycle.py::list_tests()와 test_resolution.py::resolve_test_name() 둘 다 이 헬퍼를 사용하도록 교체 -- 기존 동작(변경 없을 때 저장 스킵 등) 회귀 없음",
+        "pytest passes"
+      ],
+      "notes": "code-analyzer agent 리뷰(2026-07-08) Minor #3 (confidence 82%). F-178(모듈 순환 정리) 이후 진행하면 자연스럽게 배치 가능하다고 리뷰에서 언급.",
+      "completed_at": "2026-07-08"
     }
   ]
 }

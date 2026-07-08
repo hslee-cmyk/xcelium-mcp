@@ -23,13 +23,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
 from typing import Awaitable, Callable
 
-from xcelium_mcp.shell_utils import shell_quote, shell_run
+from xcelium_mcp.registry import save_sim_config
 from xcelium_mcp.sim_env_detection import analyze_tb_type
-from xcelium_mcp.tb_provenance import scan_test_dependencies
-from xcelium_mcp.test_resolution import parse_test_discovery_output
+from xcelium_mcp.test_discovery_scan import build_test_discovery_dict
 
 logger = logging.getLogger(__name__)
 
@@ -44,63 +42,30 @@ class _MigrationIncomplete(Exception):
     """
 
 
-def _build_test_discovery_cmd(sim_dir: str, tb_type: str) -> str:
-    """Same command shape as discovery.py::run_full_discovery's Phase A
-    (the -n/filename:lineno format parse_test_discovery_output expects) —
-    kept here too because migration must rebuild `command` itself rather
-    than trust whatever pre-F-175 (name-only) command is already on file.
-    """
-    quoted_dir = shell_quote(sim_dir)
-    if tb_type == "uvm":
-        return f"grep -rn 'extends uvm_test' {quoted_dir} --include='*.sv' --include='*.svh' || true"
-    if tb_type == "sv_directed":
-        return f"grep -rn '^\\s*program ' {quoted_dir} --include='*.sv' || true"
-    return f"ls {quoted_dir}/tb_tests/*.v || true"
-
-
 async def _migrate_v1_add_tb_type_and_file_map(discovery: dict, sim_dir: str) -> dict:
     """v1 (cached_tests name-list only, pre-F-175) -> v2 (tb_type +
     cached_test_files + cached_dependency_files).
 
-    Re-detects tb_type and rebuilds `command` in the new -n format rather
-    than trusting the stored (pre-F-175, name-only) command — the old output
-    shape can't be parsed by parse_test_discovery_output. The primary
-    discovery re-scan raises _MigrationIncomplete on failure (caught by
-    ensure_test_discovery_current, which then does NOT advance schema_version
-    — so the next call retries instead of permanently recording an empty
-    cached_test_files as if this were a legitimately test-less project).
-    A failed *dependency* scan is lower-stakes (cached_test_files is already
-    populated by that point) and stays best-effort: it leaves
-    cached_dependency_files empty rather than raising.
+    Re-detects tb_type (unless already known) and rebuilds `command` in the
+    new -n format rather than trusting the stored (pre-F-175, name-only)
+    command — the old output shape can't be parsed by
+    parse_test_discovery_output. build_test_discovery_dict()'s primary scan
+    failure (RuntimeError/OSError/asyncio.TimeoutError) is converted to
+    _MigrationIncomplete here (caught by ensure_test_discovery_current, which
+    then does NOT advance schema_version — so the next call retries instead
+    of permanently recording an empty cached_test_files as if this were a
+    legitimately test-less project). A failed *dependency* scan stays
+    best-effort inside build_test_discovery_dict (cached_test_files is
+    already populated by that point).
     """
     tb_type = discovery.get("tb_type") or await analyze_tb_type(sim_dir)
-    test_cmd = _build_test_discovery_cmd(sim_dir, tb_type)
-
     try:
-        output = await shell_run(f"cd {shell_quote(sim_dir)} && {test_cmd}", timeout=30)
-        cached_test_files = parse_test_discovery_output(output, tb_type)
+        fresh = await build_test_discovery_dict(sim_dir, tb_type)
     except (RuntimeError, OSError, asyncio.TimeoutError) as e:
         raise _MigrationIncomplete(f"test discovery re-scan failed: {e}") from e
 
-    cached_dependency_files: dict[str, dict] = {}
-    if cached_test_files:
-        names = list(cached_test_files.keys())
-        try:
-            scan_results = await asyncio.gather(
-                *(scan_test_dependencies(cached_test_files[n], sim_dir) for n in names)
-            )
-            for name, entry in zip(names, scan_results):
-                cached_dependency_files[name] = entry
-        except (RuntimeError, OSError, asyncio.TimeoutError) as e:
-            logger.debug("schema migration: dependency scan failed (non-fatal): %s", e)
-
     migrated = dict(discovery)
-    migrated["command"] = test_cmd
-    migrated["tb_type"] = tb_type
-    migrated["cached_test_files"] = cached_test_files
-    migrated["cached_tests"] = sorted(cached_test_files.keys())
-    migrated["cached_dependency_files"] = cached_dependency_files
-    migrated["cached_at"] = datetime.now().isoformat()
+    migrated.update(fresh)
     return migrated
 
 
@@ -147,3 +112,20 @@ async def ensure_test_discovery_current(discovery: dict, sim_dir: str) -> dict:
         version += 1
     discovery["schema_version"] = version
     return discovery
+
+
+async def ensure_and_persist_test_discovery(resolved_dir: str, config: dict) -> list[str]:
+    """Migrate config["test_discovery"] to current and persist iff changed.
+
+    F-179: list_tests() and resolve_test_name() both used to inline this same
+    three-step transaction (call ensure_test_discovery_current, compare
+    against the original, conditionally save_sim_config) — this is the single
+    shared implementation. Mutates config["test_discovery"] in place when a
+    migration actually ran; returns the resulting cached_tests either way.
+    """
+    discovery = config.get("test_discovery", {})
+    migrated = await ensure_test_discovery_current(discovery, resolved_dir)
+    if migrated != discovery:
+        config["test_discovery"] = migrated
+        await save_sim_config(resolved_dir, config)
+    return migrated.get("cached_tests", [])

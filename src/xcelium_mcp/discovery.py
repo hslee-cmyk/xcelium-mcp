@@ -30,6 +30,7 @@ from xcelium_mcp.runner_detection import (
     resolve_eda_tools,
     resolve_external_tools,
 )
+from xcelium_mcp.schema_migration import CURRENT_TEST_DISCOVERY_SCHEMA_VERSION
 from xcelium_mcp.shell_utils import (
     UserInputRequired,
     shell_quote,
@@ -43,9 +44,8 @@ from xcelium_mcp.sim_env_detection import (
     detect_setup_tcls,
     discover_sim_dir,
 )
-from xcelium_mcp.tb_provenance import scan_test_dependencies
 from xcelium_mcp.tcl_bridge import DEFAULT_BRIDGE_PORT
-from xcelium_mcp.test_resolution import parse_test_discovery_output
+from xcelium_mcp.test_discovery_scan import build_test_discovery_cmd, build_test_discovery_dict
 
 logger = logging.getLogger(__name__)
 
@@ -421,51 +421,27 @@ async def run_full_discovery(
     if "ams_gate" in setup_tcls:
         mode_defaults["ams_gate"] = {"timeout": 3600, "probe_strategy": "selective", "extra_args": "", "dump_depth": "boundary"}
 
-    # F-175: -n (filename:lineno) instead of -h/-o so the file defining each
-    # test is captured (via parse_test_discovery_output) instead of discarded
-    # — needed to locate a test's TB source for provenance tracking.
-    _sd = shell_quote(sim_dir)
-    if tb_type == "uvm":
-        test_cmd = f"grep -rn 'extends uvm_test' {_sd} --include='*.sv' --include='*.svh' || true"
-    elif tb_type == "sv_directed":
-        test_cmd = f"grep -rn '^\\s*program ' {_sd} --include='*.sv' || true"
-    else:
-        test_cmd = f"ls {_sd}/tb_tests/*.v || true"
-
-    cached_tests: list[str] = []
-    cached_test_files: dict[str, str] = {}
+    # F-178: command-build + run + parse + dependency-scan flow lives in
+    # test_discovery_scan.py, shared with schema_migration.py's migration
+    # path — a failed primary scan is non-fatal here (fresh discovery still
+    # succeeds with an empty test list; force=True re-discovery is how a
+    # user retries).
     try:
-        r = await shell_run(f"cd {_sd} && {test_cmd}", timeout=30)
-        cached_test_files = parse_test_discovery_output(r, tb_type)
-        cached_tests = sorted(cached_test_files.keys())
+        test_discovery = await build_test_discovery_dict(sim_dir, tb_type)
     except (RuntimeError, OSError, asyncio.TimeoutError) as e:
         logger.debug("test discovery failed (non-fatal): %s", e)
-
-    # F-175: resolve each test's `include`/import dependency FILE LOCATIONS
-    # (+ the primary file's sha256 at this scan, for later staleness checks)
-    # here, once, at discovery time — never unconditionally on the per-run
-    # hot path (sim_batch_run/sim_regression/sim_bridge_run only re-scan if
-    # the primary file's content changed since — see tb_provenance.py).
-    cached_dependency_files: dict[str, dict] = {}
-    if cached_test_files:
-        names = list(cached_test_files.keys())
-        try:
-            scan_results = await asyncio.gather(
-                *(scan_test_dependencies(cached_test_files[n], sim_dir) for n in names)
-            )
-            for n, entry in zip(names, scan_results):
-                cached_dependency_files[n] = entry
-        except (RuntimeError, OSError, asyncio.TimeoutError) as e:
-            logger.debug("dependency file discovery failed (non-fatal): %s", e)
-
-    test_discovery = {
-        "command": test_cmd,
-        "tb_type": tb_type,
-        "cached_tests": cached_tests,
-        "cached_test_files": cached_test_files,
-        "cached_dependency_files": cached_dependency_files,
-        "cached_at": datetime.now().isoformat(),
-    }
+        test_discovery = {
+            "command": build_test_discovery_cmd(sim_dir, tb_type),
+            "tb_type": tb_type,
+            "cached_tests": [],
+            "cached_test_files": {},
+            "cached_dependency_files": {},
+            "cached_at": datetime.now().isoformat(),
+        }
+    # F-178: stamp the current schema version on fresh discovery too — its
+    # absence here was what caused a redundant full re-migration on the very
+    # first list_tests()/resolve_test_name() call after every discovery.
+    test_discovery["schema_version"] = CURRENT_TEST_DISCOVERY_SCHEMA_VERSION
 
     config = {
         "version": 2,

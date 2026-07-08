@@ -1,7 +1,7 @@
 """Tests for TB source provenance (F-175).
 
 Covers the two new units the feature is built on:
-  - test_resolution.parse_test_discovery_output — turns test_discovery's
+  - test_discovery_scan.parse_test_discovery_output — turns test_discovery's
     grep -n output into {test_name: defining_file_path}, for uvm/sv_directed/
     legacy tb_type formats.
   - tb_provenance.{resolve_tb_source_file, compute_file_sha256,
@@ -27,7 +27,7 @@ from xcelium_mcp.tb_provenance import (
     resolve_cached_dependency_files,
     resolve_tb_source_file,
 )
-from xcelium_mcp.test_resolution import parse_test_discovery_output
+from xcelium_mcp.test_discovery_scan import parse_test_discovery_output
 
 # ---------------------------------------------------------------------------
 # parse_test_discovery_output

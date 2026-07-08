@@ -47,12 +47,12 @@ async def test_pre_f175_config_gets_migrated_and_resolves_name(tmp_path) -> None
               return_value=sim_dir),
         patch("xcelium_mcp.test_resolution.load_sim_config", new_callable=AsyncMock,
               return_value=cfg),
-        patch("xcelium_mcp.test_resolution.save_sim_config", side_effect=_fake_save),
+        patch("xcelium_mcp.schema_migration.save_sim_config", side_effect=_fake_save),
         patch("xcelium_mcp.schema_migration.analyze_tb_type", new_callable=AsyncMock,
               return_value="uvm"),
-        patch("xcelium_mcp.schema_migration.shell_run", new_callable=AsyncMock,
+        patch("xcelium_mcp.test_discovery_scan.shell_run", new_callable=AsyncMock,
               return_value=grep_output),
-        patch("xcelium_mcp.schema_migration.scan_test_dependencies", new_callable=AsyncMock,
+        patch("xcelium_mcp.test_discovery_scan.scan_test_dependencies", new_callable=AsyncMock,
               return_value={"scanned_primary_sha256": "abc123", "deps": []}),
     ):
         result = await resolve_test_name("TOP015", sim_dir)
@@ -86,9 +86,9 @@ async def test_already_migrated_config_short_circuits_without_rerunning_discover
               return_value=sim_dir),
         patch("xcelium_mcp.test_resolution.load_sim_config", new_callable=AsyncMock,
               return_value=cfg),
-        patch("xcelium_mcp.test_resolution.save_sim_config", new_callable=AsyncMock) as mock_save,
+        patch("xcelium_mcp.schema_migration.save_sim_config", new_callable=AsyncMock) as mock_save,
         patch("xcelium_mcp.schema_migration.analyze_tb_type", new_callable=AsyncMock) as mock_tb_type,
-        patch("xcelium_mcp.schema_migration.shell_run", new_callable=AsyncMock) as mock_shell,
+        patch("xcelium_mcp.test_discovery_scan.shell_run", new_callable=AsyncMock) as mock_shell,
     ):
         result = await resolve_test_name("VENEZIA_TOP015_test", sim_dir)
 
@@ -115,12 +115,12 @@ async def test_substring_match_after_migration(tmp_path) -> None:
               return_value=sim_dir),
         patch("xcelium_mcp.test_resolution.load_sim_config", new_callable=AsyncMock,
               return_value=cfg),
-        patch("xcelium_mcp.test_resolution.save_sim_config", new_callable=AsyncMock),
+        patch("xcelium_mcp.schema_migration.save_sim_config", new_callable=AsyncMock),
         patch("xcelium_mcp.schema_migration.analyze_tb_type", new_callable=AsyncMock,
               return_value="uvm"),
-        patch("xcelium_mcp.schema_migration.shell_run", new_callable=AsyncMock,
+        patch("xcelium_mcp.test_discovery_scan.shell_run", new_callable=AsyncMock,
               return_value=grep_output),
-        patch("xcelium_mcp.schema_migration.scan_test_dependencies", new_callable=AsyncMock,
+        patch("xcelium_mcp.test_discovery_scan.scan_test_dependencies", new_callable=AsyncMock,
               return_value={"scanned_primary_sha256": "x", "deps": []}),
     ):
         result = await resolve_test_name("TOP015", sim_dir)

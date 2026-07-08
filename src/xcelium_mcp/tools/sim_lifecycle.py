@@ -22,7 +22,7 @@ from xcelium_mcp.registry import (
     save_sim_config,
     update_session_state,
 )
-from xcelium_mcp.schema_migration import ensure_test_discovery_current
+from xcelium_mcp.schema_migration import ensure_and_persist_test_discovery
 from xcelium_mcp.shell_utils import UserInputRequired, get_user_tmp_dir, shell_run
 from xcelium_mcp.tb_provenance import build_tb_provenance, format_tb_provenance
 from xcelium_mcp.tcl_bridge import BRIDGE_ERRORS, TclBridge, TclError
@@ -197,11 +197,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         # missing) used to fall through this check forever. See
         # schema_migration.py / xcelium-mcp-f175-provenance-migration-gap
         # plan+design docs.
-        migrated = await ensure_test_discovery_current(discovery, resolved_dir)
-        if migrated != discovery:
-            config["test_discovery"] = migrated
-            await save_sim_config(resolved_dir, config)
-        cached = migrated.get("cached_tests", [])
+        cached = await ensure_and_persist_test_discovery(resolved_dir, config)
 
         if pattern:
             cached = _filter_test_names(cached, pattern)

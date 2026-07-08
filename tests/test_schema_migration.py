@@ -44,12 +44,12 @@ class TestEnsureTestDiscoveryCurrent:
                 return_value="uvm",
             ),
             patch(
-                "xcelium_mcp.schema_migration.shell_run",
+                "xcelium_mcp.test_discovery_scan.shell_run",
                 new_callable=AsyncMock,
                 return_value=grep_output,
             ),
             patch(
-                "xcelium_mcp.schema_migration.scan_test_dependencies",
+                "xcelium_mcp.test_discovery_scan.scan_test_dependencies",
                 new_callable=AsyncMock,
                 return_value={"scanned_primary_sha256": "deadbeef", "deps": []},
             ),
@@ -81,7 +81,7 @@ class TestEnsureTestDiscoveryCurrent:
         }
         with (
             patch("xcelium_mcp.schema_migration.analyze_tb_type", new_callable=AsyncMock) as m_tb_type,
-            patch("xcelium_mcp.schema_migration.shell_run", new_callable=AsyncMock) as m_shell,
+            patch("xcelium_mcp.test_discovery_scan.shell_run", new_callable=AsyncMock) as m_shell,
         ):
             result = await ensure_test_discovery_current(discovery, "/sim")
 
@@ -102,7 +102,7 @@ class TestEnsureTestDiscoveryCurrent:
                 return_value="uvm",
             ),
             patch(
-                "xcelium_mcp.schema_migration.shell_run",
+                "xcelium_mcp.test_discovery_scan.shell_run",
                 new_callable=AsyncMock,
                 return_value="",
             ),
@@ -127,7 +127,7 @@ class TestEnsureTestDiscoveryCurrent:
                 return_value="uvm",
             ),
             patch(
-                "xcelium_mcp.schema_migration.shell_run",
+                "xcelium_mcp.test_discovery_scan.shell_run",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("ssh connection lost"),
             ),
@@ -153,12 +153,12 @@ class TestEnsureTestDiscoveryCurrent:
                 return_value="uvm",
             ),
             patch(
-                "xcelium_mcp.schema_migration.shell_run",
+                "xcelium_mcp.test_discovery_scan.shell_run",
                 new_callable=AsyncMock,
                 return_value=grep_output,
             ),
             patch(
-                "xcelium_mcp.schema_migration.scan_test_dependencies",
+                "xcelium_mcp.test_discovery_scan.scan_test_dependencies",
                 new_callable=AsyncMock,
                 return_value={"scanned_primary_sha256": "abc", "deps": []},
             ),

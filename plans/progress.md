@@ -1,6 +1,29 @@
 
 ---
 
+## 2026-07-08 - F-178/F-179: code-analyzer 리뷰(architecture+중복코드) 기반 리팩터
+
+### 배경
+`/code-review` → `bkit:code-analyzer` agent가 F-175/F-177 커밋을 architecture+중복코드 관점에서 리뷰. Major #1(순환 임포트는 증상, 진짜 문제는 `parse_test_discovery_output`이 leaf 함수인데 orchestration 모듈(test_resolution.py)에 잘못 놓여있는 것), Major #2(`schema_migration.py`가 `discovery.py` Phase A를 거의 그대로 복제 + discovery.py가 만드는 config에 `schema_version`이 없어 매번 불필요한 재마이그레이션 발생), Minor #3(`list_tests()`/`resolve_test_name()`의 마이그레이션+저장 패턴 중복) 발견. F-178(=#1+#2 통합, 리뷰가 "하나의 근본 수정으로 함께 해소된다"고 명시)/F-179(=#3)로 prd.json 등록 후 구현.
+
+### 구현
+- **신규 모듈** `src/xcelium_mcp/test_discovery_scan.py`: `parse_test_discovery_output`(test_resolution.py에서 이동) + `build_test_discovery_cmd` + `build_test_discovery_dict(sim_dir, tb_type)`(discovery.py Phase A와 schema_migration 양쪽이 재사용하는 공용 flow) — shell_utils/tb_provenance 외 프로젝트 내부 모듈 의존 없는 순수 leaf 모듈
+- `discovery.py`: Phase A가 `build_test_discovery_dict()` 호출로 교체, `schema_version=CURRENT_TEST_DISCOVERY_SCHEMA_VERSION` 명시적 스탬프 추가(drift 버그 수정) — `schema_migration.CURRENT_TEST_DISCOVERY_SCHEMA_VERSION`을 import(schema_migration은 더 이상 discovery/test_resolution에 의존 안 하므로 순환 아님)
+- `schema_migration.py`: `_migrate_v1_add_tb_type_and_file_map`이 `build_test_discovery_dict()` 재사용하도록 축소, F-179용 `ensure_and_persist_test_discovery(resolved_dir, config)` 헬퍼 신규 추가
+- `test_resolution.py`: `parse_test_discovery_output` 정의 제거, `schema_migration` 모듈 레벨 import로 전환(순환 해소, 로컬 import 워크어라운드 제거), `resolve_test_name()`이 `ensure_and_persist_test_discovery()` 사용
+- `tools/sim_lifecycle.py`: `list_tests()`도 동일하게 `ensure_and_persist_test_discovery()` 사용
+- 신규 테스트: `tests/test_discovery_scan.py`(7개, build_test_discovery_dict/cmd 단위 테스트 — 이전엔 이 flow가 discovery.py/schema_migration.py 양쪽에 중복 구현된 채 어느 쪽도 직접 단위테스트가 없었음)
+- 기존 테스트 patch 대상 갱신: `test_tb_provenance.py`(import 경로), `test_schema_migration.py`/`test_resolve_test_name_cache_miss.py`(mock patch가 `xcelium_mcp.schema_migration.*` → `xcelium_mcp.test_discovery_scan.*`로 이동한 내부 함수 따라감)
+
+### 결과
+606 tests passed(599→606, +7), ruff clean, `python -c "import xcelium_mcp.server"` 순환 임포트 없음 확인. F-144/F-145는 사용자 지시로 skip:true 처리(다른 프로젝트에서 검증 예정).
+
+### Learnings
+- code-analyzer 리뷰가 잡아낸 "discovery.py가 만드는 config엔 schema_version이 없다"는 발견은 실제로 신규 discovery 직후 매번 불필요한 전체 재마이그레이션(grep+의존성 스캔 재실행)을 유발하는 실질적 낭비였음 — 코드 두 곳이 "비슷해 보이는 로직"을 각자 구현하면 이런 drift가 리뷰 없이는 발견되기 어려움
+- "prd에 기록만 해달라"는 요청과 "ralph-loop로 실행해달라"는 요청은 반드시 분리해서 처리 — 이번 세션에서 등록 직후 바로 구현에 들어갔다가 사용자에게 지적받음(관련 메모리 갱신 완료)
+
+---
+
 ## 2026-07-08 - prd.json bookkeeping audit — 28개 pending 항목 중 27개가 이미 구현 완료 상태였음
 
 ### 배경

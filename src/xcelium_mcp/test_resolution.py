@@ -1,53 +1,16 @@
 """Test name and simulation parameter resolution for xcelium-mcp.
 
 Extracted from batch_runner.py (F-038 structural split).
-Contains: resolve_test_name, resolve_sim_params, parse_test_discovery_output.
+Contains: resolve_test_name, resolve_sim_params.
+
+F-178: parse_test_discovery_output moved to test_discovery_scan.py — it was a
+dependency-free leaf function misplaced in this (orchestration) module, which
+forced schema_migration.py into a circular-import workaround.
 """
 from __future__ import annotations
 
-import re
-from pathlib import Path
-
-from xcelium_mcp.registry import load_sim_config, resolve_sim_dir, save_sim_config
-
-# F-175: test_discovery's grep command (built in discovery.py) now emits
-# `-n` (filename:lineno:content) instead of `-h` (content only), so the file
-# that defines each test can be captured instead of discarded — needed to
-# locate a test's TB source file for provenance (build_tb_provenance).
-_UVM_TEST_LINE_RE = re.compile(r"^(?P<file>[^:]+):\d+:.*\bclass\s+(?P<name>\w+)\b")
-_SV_PROGRAM_LINE_RE = re.compile(r"^(?P<file>[^:]+):\d+:\s*program\s+(?P<name>\w+)\b")
-
-
-def parse_test_discovery_output(raw: str, tb_type: str) -> dict[str, str]:
-    """Parse test_discovery.command output into {test_name: defining_file_path}.
-
-    tb_type selects the line format the command (built in discovery.py) emits:
-      "uvm"         — "{file}:{lineno}:...class {Name} extends uvm_test..."
-      "sv_directed" — "{file}:{lineno}:program {Name}..."
-      other         — bare file paths, one per line (tb_tests/*.v listing;
-                       name = path stem)
-    Unmatched/malformed lines are silently skipped — test discovery (and the
-    TB-source lookup built on it) is best-effort, not a hard requirement.
-    """
-    if tb_type == "uvm":
-        pattern = _UVM_TEST_LINE_RE
-    elif tb_type == "sv_directed":
-        pattern = _SV_PROGRAM_LINE_RE
-    else:
-        pattern = None
-
-    names_to_files: dict[str, str] = {}
-    for line in raw.strip().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        if pattern is None:
-            names_to_files.setdefault(Path(line).stem, line)
-            continue
-        m = pattern.match(line)
-        if m:
-            names_to_files.setdefault(m.group("name"), m.group("file"))
-    return names_to_files
+from xcelium_mcp.registry import load_sim_config, resolve_sim_dir
+from xcelium_mcp.schema_migration import ensure_and_persist_test_discovery
 
 
 def resolve_sim_params(
@@ -138,17 +101,7 @@ async def resolve_test_name(short_name: str, sim_dir: str = "") -> str:
         # mcp_config set). The "test_discovery.command" key is in _PROTECTED_KEYS
         # (registry.py), so it cannot be overwritten via mcp_config set — only
         # sim_discover can populate it. We treat this as trusted user input.
-        #
-        # Local import: schema_migration.py imports parse_test_discovery_output
-        # from this module, so a module-level import here would be circular.
-        from xcelium_mcp.schema_migration import ensure_test_discovery_current
-
-        discovery = cfg.get("test_discovery", {})
-        migrated = await ensure_test_discovery_current(discovery, resolved_dir)
-        if migrated != discovery:
-            cfg["test_discovery"] = migrated
-            await save_sim_config(resolved_dir, cfg)
-        cached = migrated.get("cached_tests", [])
+        cached = await ensure_and_persist_test_discovery(resolved_dir, cfg)
 
     if not cached:
         return short_name  # No cache, no command → pass through
