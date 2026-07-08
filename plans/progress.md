@@ -1058,3 +1058,24 @@ python -m pytest && python -m ruff check src/
 - stop-hook.sh uses `eval` for VERIFY_COMMAND to allow `&&` chaining
 
 ---
+
+## 2026-07-08 - F-184: Supervisor 재기동 절차를 xcelium-sim skill에 문서화
+
+### Task: 원격 supervisor '코드 최신 반영 확인 + 재기동' 절차 문서화 (docs-only)
+
+**What was implemented:**
+- `skill-src/xcelium-sim/references/server-ops.md` 신규 추가 — 코드 최신 반영 확인(git log + supervisor 프로세스 시작 시각 비교) 및 재기동(`pkill -f xcelium_mcp.supervisor` → cron 워치독 자동 재기동) 절차 문서화. 특정 호스트명은 하드코딩하지 않고 일반화된 표현만 사용.
+- `skill-src/xcelium-sim/SKILL.md` — 트리거 키워드에 재기동/supervisor/연결 안 됨/최신 코드 반영 안 됨/MCP 응답 없음 추가, phase 표 아래에 Ops 참조 행 추가.
+
+**Files changed:**
+- skill-src/xcelium-sim/references/server-ops.md (new)
+- skill-src/xcelium-sim/SKILL.md
+- plans/progress.md (this entry)
+
+**Learnings:**
+- supervisor는 fork 모델이라 editable install이어도 이미 import된 코드가 메모리에 고정됨 — 디스크 코드가 최신이어도 프로세스 시작 시각이 최신 커밋보다 이르면 재기동이 필요하다는 게 실측으로 확인된 핵심 판단 기준.
+- 이 배포의 공식 재기동 절차는 별도 graceful shutdown이 아니라 `pkill` + cron 워치독(flock 기반, 최대 1분) — `deploy/README.md` §4 T-7에 이미 실측 검증되어 있었음.
+- 문서 전용 변경이라 pytest/ruff 영향 없음(614 passed, ruff clean) 확인.
+- prd.json의 `passes` 필드는 사용자가 직접 리뷰 후 플립하는 규칙이라 이번에도 건드리지 않음 (F-184는 여전히 passes:false로 남겨둠).
+
+---

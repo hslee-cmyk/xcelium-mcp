@@ -4,7 +4,8 @@ description: |
   xcelium-mcp MCP tool(24개)을 phase별로 언제·어떤 파라미터로 쓸지 안내. RTL 시뮬레이션 디버깅
   워크플로우(Phase 0 인프라 분석~Phase 5 수정+regression)를 단계별로 가이드.
   트리거: xcelium, simvision, waveform, FAIL 분석, 시뮬레이션, debugging, 디버깅, CSV,
-    checkpoint, bisect, regression, dump_scopes, dump_depth.
+    checkpoint, bisect, regression, dump_scopes, dump_depth, 재기동, supervisor,
+    연결 안 됨, 최신 코드 반영 안 됨, MCP 응답 없음.
 argument-hint: ""
 user-invocable: false
 ---
@@ -33,6 +34,7 @@ xcelium-mcp(Cadence Xcelium/SimVision MCP 서버)의 24개 tool을 RTL 디버깅
 | Phase 4 | `references/phase-4-waveform.md` | 2차 판별(waveform CSV, bisect, FSM 전이 대조) |
 | Phase 5 | `references/phase-5-fix-regression.md` | 수정 + Regression + 문서 갱신 + **세션 종료 시뮬레이션 정리(5F, 필수)** |
 | — | `references/tool-map.md` | 24개 tool 전체 결정 매트릭스 (모든 phase에서 참조) |
+| Ops | `references/server-ops.md` | 원격 supervisor 코드 최신 반영 확인 + 재기동 (tool 응답 이상/재기동 필요 시 phase와 무관하게 참조) |
 
 ### 사용 절차
 
