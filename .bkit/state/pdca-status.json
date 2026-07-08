@@ -33,13 +33,18 @@
       },
       "timestamps": {
         "started": "2026-04-03T00:00:00.000Z",
-        "lastUpdated": "2026-07-03T05:00:00.000Z"
+        "lastUpdated": "2026-07-08T00:00:00.000Z"
       },
       "lastFile": "C:\\Users\\HSLEE\\Documents\\Todoc\\fpga\\xcelium-mcp\\docs\\01-plan\\features\\xcelium-mcp-debug-workflow-v2.plan.md",
       "stateMachine": {
         "currentState": "plan",
         "previousState": null,
-        "stateHistory": [],
+        "stateHistory": [
+          {
+            "note": "v1.10: Phase 1(tool-usage-guide.design.md, matchRate 98%) 완료 반영 -- tool count 24->25 재감사, pytest 기준선 472->617, SS4.3 가상 파일 구조를 실제 Phase 1 산출물(phase-0~5+tool-map+server-ops)로 전면 교체, verilog-rtl-debugger agent 생성 완료 반영",
+            "ts": "2026-07-08T00:00:00.000Z"
+          }
+        ],
         "retryCount": 0,
         "maxRetries": 5,
         "circuitBreakerOpen": false

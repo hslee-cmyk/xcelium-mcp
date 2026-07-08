@@ -1,15 +1,15 @@
-# tool-map.md — xcelium-mcp 24개 tool 결정 매트릭스
+# tool-map.md — xcelium-mcp 25개 tool 결정 매트릭스
 
-> xcelium-mcp는 Cadence Xcelium/SimVision을 MCP로 제어하는 24개 tool(7개 모듈, action 파라미터 기반 통합)을 제공한다. 이 문서는 "지금 어떤 tool을 어떤 파라미터로 써야 하는가"를 phase별로 즉시 답하기 위한 결정 매트릭스다.
+> xcelium-mcp는 Cadence Xcelium/SimVision을 MCP로 제어하는 25개 tool(7개 모듈, action 파라미터 기반 통합)을 제공한다. 이 문서는 "지금 어떤 tool을 어떤 파라미터로 써야 하는가"를 phase별로 즉시 답하기 위한 결정 매트릭스다.
 >
-> **소스**: 2026-07-03 `src/xcelium_mcp/tools/*.py` 직접 대조(`grep -c "@mcp.tool()"` = 24) 기준. CLAUDE.md 프로즈가 아니라 이 감사 결과가 원본이다.
+> **소스**: 2026-07-08 `src/xcelium_mcp/tools/*.py` 직접 대조(`grep -c "@mcp.tool()"` = 25) 기준. CLAUDE.md 프로즈가 아니라 이 감사 결과가 원본이다. **이 숫자는 고정값이 아니다** — 새 tool이 추가될 때마다 같은 명령으로 재감사할 것(2026-07-03 감사 이후 F-3 sim-session-reaper가 `list_active_sessions`를 추가해 24→25가 된 사례 참조).
 > **자기완결성 안내**: 이 문서는 Claude(skill 세션 내)와 `verilog-rtl-debugger` agent(chip-design-skills가 배포, 별도 context에서 실행) 양쪽에서 단독으로 읽힌다 — "위에서 설명한" 같은 세션-종속 표현 없이 매 항목이 독립적으로 이해 가능해야 한다.
 
 ---
 
-## 전체 tool 인벤토리 (24개 네이티브 + ssh-mcp 헬퍼 1건 별도)
+## 전체 tool 인벤토리 (25개 네이티브 + ssh-mcp 헬퍼 1건 별도)
 
-### Sim Lifecycle — 환경 설정 + 실행 제어 (10)
+### Sim Lifecycle — 환경 설정 + 실행 제어 (11)
 
 | Phase | Tool | Action/파라미터 | 용도 |
 |-------|------|-----------------|------|
@@ -21,6 +21,7 @@
 | 2B | `sim_disconnect` | `action`: "bridge"(연결만 해제)/"shutdown"(안전 종료, SHM 보존) | **주의**: 디버깅 세션 종료 시 항상 "shutdown" 사용 — 일반 disconnect나 pkill은 SHM 유실 |
 | 2B | `sim_run` | `duration`, `timeout`, `chunk`(기본 100000ns) | 시간/breakpoint 지정 실행. 중단하려면 외부에서 sentinel 파일 생성(아래 참고) |
 | 2B | `sim_status` | `target` | 현재 시간/scope/상태 조회 |
+| — | `list_active_sessions` | (파라미터 없음) | (2026-07-07, F-3) 등록된 모든 bridge 세션을 마지막 활동 시각+TTL 상태와 함께 조회(읽기 전용). 방치된 세션을 TTL 기반 자동 리퍼가 강제 종료하기 전에 먼저 확인하고 `sim_disconnect(action="shutdown")`로 직접 정리할 때 사용 |
 | 2B | `sim_restart` | — | 시뮬레이션을 time 0으로 재시작(init snapshot 복원) |
 | 2B | `execute_tcl` | `tcl_cmd`, `timeout`, `target` | 임의 Tcl 명령 실행(escape hatch) — 전용 tool 없을 때만 사용 |
 
