@@ -1,6 +1,28 @@
 
 ---
 
+## 2026-07-08 - F-180: stdio_forward.py 블로킹 read 버그 수정 (priority 1, ralph-loop --next 픽)
+
+### 배경
+venezia-fpga 세션에서 `~/.claude.json`을 `ssh cloud0 xcelium-mcp` 직접 실행 방식에서 `stdio_forward.py`(supervisor+socket 아키텍처) 방식으로 컷오버하던 중 발견. 컷오버 직후 Claude Code가 "MCP server xcelium-mcp connection timed out after 30000ms"로 재연결 실패. cloud0에서 직접 재현: 메시지 전송 후 프로세스를 즉시 EOF로 종료시키면 정상 응답이 왔지만(오탐), stdin을 열어둔 채(실제 클라이언트처럼) 대기하면 최초 메시지조차 전달 안 됨을 확인.
+
+### Root Cause
+`stdio_forward.py:49`의 `stdin.read(_CHUNK_SIZE)`(`io.BufferedReader.read(n)`)는 n바이트(64KB)가 다 모이거나 EOF가 올 때까지 블로킹. 실제 MCP JSON-RPC 메시지는 수백~수천 바이트라 64KB에 한참 못 미치고, 연결도 EOF 없이 계속 열려있어 영원히 안 넘어감.
+
+### 구현
+- `stdin.read(_CHUNK_SIZE)` → `stdin.read1(_CHUNK_SIZE)`로 교체 — 단일 raw read만 수행하고 가용한 만큼 즉시 반환(EOF/버퍼풀 때까지 안 기다림), `sock.recv()`와 동일한 non-blocking-relay 계약
+- 신규 `tests/test_stdio_forward.py`(4개): `os.pipe()`(가짜 stdin) + `socket.socketpair()`(가짜 worker 소켓)로 실제 블로킹 동작을 재현 — EOF 없이 작은 청크 즉시 전달, 여러 청크 순서대로, 64KB 초과 큰 페이로드 무손실 전달, EOF 시 SHUT_WR 전파(기존 동작 유지) 검증
+- **회귀 테스트 자체 검증**: 수정 전 코드(`read1`→`read`)로 임시 되돌려서 `test_single_small_chunk_forwarded_without_eof`가 실제로 타임아웃으로 실패하는 것 확인 후 원복 — 테스트가 진짜 버그를 잡아내는지 실측
+- `docs/02-design/features/xcelium-mcp-server-process-lifecycle.design.md` T-8 갱신: "메시지 후 즉시 EOF" 검증 방식이 이 버그를 놓친 근본 원인이었음을 회고로 기록, "연결을 열어둔 채" 검증하도록 시나리오 자체를 수정
+
+### 결과
+610 tests passed(606→610, +4), ruff clean. 이 버그가 고쳐지기 전까지 서비스는 옛 방식(`ssh cloud0 xcelium-mcp` 직접 실행)으로 되돌려둔 상태였음 — F-A(server-process-lifecycle) 컷오버는 이 수정 반영 후 재시도 필요(cloud0 배포 자체는 이번 세션 범위 밖).
+
+### Learnings
+- "메시지 1개 보내고 프로세스 종료"와 "연결을 계속 열어두고 메시지 주고받기"는 완전히 다른 코드 경로를 탄다 — 특히 블로킹 I/O가 관여하는 릴레이/포워더류 코드는 반드시 "연결 유지" 시나리오로 검증해야 함. 원래 PDCA T-8 검증이 전자로만 이루어져 이 버그가 사이클을 통과했던 것.
+
+---
+
 ## 2026-07-08 - F-178/F-179: code-analyzer 리뷰(architecture+중복코드) 기반 리팩터
 
 ### 배경

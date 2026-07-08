@@ -42,11 +42,20 @@ def _pump_sock_to_stdout(sock: socket.socket) -> None:
 
 
 def _pump_stdin_to_sock(sock: socket.socket) -> None:
-    """Relay stdin -> socket until the client closes stdin (normal disconnect)."""
+    """Relay stdin -> socket until the client closes stdin (normal disconnect).
+
+    F-180: stdin.read(n) (io.BufferedReader.read) blocks until n bytes have
+    accumulated OR EOF — but a real MCP client keeps the connection open
+    indefinitely and sends JSON-RPC messages far smaller than _CHUNK_SIZE
+    (64KB), so the first message never got forwarded at all. stdin.read1(n)
+    performs a single underlying read() and returns whatever is immediately
+    available (at least 1 byte, or b"" at EOF) without waiting to fill the
+    buffer — same non-blocking-relay contract sock.recv() already has above.
+    """
     stdin = sys.stdin.buffer
     try:
         while True:
-            chunk = stdin.read(_CHUNK_SIZE)
+            chunk = stdin.read1(_CHUNK_SIZE)
             if not chunk:
                 break
             sock.sendall(chunk)

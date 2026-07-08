@@ -374,7 +374,9 @@ OnUnitActiveSec=5min
 | T-5 | sim_dir 없이 `connect_simulator(auto)` 호출 시 브릿지 ≥2개 → 모호성 에러 | `sim_lifecycle.py` | pytest(OS 무관) |
 | T-6 | 회귀: 기존 26개 MCP tool이 fork 워커 위에서도 동일 동작 | 전체 | 기존 pytest 스위트(무변경) + cloud0 수동 스모크 |
 | T-7(신규) | 수퍼바이저를 `kill -9`로 강제 종료 후 최대 1분 대기 → cron `* * * * *` 워치독이 `flock` 락 해제를 감지하고 자동 재기동 | `supervisor.py`+crontab(§7.2) | cloud0 |
-| T-8(신규) | `python -m xcelium_mcp.stdio_forward <sock>`을 cloud0에서 직접 실행 → 소켓 연결 및 양방향 바이트 중계 확인(socat 없이) | `stdio_forward.py` | cloud0 |
+| T-8(신규, F-180 이후 갱신) | `python -m xcelium_mcp.stdio_forward <sock>`을 cloud0에서 직접 실행 → **연결을 열어둔 채**(EOF 주지 않고, 실제 Claude Code처럼 세션 내내 stdin 유지) 메시지를 주고받아 양방향 바이트 중계 확인(socat 없이) | `stdio_forward.py` | cloud0 |
+
+> **F-180 회고(2026-07-08)**: 최초 T-8 검증은 "메시지 1개 전송 후 프로세스 즉시 종료(EOF)" 형태로만 수행되어, `stdio_forward.py`의 `stdin.read(n)`이 64KB 모이거나 EOF가 올 때까지 블로킹하는 버그(실제 클라이언트처럼 연결을 계속 열어두면 최초 메시지조차 전달 안 됨)를 놓쳤다 — `~/.claude.json` 컷오버 실제 시도 중 발견. `stdin.read1(n)`으로 수정 완료(`tests/test_stdio_forward.py`). **교훈**: "연결을 계속 열어두는" 프로토콜(MCP stdio 등)을 로컬에서 재현 검증할 때는 반드시 EOF를 주지 않는 시나리오를 포함해야 한다 — "메시지 후 즉시 종료"는 별개의(더 관대한) 경로를 타는 거짓 양성(false positive)을 만들 수 있다.
 
 ---
 
