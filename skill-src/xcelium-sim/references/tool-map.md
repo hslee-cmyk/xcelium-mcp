@@ -130,6 +130,10 @@ bisect_signal(signal="...", op="eq", value="3", start_ns=0, end_ns=15000000)  # 
 
 **Mode A 응답에는 `CSV: {path}`가 포함된다** — `[signal]+context_signals`를 이미 추출·캐싱(`csv_cache.extract`)해둔 CSV 경로다. 이후 in-memory 분석(awk/grep)은 이 경로를 재사용한다 — `simvisdbutil`을 직접 shell로 다시 부르면 cache를 우회하게 되므로, **좁은 범위라 bisect가 불필요해 보여도 `bisect_signal`을 통해 CSV 경로를 얻는 편이 낫다** (2026-07-03, F-174).
 
+**주의 2가지(2026-07-06, T-002 실전 검증)**:
+- `signal`/`context_signals`는 CSV 헤더의 정확한 컬럼명이어야 한다 — 벡터 신호는 `signal[7:0]`처럼 비트범위가 붙어 기록되므로 base name만 넘기면 매치 없이 지나가다 끝에 `"not in CSV. Available: [...]"` 에러가 난다(의도된 동작, MCP 버그 아님). 에러의 `Available` 목록에서 정확한 이름을 그대로 재사용한다.
+- 이 CSV는 시뮬레이션이 실제로 도는 호스트의 파일시스템에 생성된다 — 로컬 세션에서 그 경로를 직접 `Read`/`awk`할 수 없으면(원격 호스트), `ssh_run`으로 원격에서 분석하거나 `bisect_signal` 반복 호출로 대체한다.
+
 ---
 
 ## Phase별 Tool 선택 요약

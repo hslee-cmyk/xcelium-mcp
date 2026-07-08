@@ -12,15 +12,21 @@
 2. 있으면 → 캐시에서 판별 신호/기대값/시퀀스 참조 → Phase 2로
 3. 없으면 → 테스트케이스 파일 읽고 phase-0-discovery.md 형식으로 분석서 작성 후 캐시
 
-**분석서 부재 시(3번) — agent 위임**: 로컬에 설치된 `verilog-tb-analyst` agent(chip-design-skills가 install.py로 배포 — 신설 예정)를 Task로 호출해 phase-0-discovery.md §0A/0B 형식으로 작성/캐시한 후 진행한다. 분석서 없이 Phase 4의 판별로 바로 넘어가지 않는다 — 1B(RTL 분석서 부재 시 `verilog-rtl-analyst` 위임)와 동일 원칙.
-> **Fallback**: 로컬에 설치돼 있지 않으면 `verilog-rtl-debugger` 또는 Claude가 직접 작성한다.
+3번(분석서 부재)의 기본 수행자는 Claude 자신이다 — phase-0-discovery.md §0A/0B 절차를 그대로 따라 직접 작성·캐시한다. 분석서 없이 Phase 4의 판별로 바로 넘어가지 않는다 — 1B(RTL 분석서 부재 시)와 동일 원칙.
+> **선택적 위임(있으면)**: 로컬에 `verilog-tb-analyst` agent(chip-design-skills가 install.py로 배포 — 신설 예정)가 설치돼 있으면 Task로 위임할 수 있다 — 필수 경로는 아니다.
 
 ### 1B. RTL 분석서 참조
 
 `.ai/analysis/{module}.analysis.md`에서 FSM 전이 테이블, 신호 의존성 맵, 크로스 FSM 신호 타이밍을 확인한다.
 
-**분석서 부재/stale 시 — agent 위임**: 로컬에 설치된 `verilog-rtl-debugger` agent가 `verilog-rtl-analyst` agent를 Task로 호출해 분석서를 먼저 작성/갱신한다(두 agent 모두 chip-design-skills가 install.py로 배포한 것을 로컬에서 부르는 것 — chip-design-skills 자체가 호출하는 게 아님). 분석서 없이 Phase 4의 FSM 전이 대조로 바로 넘어가지 않는다.
-> **Fallback**: `verilog-rtl-debugger` agent가 로컬에 설치돼 있지 않으면(chip-design-skills에 아직 미배포), Claude가 직접 `.ai/analysis/{module}.analysis.md`를 작성한다 — verilog-rtl skill의 Module Analysis 방법론(FSM 상태/전이 테이블, 신호 의존성, CDC 경로, timing 관계, reset provenance)을 따른다.
+**분석서 부재/stale 시 기본 수행자는 Claude 자신이다**: `~/.claude/skills/verilog-rtl/SKILL.md` §12(Module Analysis, 필수 포함 항목/작성 규칙/갱신 규칙)를 **직접 Read**해 그 형식(FSM 상태/전이 테이블, 신호 의존성, CDC 경로, timing 관계, reset provenance)대로 `.ai/analysis/{module}.analysis.md`를 작성한다 — `verilog-rtl` skill이 세션에 자동 트리거되길 기다리지 말고 이 경로를 능동적으로 Read할 것. 분석서 없이 Phase 4의 FSM 전이 대조로 바로 넘어가지 않는다.
+>
+> **DUT-TB 인터페이스가 걸린 항목(신호 의존성 맵의 "상위 호출 패턴"/CDC 경계가 TB 쪽 클럭·구동원과 맞물리는 경우)은 `verilog-rtl` skill만으로 정확히 해석되지 않는다** — 이때는 아래 2개도 **같은 방식으로 직접 Read**한다(전체 skill이 아니라 필요 절만, `verilog-tb-analyst.plan.md` FR-11/FR-12와 동일한 근거·동일한 절 한정):
+> - `~/.claude/skills/chip-verification/SKILL.md` §듀얼탑 아키텍처 + `references/interface-mapping.md` — DUT 포트가 hdl_top의 Interface/Virtual Interface로 어떻게 매핑되는지 확인할 때
+> - `~/.claude/skills/uvm-verification/SKILL.md` §UVM 계층 구조 + `references/component-templates.md`/`sequence-patterns.md` — env prefix가 `uvm`인 테스트에서 agent/driver/monitor가 어떤 신호를 구동/샘플링하는지 확인할 때
+>
+> 두 skill 모두 RTL 합성·CDC 설계 규칙이나 AMS 아날로그 모델 절은 이 목적과 무관하므로 로드하지 않는다 — 필요한 구조 절만 좁게 Read.
+> **선택적 위임(있으면)**: 로컬에 `verilog-rtl-debugger`/`verilog-rtl-analyst` agent(둘 다 chip-design-skills가 install.py로 배포 — chip-design-skills 자체가 호출하는 게 아님)가 설치돼 있으면, `verilog-rtl-debugger`가 `verilog-rtl-analyst`를 Task로 호출해 분석서를 작성/갱신하도록 위임할 수 있다 — 필수 경로는 아니다.
 
 ### 1C. Dump Scope 확인
 

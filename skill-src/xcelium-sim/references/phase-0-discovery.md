@@ -75,6 +75,11 @@ RTL 합성·CDC 설계 규칙(verilog-rtl §1~§7, §11)이나 AMS 아날로그 
 
 이건 "로컬 사본을 믿어도 되는지"와는 무관하다(0-Prep-2 참조 — 로컬 사본은 애초에 안 읽는다) — 순전히 "지금 실행이 만든 결과가 캐시된 분석서 작성 시점의 TB 소스(및 그 의존 파일)와 같은가"를 싼 값에 판단하기 위한 용도다.
 
+> **`tb_source`가 아예 없는 경우(진단 메시지 해석, 2026-07-08 추가)**: 위 1~3번은 `tb_provenance`가 정상적으로 반환되는 경우를 전제한다. 반환값에 `tb_source:` 블록이 아예 없으면(`None`) `sim_batch_run`/`sim_regression` 응답에 `tb_provenance: unavailable (...)` 진단 메시지가 함께 붙는데, 사유에 따라 대응이 다르다:
+> - **"not yet migrated to F-175 schema"** — 이 프로젝트가 F-175 이전에 discovery된 상태(`test_discovery` 스키마 마이그레이션 미완료)라는 뜻. **재시도할 필요 없이 다음 `sim_batch_run`/`sim_regression`/`list_tests` 호출 한 번이면 자동으로 마이그레이션되어 그 다음부터 `tb_source`가 정상 채워진다** — Claude가 별도로 `sim_discover(force=True)`를 수동 실행할 필요 없음.
+> - **"not found in cached_test_files"** — 프로젝트는 마이그레이션됐지만 이 테스트 하나만 파일 매핑에 없는 개별 known gap(`TODO.md` F-175 섹션 참조, 예: 멀티라인 class 선언). 재시도해도 해소되지 않으므로 분석서에 "이 테스트는 tb_provenance 없이 작성됨"으로 명시하고 넘어간다.
+> 두 경우 모두 원인은 `docs/03-analysis/xcelium-mcp-f175-provenance-migration-gap.analysis.md`(xcelium-mcp repo)에 상세 기록되어 있다.
+
 > **의존 파일 "목록" 자체도 xcelium-mcp가 자동으로 최신 상태 유지 — Claude가 신경 쓸 필요 없음(2026-07-06 self-healing 추가)**: 테스트 파일에 새 `` `include``/`import`를 추가하거나 삭제해도, 그걸 감지하려고 `sim_discover(force=True)`를 다시 돌릴 필요가 없다. `sim_batch_run`/`sim_regression`/`sim_bridge_run` 내부적으로, 테스트 정의 파일 자신의 해시가 마지막으로 의존 파일을 스캔했을 때와 달라지면(=include 목록이 바뀌었을 수 있는 시점) 그 자리에서 자동으로 재스캔하고 캐시를 갱신한다. Claude 입장에서 알아야 할 건 여전히 1~3번 절차(분석서 헤더에 combined_sha256 기록 → 재사용 전 비교)뿐이고, `tb_provenance`가 항상 최신 의존 파일 목록을 반영한 값이라는 걸 신뢰하면 된다.
 
 > **의존 파일 탐지 범위 — 1단계만**: `include`/`import`는 테스트 파일 자신의 것만 스캔하고, 그 의존 파일이 또 무엇을 include하는지는 재귀적으로 펼치지 않는다(2단계 이상 떨어진 의존성은 커버 안 됨 — TODO.md 참조).
