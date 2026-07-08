@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import json
 import re
 import time as _time
@@ -47,6 +48,24 @@ async def _read_bridge_type(port: int) -> str:
     if len(parts) >= 2:
         return parts[1]
     return "xmsim"
+
+
+_GLOB_META_CHARS = frozenset("*?[")
+
+
+def _filter_test_names(names: list[str], pattern: str) -> list[str]:
+    """Filter test names by pattern (F-177).
+
+    If pattern contains a glob metacharacter (*, ?, [), match via
+    fnmatch.fnmatch — test names commonly contain no literal '*'/'?'/'['
+    themselves, so a caller writing `pattern="*TOP01*"` expecting glob
+    semantics previously got a silent, always-empty substring match instead.
+    Otherwise falls back to the original plain substring match, so existing
+    callers passing a literal fragment (no metacharacters) see no change.
+    """
+    if any(c in pattern for c in _GLOB_META_CHARS):
+        return [t for t in names if fnmatch.fnmatch(t, pattern)]
+    return [t for t in names if pattern in t]
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +174,9 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
 
         Args:
             sim_dir: Simulation directory. Empty = registry default.
-            pattern: Filter pattern. Empty = all tests.
+            pattern: Filter pattern. Empty = all tests. Supports glob
+                wildcards (*, ?, []) — e.g. "*TOP01*". Without any
+                metacharacter, falls back to plain substring matching.
         """
         try:
             resolved_dir = await resolve_sim_dir(sim_dir)
@@ -183,7 +204,7 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
         cached = migrated.get("cached_tests", [])
 
         if pattern:
-            cached = [t for t in cached if pattern in t]
+            cached = _filter_test_names(cached, pattern)
 
         if not cached:
             return f"No tests found{f' (pattern={pattern})' if pattern else ''}."

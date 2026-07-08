@@ -780,3 +780,88 @@ async def test_list_active_sessions_skips_batch_only_entries() -> None:
         result = await mock_mcp.tools["list_active_sessions"]()
 
     assert "No active bridge sessions" in result
+
+
+# ---------------------------------------------------------------------------
+# F-177: list_tests() pattern filter — glob wildcards were treated as literal
+# substrings, so a caller-provided pattern like "*TOP01*" silently matched
+# nothing even when matching tests existed (real-world repro: venezia-fpga
+# verilog-rtl-debugger agent, 2026-07-08).
+# ---------------------------------------------------------------------------
+
+
+class TestFilterTestNames:
+    def test_glob_wildcard_pattern_matches(self) -> None:
+        from xcelium_mcp.tools.sim_lifecycle import _filter_test_names
+
+        names = ["VENEZIA_TOP015_i2c_8bit_offset_test", "VENEZIA_TOP016_test", "OTHER_test"]
+        assert _filter_test_names(names, "*TOP01*") == [
+            "VENEZIA_TOP015_i2c_8bit_offset_test",
+            "VENEZIA_TOP016_test",
+        ]
+
+    def test_plain_substring_pattern_still_matches(self) -> None:
+        """No glob metacharacter — falls back to the original substring match
+        (regression: existing callers passing a literal fragment)."""
+        from xcelium_mcp.tools.sim_lifecycle import _filter_test_names
+
+        names = ["VENEZIA_TOP015_test", "VENEZIA_TOP016_test", "OTHER_test"]
+        assert _filter_test_names(names, "TOP015") == ["VENEZIA_TOP015_test"]
+
+    def test_mixed_question_and_star_glob(self) -> None:
+        from xcelium_mcp.tools.sim_lifecycle import _filter_test_names
+
+        names = [
+            "VENEZIA_TOP015_i2c_8bit_offset_test",
+            "VENEZIA_TOP016_i2c_8bit_offset_test",
+            "VENEZIA_TOP015_spi_test",
+        ]
+        # fnmatch matches the whole string, so a mid-string pattern needs
+        # leading/trailing '*' to act as a substring search.
+        assert _filter_test_names(names, "*TOP01?_i2c*") == [
+            "VENEZIA_TOP015_i2c_8bit_offset_test",
+            "VENEZIA_TOP016_i2c_8bit_offset_test",
+        ]
+
+    def test_bracket_glob_metacharacter_triggers_fnmatch(self) -> None:
+        from xcelium_mcp.tools.sim_lifecycle import _filter_test_names
+
+        names = ["TOP1_test", "TOP2_test", "TOP3_test"]
+        assert _filter_test_names(names, "TOP[12]_test") == ["TOP1_test", "TOP2_test"]
+
+    def test_empty_names_returns_empty(self) -> None:
+        from xcelium_mcp.tools.sim_lifecycle import _filter_test_names
+
+        assert _filter_test_names([], "*TOP01*") == []
+
+
+@pytest.mark.asyncio
+async def test_list_tests_glob_pattern_matches_cached_tests() -> None:
+    """Integration-level repro of the venezia-fpga incident: list_tests()
+    with a glob pattern must return matching tests, not silently empty."""
+    from xcelium_mcp.tools.sim_lifecycle import register
+
+    mock_mcp = _MockMCP()
+    mock_bridges = MagicMock()
+    config = {
+        "test_discovery": {
+            "cached_tests": ["VENEZIA_TOP015_i2c_8bit_offset_test", "VENEZIA_TOP016_test"],
+            "cached_test_files": {},
+            "cached_dependency_files": {},
+            "tb_type": "uvm",
+            "schema_version": 2,
+        }
+    }
+
+    with (
+        patch("xcelium_mcp.tools.sim_lifecycle.resolve_sim_dir", new_callable=AsyncMock,
+              return_value="/sim"),
+        patch("xcelium_mcp.tools.sim_lifecycle.load_sim_config", new_callable=AsyncMock,
+              return_value=config),
+    ):
+        register(mock_mcp, mock_bridges)
+        result = await mock_mcp.tools["list_tests"](pattern="*TOP01*")
+
+    assert "VENEZIA_TOP015_i2c_8bit_offset_test" in result
+    assert "VENEZIA_TOP016_test" in result
+    assert "No tests found" not in result

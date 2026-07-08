@@ -1,6 +1,26 @@
 
 ---
 
+## 2026-07-08 - F-177: list_tests() pattern 필터 glob 지원
+
+### 배경
+venezia-fpga 세션에서 verilog-rtl-debugger agent가 F-175 schema migration gap(commit b6ad3c0) 검증 중 실전 재현 — `list_tests(pattern="*TOP01*")`가 실제로 매칭되는 테스트가 있는데도 "No tests found"를 반환. `tools/sim_lifecycle.py`의 `cached = [t for t in cached if pattern in t]`가 순수 substring 매칭이라 리터럴 `*`가 포함되지 않은 테스트명과는 매칭될 수 없었음.
+
+### 구현
+- `_filter_test_names(names, pattern)` 순수 헬퍼 신규 추가(모듈 레벨) — pattern에 glob 메타문자(`*`, `?`, `[`)가 있으면 `fnmatch.fnmatch`, 없으면 기존 substring 매칭으로 분기
+- `list_tests()` 호출부를 이 헬퍼로 교체, docstring에 glob 지원 명시
+- `fnmatch`는 whole-string 매칭이라 mid-string 검색엔 앞뒤 `*`가 필요함(테스트 작성 중 실수로 한번 놓쳤다가 수정 — 앞으로 유사 헬퍼 테스트 작성 시 유의)
+- 테스트 6개 추가(`tests/test_sim_lifecycle.py`): glob 매칭, substring 회귀, `?`+`*` 혼합, `[...]` 브래킷, 빈 리스트, `list_tests()` 통합 레벨 1개
+- prd.json F-177 `passes: true` 갱신
+
+### 결과
+pytest 599 passed(593→599), ruff clean.
+
+### Learnings
+- 이번 ralph-loop `--next` 실행 중, 우선순위 1인 F-144/F-145/F-148/F-174를 코드 대조해보니 **이미 전부 구현·테스트 완료된 상태인데 prd.json엔 `passes:false`로 남아있음**을 발견 — prd.json 북마킹이 상당히 stale함(코드는 고쳤지만 prd.json 갱신을 놓친 과거 세션들 추정). 사용자가 F-177(방금 막 추가된 신규 버그)을 먼저 지목해 그 이슈는 보류 중 — 다음 ralph-loop 반복 전에 prd.json 전체 재검증이 필요.
+
+---
+
 ## 2026-07-06 - F-176 v3: self-healing 캐시 설명을 phase-0-discovery.md에 반영
 
 ### 배경

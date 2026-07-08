@@ -2452,6 +2452,22 @@
         "review only — 코드 변경 없음"
       ],
       "notes": "F-175와 짝. venezia-fpga(todoc-hw)/venezia-t0(todoc-chip)처럼 TB 테스트 파일이 여러 저장소에 중복 존재할 수 있는 구조에서, 어떤 저장소를 쓰든 agent의 TB 분석 근거는 항상 MCP로 수집한 정보(sim_discover가 resolve한 실제 경로)여야 한다는 게 사용자가 명시적으로 확인한 원칙(2026-07-06) — 저장소 토폴로지(submodule화 여부 등)는 별도 결정 사항이고 이 원칙과 독립적으로 지켜져야 함."
+    },
+    {
+      "id": "F-177",
+      "title": "버그: list_tests의 pattern 필터가 순수 substring 매칭이라 glob 와일드카드(*, ?, [])를 리터럴로 취급 — 매칭되는 테스트가 있어도 조용히 'No tests found' 반환",
+      "priority": 3,
+      "passes": true,
+      "completed_at": "2026-07-08",
+      "acceptanceCriteria": [
+        "src/xcelium_mcp/tools/sim_lifecycle.py:186의 `cached = [t for t in cached if pattern in t]`를 glob 메타문자(*, ?, [)가 pattern에 포함된 경우 fnmatch.fnmatch(t, pattern) 매칭으로, 메타문자가 없으면 기존 substring 매칭(`pattern in t`)으로 분기하도록 수정 — 기존 순수 substring 사용처(메타문자 없는 pattern) 하위호환 유지",
+        "list_tests()의 pattern 인자 docstring(L158)에 'glob 와일드카드(*, ?, []) 지원, 메타문자 없으면 substring 매칭'을 명시",
+        "신규 테스트: cached_tests에 'VENEZIA_TOP015_i2c_8bit_offset_test'가 있을 때 pattern='*TOP01*'이 이를 매칭해 반환하는지 검증(현재는 리터럴 '*TOP01*' substring이 없어 매칭 실패)",
+        "신규 테스트: pattern='TOP015'(메타문자 없음) 기존 substring 매칭이 계속 동작하는지 회귀 검증",
+        "신규 테스트: pattern='TOP01?_i2c*'처럼 '?'와 '*' 혼합 glob도 정상 매칭되는지 검증",
+        "pytest passes, ruff check src/ clean"
+      ],
+      "notes": "venezia-fpga 세션에서 verilog-rtl-debugger agent가 F-175 schema migration gap(commit b6ad3c0) 검증 중 실전 재현(2026-07-08) — venezia-t0 프로젝트에 'VENEZIA_TOP015_i2c_8bit_offset_test' 등 TOP01x 테스트가 실제로 cached_tests에 존재하는데도 list_tests(pattern=\"*TOP01*\")가 \"No tests found (pattern=*TOP01*)\"를 반환. Root cause: L186이 `pattern in t` 순수 substring 매칭만 하는데, 테스트명은 'VENEZIA_TOP015_...'처럼 리터럴 '*'를 포함하지 않으므로 매칭 실패. sim_batch_run(정확한 전체 테스트명)으로 우회 검증해 F-175 자체는 정상 동작 확인됐고 이 버그는 F-175와 무관한 별개 이슈. docstring이 substring인지 glob인지 명시하지 않아 MCP 호출 agent(사람 유사)가 자연스럽게 glob 문법을 쓰다 조용히 빈 결과를 받는 UX 함정 — 에러 없이 빈 리스트만 반환해 디버깅 시 혼란 유발."
     }
   ]
 }
