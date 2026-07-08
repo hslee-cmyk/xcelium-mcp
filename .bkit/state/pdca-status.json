@@ -47,6 +47,10 @@
           {
             "note": "v1.11: CLI(FR-06) 설계 논리 충돌 발견+수정 -- server.py sys.argv 분기 안이 실제로 완료된 server-process-lifecycle feature(supervisor fork-직접호출, 독립 console_script 3개 기확립)와 충돌. xcelium-mcp-cli 독립 console_script로 재설계, server.py 무변경으로 스코프 축소, sys.argv 리스크 제거",
             "ts": "2026-07-08T00:00:00.000Z"
+          },
+          {
+            "note": "v1.12: SS5.1 sim-state.json이 이미 구현된 registry.py environments[sim_dir](F-D, current_test_name/current_tb_source)와 부분 중복 -- Phase 2 Design 착수 시 신규파일 vs registry 확장 결정 필요 각주 추가. SS5.2 TB frontmatter의 수동 last_verified를 F-175 자동 combined_sha256 체크섬으로 교체. SS6 hook 언어(JS vs 실제 Python 컨벤션) 약한 참고 각주 추가",
+            "ts": "2026-07-08T00:00:00.000Z"
           }
         ],
         "retryCount": 0,

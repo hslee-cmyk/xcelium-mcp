@@ -3,7 +3,7 @@
 > **Feature**: Verilog 하드웨어 디자인 검증 워크플로우
 >
 > **Date**: 2026-04-03
-> **Status**: Draft v1.11
+> **Status**: Draft v1.12
 > **Predecessor**: `xcelium-mcp-debugging-workflow.plan.md` — Phase 0~5 상세, TB 캐시, 실전 히스토리
 > **Scope**: 시뮬레이터 독립적 범용 HW 검증 프레임워크. 첫 번째 백엔드: xcelium-mcp
 
@@ -446,6 +446,8 @@ next-skill-map:
 
 **위치**: `{project}/.ai/sim-state.json` (프로젝트별, Git 미추적)
 
+> **2026-07-08 갱신 — 부분 중복 발견**: 이 plan(v1.0) 작성 이후 완료된 `xcelium-mcp-session-state-reattach`(F-D) feature가 `registry.py`의 `environments[sim_dir]` 엔트리에 이미 **sim_dir별 영속 상태 추적**을 만들어놨다 — `update_session_state(sim_dir, test_name, tb_source)`/`get_session_state(sim_dir)`로 `current_test_name`/`current_tb_source`를 저장·복원하며, `sim_bridge_run`이 쓰고 `connect_simulator`가 재연결 시 읽어 복원하는 경로까지 이미 동작 중이다. 즉 "sim_dir별 영속 상태를 담는 그릇" 자체는 이미 있다 — 다만 아래 JSON이 요구하는 `phase`/`result`/`fail_signals`/`fail_type`/`origin_chain` 같은 필드는 아직 없다. **Phase 2 Design 착수 시 반드시 먼저 결정할 것**: (a) 이 아래 스키마 그대로 완전히 별개의 새 파일(`sim-state.json`)을 만들지, (b) 이미 확립된 `registry.py`의 `environments[sim_dir]`을 확장해 위 필드들을 추가할지. 이 저장소가 F-C/F-D에서 이미 (b) 방향(단일 registry 확장)으로 진화해왔다는 점을 감안하면 (b)가 기존 컨벤션과 더 일치한다.
+
 ```json
 {
   "version": "1.0",
@@ -492,6 +494,8 @@ idle → run → analyze → debug → fixed → (run 재진입)
 
 기존 `.ai/analysis/tb_*.analysis.md`에 YAML frontmatter 추가. Skill이 파싱하여 compound operation 파라미터를 자동 구성.
 
+> **2026-07-08 갱신 — staleness 필드는 이미 더 나은 방법으로 대체됨**: 이 plan(v1.0)이 제안한 `last_verified: 2026-04-01`(사람이 수동 갱신하는 날짜)은, 이후 완료된 F-175로 이미 **자동화된 더 나은 방법**이 생겼다 — `tb_source`/`tb_provenance`의 `combined_sha256` 체크섬을 `sim_batch_run`/`sim_regression`이 매번 자동 계산해 분석서 헤더에 기록하고, 재사용 전 이 값만 비교해 신선도를 판정한다(수동 날짜 갱신 불필요, `references/phase-0-discovery.md` §0C 참조). 아래 예시에서 `last_verified` 필드는 제거하고 이 자동 체크섬 방식을 그대로 재사용한다 — `pass_signals`/`fail_conditions`의 구조화(YAML) 아이디어 자체는 여전히 유효하다.
+
 ```markdown
 ---
 test: VENEZIA_TOP015_i2c_8bit_offset_test
@@ -506,7 +510,7 @@ fail_conditions:
   - "r_regAddr==0xAA"
   - "r_regAddr==0x55"
 sim_duration: "15ms"
-last_verified: 2026-04-01
+tb_source: { files: [...], combined_sha256: "..." }   # F-175 자동 산출, 수동 갱신 불필요(위 참조)
 ---
 ```
 
@@ -571,6 +575,8 @@ regression 복수 FAIL 시 Agent 병렬 분석:
 ---
 
 ## 6. Hook 자동화 (Layer 1)
+
+> **2026-07-08 참고 (약한 발견, Phase D 착수 시 재검토)**: 아래는 hook을 JS(`node`)로 제안하지만, 이 사용자의 다른 환경(chip-design-skills)에서 확립된 hook 컨벤션은 전부 Python이다. Phase D는 이미 후행으로 미뤄져 있으므로 지금 강제 수정하지는 않으나, 실제 착수 시 언어 일관성을 재검토할 것.
 
 ### 6.1 왜 Hook이 필요한가
 
@@ -893,6 +899,7 @@ Backend가 coverage report 경로를 CompoundResult.details에 포함하면 Skil
 | **1.9** | **2026-07-03** | **소스 재검증 감사(변경 없음 확인)** — Design 착수 전 §3.4에서 재사용을 전제하는 `batch_runner.py`(`run_batch_single`/`run_batch_regression`)와 `csv_cache.py`(`extract`/`bisect_signal_dump`)가 실제 소스에 정확히 그 이름으로 현재도 존재함을 재확인. `runner_detection.py`도 존재 확인(§Dependencies v5.1 관계 서술 유효). 수정 사항 없음 — 정합성 확인만 기록 |
 | **1.10** | **2026-07-08** | **Phase 1 완료 반영(`xcelium-mcp-tool-usage-guide.design.md`, matchRate 98% 대조) — v1.0 이후 처음 실제 산출물 기준 갱신**: (1) tool 개수 24→25(`grep -c "@mcp.tool()"` 재감사, F-3 `list_active_sessions` 반영) — 전 문서 13개 지점 일괄 수정 + Dependencies에 "고정값 아님, 매번 재감사" 각주 추가; (2) `pytest` 기준선 472→617 tests(3개 지점); (3) **§4.3 전면 재작성** — v1.0~1.9가 가정했던 가상 파일명(`run-guide.md`/`analyze-guide.md`/`debug-guide.md`)을 실제 Phase 1 산출물(`phase-0-discovery.md`~`phase-5-fix-regression.md`+`tool-map.md`+`server-ops.md`, 8개)로 전면 교체 — Phase 2는 새 reference를 만드는 게 아니라 이 8개 위에 라우팅만 얹는 것으로 스코프 재정의(`backend-interface.md`만 Phase 2의 순수 신규 파일로 남음); (4) §4.5 `verilog-rtl-debugger` agent "신설 예정" → 생성 완료로 갱신 |
 | **1.11** | **2026-07-08** | **CLI(FR-06) 설계를 실제 확립된 컨벤션에 맞게 재설계 — 논리적 충돌 발견 및 수정**: 이 plan 이후 실제로 완료된 `xcelium-mcp-server-process-lifecycle` feature(supervisor+fork 배포 모델, `pyproject.toml [project.scripts]`에 `xcelium-mcp-supervisor`/`xcelium-mcp-culler` 등 독립 console_script 3개 기존 확립)와 v1.0~1.10의 "CLI를 `server.py:main()` 안에 `sys.argv` 분기로 추가" 설계가 충돌함을 소스 재검증으로 발견. 근거: supervisor가 MCP 연결마다 `_xcelium_server.main()`을 fork 후 **직접 함수 호출**하므로(subprocess 재실행 아님) 연결별 sys.argv 전달 경로 자체가 없고, 이 저장소는 이미 "새 관심사 = 새 모듈 + 새 console_script" 패턴(`stdio_forward.py`/`sim_session_reaper.py`도 독립 `-m` 모듈)을 스스로 확립해놨다. **수정**: FR-06/§3.4/§7(전면)/§8.1/§8.2 B단계/Impact Analysis(Changed Resources·Current Consumers·Verification)/§11 리스크 테이블 전부 갱신 — CLI를 `server.py` 무변경의 독립 console_script `xcelium-mcp-cli`로 재설계, `server.py`는 compound tool 3개 `register()` 추가만 받도록 스코프 축소. "sys.argv 분기로 MCP 깨짐" 리스크 항목 제거(해당 없음). 부수적으로 CLAUDE.md(xcelium-mcp 자신) "Deployment" 섹션이 구 배포 모델(`"command": "xcelium-mcp"`)을 그대로 보여주는 별개의 문서 부채도 함께 확인(이 plan 범위 밖, Impact Analysis에서 그 부채에 의존하지 않도록만 일반화). |
+| **1.12** | **2026-07-08** | **§5.1/§5.2 소스 재검증 — 이미 구현된 더 나은 메커니즘과의 중복 발견**: (1) §5.1 `sim-state.json`(신규 파일 제안)이 이 plan 이후 완료된 `xcelium-mcp-session-state-reattach`(F-D)와 부분 중복 — `registry.py`의 `environments[sim_dir]`에 이미 `current_test_name`/`current_tb_source` 영속 추적(`update_session_state`/`get_session_state`)이 구현·배포됨. Phase 2 Design 착수 시 "새 파일 vs 기존 registry 확장" 결정이 선행되어야 함을 각주로 명시(레포 자체가 F-C/F-D로 후자 방향 확립). (2) §5.2 TB YAML frontmatter의 `last_verified`(수동 날짜) 필드를 F-175의 자동 `tb_source.combined_sha256` 체크섬 방식(`phase-0-discovery.md` §0C)으로 교체 — 사람이 날짜를 갱신할 필요가 없는 이미 구현된 방법으로 대체. (3) §6 Hook 자동화에 언어 일관성 참고(JS 제안 vs 이 사용자 환경의 실제 Python hook 컨벤션) 각주 추가(약한 발견, Phase D 후행이라 지금 강제 수정 안 함). |
 
 ---
 
