@@ -1079,3 +1079,31 @@ python -m pytest && python -m ruff check src/
 - prd.json의 `passes` 필드는 사용자가 직접 리뷰 후 플립하는 규칙이라 이번에도 건드리지 않음 (F-184는 여전히 passes:false로 남겨둠).
 
 ---
+
+## 2026-07-08 - F-185: inspect_signal list — xmsim PNOOBJ 수정 (non-recursive도 SimVision 라우팅 필요)
+
+### Task: inspect_signal(action='list')가 xmsim 대상에서 PNOOBJ 에러
+
+**Root cause:** `elif action == "list":` 브랜치의 `if recursive:` 하위에만 xmsim→SimVision auto-fallback/에러 가드가 있었고, non-recursive 경로(`describe {scope}.{pattern}`)에는 이 가드가 없어 glob 패턴(또는 존재하지 않는 리터럴 이름)을 그대로 xmsim에 전달 — xmsim의 `describe`는 정확히 존재하는 단일 오브젝트 경로만 받고 glob을 지원하지 않아 `*SE,PNOOBJ: Path element could not be found`로 실패.
+
+**회귀 여부 판별 (git 이력 대조):** `git log -p -- src/xcelium_mcp/tools/signal_inspection.py`로 확인 — `describe {scope}.{pattern}` 라인은 이 파일에 기록된 가장 오래된 커밋(F-116 이전)부터 문구만 살짝 바뀌었을 뿐(`sep` 변수 실험 후 원복) 동일하게 존재. **회귀가 아니라 애초부터 실제 xmsim 대상으로는 한 번도 제대로 검증된 적 없던 잠재 버그**(recursive=True 도입 시 F-131/F-132가 그 경로만 가드를 추가했고, non-recursive 경로는 "SimVision에서만 쓰일 것"이라는 암묵적 가정 하에 방치됨).
+
+**F-131~F-135와의 관계:** 동일 근본원인(xmsim의 hierarchy-glob 미지원) 계열. F-131/F-132는 `scope show`(recursive 검색)가 SimVision 전용임을 밝히고 그 경로에만 가드를 추가했음 — F-185는 `describe`+glob(non-recursive 검색) 역시 SimVision 전용임을 새로 확인하고, 두 경로가 공유해야 할 가드를 recursive/non-recursive 분기 **위쪽으로 hoist**해 통일한 것. 별개 버그가 아니라 이전 수정에서 커버되지 않은 두 번째 진입점.
+
+**What was implemented:**
+- `src/xcelium_mcp/tools/signal_inspection.py`의 `action == "list"` 처리에서 xmsim→SimVision auto-switch/에러 가드를 `if recursive:` 블록 밖으로 이동해 recursive/non-recursive 양쪽에 동일하게 적용. 에러 메시지에 recursive 여부에 따라 "recursive list"/"list" 문구 및 `execute_tcl("scope -describe <scope>")` 우회 안내 포함.
+- docstring(`action`/`list`) 갱신 — SimVision 필요 조건 명시.
+- 신규 테스트 3건(`test_nonrecursive_list_xmsim_autofallback_to_simvision`, `test_nonrecursive_list_xmsim_no_simvision_returns_error`, `test_nonrecursive_list_simvision_target_unchanged`) — F-132 recursive 테스트와 대칭 구조로 추가, pattern 3종(`*clk*`/`clk`/`*`) 모두 에러 케이스에서 xmsim에 전혀 forward되지 않음(`xmsim_bridge.execute.assert_not_called()`)을 검증.
+- 기존 non-recursive 테스트(`test_inspect_signal_list_nonrecursive_uses_describe_dot`, `test_inspect_signal_list_recursive_default_false_backward_compat`)는 `fake_bridges.xmsim_raw`를 명시적으로 설정하지 않는 MagicMock을 쓰므로 identity 체크가 자연히 False가 되어 회귀 없이 그대로 통과.
+
+**Files changed:**
+- src/xcelium_mcp/tools/signal_inspection.py
+- tests/test_pure_helpers.py
+- plans/progress.md (this entry)
+
+**Learnings:**
+- 실제 원격 세션(venezia-t0 TOP013, port 9876)에 `connect_simulator`로 재현 시도했으나 이 세션에서는 포트 연결 자체가 실패(`Connect call failed`) — 등록된 세션이 있어도 이 프로세스에서 바로 재현 가능한 건 아니어서, F-185 notes에 이미 기록된 다른 세션의 실측 재현(에러 문자열 그대로) + 우회 경로(execute_tcl scope -describe 성공)를 근거로 삼아 수정. 라이브 재현 없이도 fake-bridge identity 테스트로 회귀를 충분히 커버.
+- pytest 617 passed(614+3), ruff clean.
+- prd.json `passes` 필드는 이번에도 건드리지 않음 (F-185는 여전히 passes:false로 남겨둠, 사용자 리뷰 대기).
+
+---

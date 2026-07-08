@@ -1053,6 +1053,99 @@ async def test_inspect_signal_list_recursive_default_false_backward_compat() -> 
 
 
 # ---------------------------------------------------------------------------
+# F-185: inspect_signal list non-recursive — xmsim glob PNOOBJ → SimVision fallback
+#
+# xmsim's 'describe' requires an exact existing object path and raises
+# "*SE,PNOOBJ: Path element could not be found" for any glob pattern (or even a
+# bare non-wildcard name that isn't a literal signal) — reproduced with
+# pattern='*clk*'/'clk'/'*' regardless of scope. The xmsim-routing guard
+# previously only wrapped the recursive branch; it must also cover non-recursive.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_nonrecursive_list_xmsim_autofallback_to_simvision() -> None:
+    """recursive=False (default) + target=xmsim → auto-switch to SimVision bridge."""
+    from unittest.mock import MagicMock
+
+    xmsim_bridge = MagicMock()
+    xmsim_bridge.connected = True
+
+    sv_executed: list[str] = []
+
+    class _SVBridge:
+        connected = True
+        async def execute(self, cmd: str, timeout: float = 30) -> str:
+            sv_executed.append(cmd)
+            return "top.hw.clk wire"
+
+    sv_bridge = _SVBridge()
+
+    fake_bridges = MagicMock()
+    fake_bridges.get_bridge.return_value = xmsim_bridge   # returns xmsim
+    fake_bridges.xmsim_raw = xmsim_bridge                  # bridge is xmsim_raw → triggers fallback
+    fake_bridges.simvision_raw = sv_bridge                 # SimVision available
+
+    tool_fn = _make_inspect_tool(fake_bridges)
+    result = await tool_fn(action="list", scope="top.hw", pattern="*clk*", recursive=False)
+
+    # SimVision bridge was used (describe called on sv_bridge, not xmsim_bridge)
+    assert sv_executed == ["describe top.hw.*clk*"], f"Unexpected: {sv_executed}"
+    assert "ERROR" not in result
+
+
+@pytest.mark.asyncio
+async def test_nonrecursive_list_xmsim_no_simvision_returns_error() -> None:
+    """recursive=False + target=xmsim + no SimVision → clear error, no PNOOBJ forwarded to xmsim."""
+    from unittest.mock import MagicMock
+
+    xmsim_bridge = MagicMock()
+    xmsim_bridge.connected = True
+
+    fake_bridges = MagicMock()
+    fake_bridges.get_bridge.return_value = xmsim_bridge
+    fake_bridges.xmsim_raw = xmsim_bridge
+    fake_bridges.simvision_raw = None                      # no SimVision
+
+    tool_fn = _make_inspect_tool(fake_bridges)
+
+    for pattern in ("*clk*", "clk", "*"):
+        result = await tool_fn(action="list", scope="top.hw", pattern=pattern, recursive=False)
+        assert "ERROR" in result
+        assert "SimVision" in result
+        # xmsim_bridge.execute must never have been called with a describe command
+        xmsim_bridge.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_nonrecursive_list_simvision_target_unchanged() -> None:
+    """recursive=False + target=simvision uses SimVision directly (no xmsim check)."""
+    from unittest.mock import MagicMock
+
+    sv_executed: list[str] = []
+
+    class _SVBridge:
+        connected = True
+        async def execute(self, cmd: str, timeout: float = 30) -> str:
+            sv_executed.append(cmd)
+            return "top.hw.clk wire"
+
+    sv_bridge = _SVBridge()
+
+    fake_bridges = MagicMock()
+    fake_bridges.get_bridge.return_value = sv_bridge       # target=simvision returns sv_bridge
+    fake_bridges.xmsim_raw = MagicMock()                   # different object → no fallback triggered
+    fake_bridges.simvision_raw = sv_bridge
+
+    tool_fn = _make_inspect_tool(fake_bridges)
+    result = await tool_fn(action="list", scope="top.hw", pattern="*clk*",
+                           target="simvision", recursive=False)
+
+    assert sv_executed == ["describe top.hw.*clk*"]
+    assert "ERROR" not in result
+
+
+# ---------------------------------------------------------------------------
 # F-132: inspect_signal list recursive — xmsim silent fail → SimVision fallback
 # ---------------------------------------------------------------------------
 
