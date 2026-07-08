@@ -14,7 +14,11 @@ from xcelium_mcp.bridge_manager import BridgeManager
 from xcelium_mcp.registry import load_sim_config, resolve_sim_dir
 from xcelium_mcp.runner_detection import load_or_detect_runner
 from xcelium_mcp.shell_utils import UserInputRequired, find_shm, validate_path
-from xcelium_mcp.tb_provenance import build_tb_provenance, format_tb_provenance
+from xcelium_mcp.tb_provenance import (
+    build_tb_provenance,
+    format_tb_provenance,
+    provenance_unavailable_reason,
+)
 from xcelium_mcp.tcl_bridge import TclError
 from xcelium_mcp.test_resolution import resolve_test_name
 
@@ -231,6 +235,12 @@ def register(
             parts.append(f"\ndump_summary:\n{_json.dumps(dump_summary, indent=2)}")
         if tb_source is not None:
             parts.append(f"\n{format_tb_provenance(tb_source)}")
+        else:
+            # F-2: distinguish "project never migrated to F-175 schema" from
+            # "this one test isn't in the map" instead of staying silent.
+            reason = await provenance_unavailable_reason(test_name, resolved_sim_dir)
+            if reason:
+                parts.append(f"\ntb_provenance: unavailable ({reason})")
         return "".join(parts)
 
     @mcp.tool()
@@ -347,4 +357,18 @@ def register(
         if tb_provenance:
             import json as _json
             parts.append(f"\ntb_provenance:\n{_json.dumps(tb_provenance, indent=2)}")
+        # F-2/F-3: diagnose per-test gaps instead of staying silent — same
+        # reasoning as sim_batch_run above, applied to run_batch_regression's
+        # per-test tb_provenance dict (F-3: confirmed it calls
+        # build_tb_provenance() per test, see batch_runner.py).
+        missing = [t for t in test_list if t not in tb_provenance]
+        if missing:
+            reasons = await asyncio.gather(
+                *(provenance_unavailable_reason(t, resolved_sim_dir) for t in missing)
+            )
+            reason_lines = [
+                f"  {t}: {r}" for t, r in zip(missing, reasons) if r
+            ]
+            if reason_lines:
+                parts.append("\ntb_provenance unavailable:\n" + "\n".join(reason_lines))
         return "".join(parts)

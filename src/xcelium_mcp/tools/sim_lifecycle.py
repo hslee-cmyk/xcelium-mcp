@@ -5,7 +5,6 @@ import asyncio
 import json
 import re
 import time as _time
-from datetime import datetime
 
 from mcp.server.fastmcp import FastMCP
 
@@ -22,10 +21,11 @@ from xcelium_mcp.registry import (
     save_sim_config,
     update_session_state,
 )
+from xcelium_mcp.schema_migration import ensure_test_discovery_current
 from xcelium_mcp.shell_utils import UserInputRequired, get_user_tmp_dir, shell_run
-from xcelium_mcp.tb_provenance import build_tb_provenance, format_tb_provenance, scan_test_dependencies
+from xcelium_mcp.tb_provenance import build_tb_provenance, format_tb_provenance
 from xcelium_mcp.tcl_bridge import BRIDGE_ERRORS, TclBridge, TclError
-from xcelium_mcp.test_resolution import parse_test_discovery_output, resolve_test_name
+from xcelium_mcp.test_resolution import resolve_test_name
 
 # ---------------------------------------------------------------------------
 # Module-level helpers (don't need bridges closure)
@@ -167,46 +167,20 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
             return "ERROR: No config. Run sim_discover first."
 
         discovery = config.get("test_discovery", {})
-        cached = discovery.get("cached_tests", [])
+        if not discovery.get("command", "") and discovery.get("schema_version", 1) < 2:
+            return "ERROR: test_discovery.command not configured.\nSet via: mcp_config set test_discovery.command '<command>'"
 
-        if not cached:
-            cmd = discovery.get("command", "")
-            if not cmd:
-                return "ERROR: test_discovery.command not configured.\nSet via: mcp_config set test_discovery.command '<command>'"
-            r = await shell_run(f"cd {resolved_dir} && {cmd}", timeout=30)
-            tb_type = discovery.get("tb_type", "")
-            if tb_type:
-                cached_test_files = parse_test_discovery_output(r, tb_type)
-                cached = sorted(cached_test_files.keys())
-            else:
-                # Pre-F-175 config: no tb_type means `cmd` is the OLD
-                # name-only pipeline, not the new -n (file:lineno) format —
-                # see resolve_test_name() for the full explanation. Fall
-                # back to a plain name split; no file mapping until
-                # sim_discover re-runs and populates tb_type.
-                cached = sorted({t.strip() for t in r.strip().splitlines() if t.strip()})
-                cached_test_files = {}
-            # F-175: resolve dependency FILE LOCATIONS (+ primary sha256 for
-            # staleness checks) here, once, at cache-miss time — same
-            # rationale as discovery.py's initial-discovery pass.
-            cached_dependency_files: dict[str, dict] = {}
-            if cached_test_files:
-                names = list(cached_test_files.keys())
-                scan_results = await asyncio.gather(
-                    *(scan_test_dependencies(cached_test_files[n], resolved_dir) for n in names)
-                )
-                for n, entry in zip(names, scan_results):
-                    cached_dependency_files[n] = entry
-            if cached:
-                # Cache via config_action (write centralization)
-                await config_action("set", "config", "test_discovery.cached_tests",
-                                    json.dumps(cached))
-                await config_action("set", "config", "test_discovery.cached_test_files",
-                                    json.dumps(cached_test_files))
-                await config_action("set", "config", "test_discovery.cached_dependency_files",
-                                    json.dumps(cached_dependency_files))
-                await config_action("set", "config", "test_discovery.cached_at",
-                                    datetime.now().isoformat())
+        # F-175 migration gap fix: schema_version-driven migration instead of
+        # an "is cached_tests empty" check — a project whose cached_tests was
+        # already populated before F-175 existed (tb_type/cached_test_files
+        # missing) used to fall through this check forever. See
+        # schema_migration.py / xcelium-mcp-f175-provenance-migration-gap
+        # plan+design docs.
+        migrated = await ensure_test_discovery_current(discovery, resolved_dir)
+        if migrated != discovery:
+            config["test_discovery"] = migrated
+            await save_sim_config(resolved_dir, config)
+        cached = migrated.get("cached_tests", [])
 
         if pattern:
             cached = [t for t in cached if pattern in t]

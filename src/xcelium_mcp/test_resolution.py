@@ -5,17 +5,10 @@ Contains: resolve_test_name, resolve_sim_params, parse_test_discovery_output.
 """
 from __future__ import annotations
 
-import asyncio
 import re
-from datetime import datetime
 from pathlib import Path
 
 from xcelium_mcp.registry import load_sim_config, resolve_sim_dir, save_sim_config
-from xcelium_mcp.shell_utils import (
-    shell_quote,
-    shell_run,
-)
-from xcelium_mcp.tb_provenance import scan_test_dependencies
 
 # F-175: test_discovery's grep command (built in discovery.py) now emits
 # `-n` (filename:lineno:content) instead of `-h` (content only), so the file
@@ -129,53 +122,33 @@ async def resolve_test_name(short_name: str, sim_dir: str = "") -> str:
     except ValueError:
         resolved_dir = sim_dir  # fallback: use as-is
     cfg = await load_sim_config(resolved_dir) if resolved_dir else None
-    cached = cfg.get("test_discovery", {}).get("cached_tests", []) if cfg else []
+    cached: list[str] = []
 
-    if not cached:
-        # Cache miss — run test_discovery.command + cache via mcp_config
+    if cfg:
+        # F-175 migration gap fix: schema_version-driven migration instead of
+        # an "is cached_tests empty" check — a project whose cached_tests was
+        # already populated before F-175 existed (tb_type/cached_test_files
+        # missing) used to fall through this check forever, since this is the
+        # actual hot-path entry point sim_batch_run/sim_regression call
+        # before build_tb_provenance(). See schema_migration.py / the
+        # xcelium-mcp-f175-provenance-migration-gap plan+design docs.
+        #
         # TRUST BOUNDARY: test_discovery.command comes from .mcp_sim_config.json
         # which is a user-controlled config file (written by sim_discover or
         # mcp_config set). The "test_discovery.command" key is in _PROTECTED_KEYS
         # (registry.py), so it cannot be overwritten via mcp_config set — only
         # sim_discover can populate it. We treat this as trusted user input.
-        if cfg:
-            discovery = cfg.get("test_discovery", {})
-            cmd = discovery.get("command", "")
-            if cmd:
-                r = await shell_run(f"cd {shell_quote(resolved_dir)} && {cmd}", timeout=30)
-                tb_type = discovery.get("tb_type", "")
-                if tb_type:
-                    cached_test_files = parse_test_discovery_output(r, tb_type)
-                    cached = sorted(cached_test_files.keys())
-                else:
-                    # Pre-F-175 config: no tb_type means `cmd` is the OLD
-                    # name-only pipeline (sort -u over bare names), not the
-                    # new -n (file:lineno) format. Running it through
-                    # parse_test_discovery_output would treat each bare name
-                    # as a fake "file path" (Path(name).stem == name) — a
-                    # wrong 1:1 mapping, not just a missing one. Fall back to
-                    # the old plain split; no file mapping until sim_discover
-                    # re-runs and populates tb_type.
-                    cached = sorted({t.strip() for t in r.strip().splitlines() if t.strip()})
-                    cached_test_files = {}
-                # F-175: resolve dependency FILE LOCATIONS (+ primary sha256
-                # for staleness checks) here, once, at cache-miss time — same
-                # rationale as discovery.py's initial-discovery pass.
-                cached_dependency_files: dict[str, dict] = {}
-                if cached_test_files:
-                    names = list(cached_test_files.keys())
-                    scan_results = await asyncio.gather(
-                        *(scan_test_dependencies(cached_test_files[n], resolved_dir) for n in names)
-                    )
-                    for n, entry in zip(names, scan_results):
-                        cached_dependency_files[n] = entry
-                if cached:
-                    # Cache via config_action (write centralization)
-                    cfg.setdefault("test_discovery", {})["cached_tests"] = cached
-                    cfg["test_discovery"]["cached_test_files"] = cached_test_files
-                    cfg["test_discovery"]["cached_dependency_files"] = cached_dependency_files
-                    cfg["test_discovery"]["cached_at"] = datetime.now().isoformat()
-                    await save_sim_config(resolved_dir, cfg)
+        #
+        # Local import: schema_migration.py imports parse_test_discovery_output
+        # from this module, so a module-level import here would be circular.
+        from xcelium_mcp.schema_migration import ensure_test_discovery_current
+
+        discovery = cfg.get("test_discovery", {})
+        migrated = await ensure_test_discovery_current(discovery, resolved_dir)
+        if migrated != discovery:
+            cfg["test_discovery"] = migrated
+            await save_sim_config(resolved_dir, cfg)
+        cached = migrated.get("cached_tests", [])
 
     if not cached:
         return short_name  # No cache, no command → pass through

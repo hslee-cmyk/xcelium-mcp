@@ -265,3 +265,35 @@ def format_tb_provenance(provenance: dict) -> str:
     """Render a build_tb_provenance() result as human-readable MCP tool output text."""
     lines = [f"  {f['path']} (sha256: {f['sha256']})" for f in provenance["files"]]
     return "tb_source:\n" + "\n".join(lines) + f"\n  combined_sha256: {provenance['combined_sha256']}"
+
+
+async def provenance_unavailable_reason(full_test_name: str, sim_dir: str = "") -> str | None:
+    """Diagnose why build_tb_provenance() returned/would return None.
+
+    build_tb_provenance() itself must stay silent-on-failure (see its
+    docstring — provenance is best-effort, never a hard requirement), so this
+    is a separate, optional lookup callers can use to tell two different
+    causes apart instead of a single unexplained None: a project that was
+    never migrated to the F-175 test_discovery schema at all (see
+    schema_migration.py) versus this one test simply not being in the map
+    (an existing per-test known gap, see TODO.md). Returns None when neither
+    diagnosis applies (config unavailable, or provenance should just work).
+    """
+    try:
+        resolved_dir = await resolve_sim_dir(sim_dir)
+    except ValueError:
+        resolved_dir = sim_dir
+    if not resolved_dir:
+        return None
+    cfg = await load_sim_config(resolved_dir)
+    if not cfg:
+        return None
+    discovery = cfg.get("test_discovery", {})
+    if "cached_test_files" not in discovery:
+        return (
+            "test_discovery not yet migrated to F-175 schema — "
+            "run list_tests() or sim_discover(force=True) once"
+        )
+    if full_test_name not in discovery.get("cached_test_files", {}):
+        return f"'{full_test_name}' not found in cached_test_files (see TODO.md F-175 known gaps)"
+    return None
