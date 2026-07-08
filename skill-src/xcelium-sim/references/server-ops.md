@@ -55,41 +55,6 @@ git log -1 --format='%ad' --date=iso
 프로세스 시작 시각이 최신 커밋 시각보다 **이전**이면, 디스크 코드는 최신이어도 실행 중인
 프로세스는 구코드를 메모리에 들고 있는 상태 — 재기동이 필요하다.
 
-## 1.5 활성 브릿지 세션 확인 — registry가 stale할 수 있다
-
-`list_active_sessions()`(파라미터 없음, 읽기 전용)로 현재 등록된 모든 bridge 세션
-(`connect_simulator`/`sim_bridge_run`으로 연결된 xmsim/SimVision)을 조회할 수 있다:
-
-```python
-list_active_sessions()
-# → "/path/to/sim_dir  port=9876  test='...'  TTL remaining: 47.8h"
-```
-
-**registry 항목이 있다고 실제 프로세스가 살아있다는 뜻은 아니다.** TTL이 한참 남아있어도
-그 뒤에 있어야 할 xmsim/SimVision 프로세스가 이미 죽어있을 수 있다(실측 사례, 2026-07-08:
-registry에 TTL 47.8h 남은 세션이 있었지만, 원격 host에서 `ps -ef`로 확인하니 그 프로세스
-자체가 존재하지 않았다 — `connect_simulator`로 재연결을 시도하면 `Connect call failed`로
-실패한다).
-
-**stale 여부 판단 절차**:
-
-1. `list_active_sessions()`로 registry에 등록된 후보 목록 확보
-2. 각 항목의 sim_dir/port를 원격 host에서 직접 교차 검증:
-   ```bash
-   ps -ef | grep -iE 'xrun|xmsim|simvision' | grep -v grep
-   ss -tlnp | grep <port>
-   ```
-3. registry에는 있는데 실제 프로세스가 없으면 → stale entry. 그 sim_dir로 다시 붙으려면
-   `connect_simulator`가 아니라 `sim_bridge_run`으로 새로 기동해야 한다.
-4. registry에도 있고 실제 프로세스도 살아있으면 → 그 세션을 그대로 재사용해 재현/검증을
-   진행할 수 있다.
-
-**재기동 맥락에서 이 확인이 필요한 이유**: supervisor 재기동 여부를 판단하거나 재기동 후
-영향을 설명할 때, "지금 이 host에 살아있는 시뮬레이션이 있는지"를 먼저 파악해두면 (a) 재기동이
-그 세션의 워커에 실제로 영향을 주는지(§3 참조 — 이미 fork된 워커는 영향받지 않고 계속
-구코드로 실행) 정확히 설명할 수 있고, (b) 코드 수정을 실제 배포까지 검증하려 할 때 새 세션을
-기동해야 하는지 기존 세션을 재사용해도 되는지 미리 판단할 수 있다.
-
 ## 2. 재기동
 
 ```bash

@@ -21,7 +21,7 @@
 | 2B | `sim_disconnect` | `action`: "bridge"(연결만 해제)/"shutdown"(안전 종료, SHM 보존) | **주의**: 디버깅 세션 종료 시 항상 "shutdown" 사용 — 일반 disconnect나 pkill은 SHM 유실 |
 | 2B | `sim_run` | `duration`, `timeout`, `chunk`(기본 100000ns) | 시간/breakpoint 지정 실행. 중단하려면 외부에서 sentinel 파일 생성(아래 참고) |
 | 2B | `sim_status` | `target` | 현재 시간/scope/상태 조회 |
-| — | `list_active_sessions` | (파라미터 없음) | (2026-07-07, F-3) 등록된 모든 bridge 세션을 마지막 활동 시각+TTL 상태와 함께 조회(읽기 전용). 방치된 세션을 TTL 기반 자동 리퍼가 강제 종료하기 전에 먼저 확인하고 `sim_disconnect(action="shutdown")`로 직접 정리할 때 사용. **registry 항목이 실제로 살아있는지는 보장 안 됨(stale 가능)** — `ps`/`ss`로 교차 검증하는 절차는 `server-ops.md` §1.5 참조 |
+| — | `list_active_sessions` | (파라미터 없음) | (2026-07-07, F-3) 등록된 모든 bridge 세션을 마지막 활동 시각+TTL 상태와 함께 조회(읽기 전용). **목적은 재기동 진단이나 재연결이 아니라 cleanup 판단** — 방치된 세션을 TTL 기반 자동 리퍼가 강제 종료하기 전에 사람이 먼저 확인하고 `sim_disconnect(action="shutdown")`로 직접 정리할지 결정하는 용도(설계 원본: `xcelium-mcp-sim-session-reaper.design.md` §4.3). **registry 항목이 있다고 실제 프로세스가 살아있다는 보장은 없다** — TTL이 남아있어도 host의 실제 프로세스(`ps`/`ss`)와 다를 수 있다 |
 | 2B | `sim_restart` | — | 시뮬레이션을 time 0으로 재시작(init snapshot 복원) |
 | 2B | `execute_tcl` | `tcl_cmd`, `timeout`, `target` | 임의 Tcl 명령 실행(escape hatch) — 전용 tool 없을 때만 사용 |
 
