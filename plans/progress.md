@@ -1,6 +1,27 @@
 
 ---
 
+## 2026-07-08 - prd.json bookkeeping audit — 28개 pending 항목 중 27개가 이미 구현 완료 상태였음
+
+### 배경
+`/ralph-loop --next`가 F-144(priority 1)를 골랐는데, 코드를 확인해보니 이미 완전히 구현·테스트되어 있었음(`_parse_sim_time_ns`/`_to_number`/`_eval_condition`, `test_bisect.py` 32/32 통과). 우선순위 1 항목 F-145/F-148/F-174도 동일하게 이미 완료 상태임을 추가로 확인 — prd.json의 `passes:false` 기록이 코드 상태와 상당히 어긋나 있음을 발견. 사용자에게 보고 후, F-144/F-145는 "다른 프로젝트에서 검증 예정"이라 `false`로 유지하고 나머지는 직접 검증해 `true`로 정리하라는 지시를 받음.
+
+### 방법
+grep 카운트만으로는 신뢰 불가(F-165/F-176처럼 F-number를 코드/커밋 메시지에 인용하지 않고도 완료된 항목이 있었음 — 예: F-176은 skill 문서에 원칙이 다른 표현으로 이미 서술돼 있었음). 28개 pending 항목(F-144/F-145 제외) 전부를 개별적으로 acceptanceCriteria와 실제 소스 코드/테스트를 대조해 확인.
+
+### 결과
+- **27개 확인 완료** → `passes:true` + `completed_at` 갱신(대부분 "2026-07-08"로 기록했으나, F-173은 실제 작업일인 "2026-07-02"로 기록 — 아래 참조)
+- **F-173** (registry.py `_dot_get`/`_dot_set`/`_dot_delete` 통합 검토): git log 확인 결과 **2026-07-02에 이미 검토·"리팩터 안 함" 결정이 notes에 기록된 커밋(d2690c8)이 존재**했으나, 그 커밋이 `notes`만 갱신하고 `passes:true`는 반영하지 않은 채 남아있었음 — acceptanceCriteria가 "리팩터 안 하기로 결정한 경우 notes 기록"을 유효한 완료 조건으로 명시하므로 `passes:true`로 정정(bookkeeping fix, 새 작업 아님)
+- **F-144/F-145**만 최종적으로 `passes:false` 유지(사용자 지시 — 다른 프로젝트에서 검증 예정)
+- 코드 변경 없음(순수 prd.json 기록 정정), 599 tests passed, ruff clean
+
+### Learnings
+- **F-number citation은 완료 여부의 신뢰할 수 있는 신호가 아니다** — grep으로 "0회 참조"였던 F-165/F-168/F-169/F-170/F-171/F-172/F-176도 전부 이미 완료 상태였음(코드 컨벤션상 F-number를 항상 주석에 남기는 건 아님). 반드시 acceptanceCriteria 각 항목을 실제 코드와 대조해야 함
+- **git log가 prd.json 자체보다 더 정확한 기록**일 수 있다 — F-173처럼 실제 결정/작업은 있었는데 prd.json 필드 갱신만 누락된 케이스가 존재. 애매한 항목은 `git log --oneline -- plans/prd.json`으로 관련 커밋을 먼저 확인하는 게 grep보다 안전
+- 이런 대규모 bookkeeping 드리프트가 왜 생겼는지는 불명(여러 세션/에이전트가 병렬로 prd.json을 건드린 정황 있음 — 이번 대화 중에도 사용자가 F-177을 대화 밖에서 직접 추가했고, F-146/147/152/153/174/175도 내가 손대지 않았는데 오늘 날짜로 이미 `passes:true`가 되어 있었음). 향후 ralph-loop 반복 전 최소한 `--next`가 고른 항목 하나는 코드 대조 검증을 먼저 하는 습관이 필요.
+
+---
+
 ## 2026-07-08 - F-177: list_tests() pattern 필터 glob 지원
 
 ### 배경

@@ -1941,7 +1941,7 @@
       "id": "F-140",
       "title": "v5.2 gap-fix: dump_history/dump_stats 영속 스키마 정합 + regression 경로 dump_history 누락 수정",
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "plan_file": "docs/01-plan/features/xcelium-mcp-v5.2-hierarchical-dump.plan.md",
       "design_file": "docs/02-design/features/xcelium-mcp-v5.2-hierarchical-dump.design.md",
       "acceptanceCriteria": [
@@ -1954,13 +1954,14 @@
         "기존 read path(dump_scopes 사용)와의 하위 호환 유지 — 스키마 변경이 config 읽기 동작에 영향 없음",
         "pytest passes"
       ],
-      "notes": "docs/03-analysis/xcelium-mcp-v5.2-hierarchical-dump.analysis.md Gap #1-#3 (Important) 기반. batch_runner.py:392-396(dump_history 스키마), batch_runner.py:883-903(dump_stats 집계), run_batch_regression(dump_history 미영속). Match Rate 85% → API Contract 78%를 끌어내린 두 스키마 편차 + regression 경로 누락 수정. 코드 변경 범위 ~30 LOC로 추정(분석서 Recommended Actions #1-#3)."
+      "notes": "docs/03-analysis/xcelium-mcp-v5.2-hierarchical-dump.analysis.md Gap #1-#3 (Important) 기반. batch_runner.py:392-396(dump_history 스키마), batch_runner.py:883-903(dump_stats 집계), run_batch_regression(dump_history 미영속). Match Rate 85% → API Contract 78%를 끌어내린 두 스키마 편차 + regression 경로 누락 수정. 코드 변경 범위 ~30 LOC로 추정(분석서 Recommended Actions #1-#3).\n\n[Verified 2026-07-08 during prd.json bookkeeping audit — already implemented, not newly done this session]: batch_runner.py _update_dump_history() uses last_dump_summary/updated_at/strips scope_overrides; aggregate_dump_stats() returns {test,total} dicts + per-test named suggestions; run_batch_regression calls _update_dump_history in its per-test loop (line ~848). tests/test_dump_history_stats.py covers all.",
+      "completed_at": "2026-07-08"
     },
     {
       "id": "F-141",
       "title": "v5.2 async wiring 단위 테스트 추가 — _lazy_discover_boundaries / _update_dump_history / dump_stats",
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "plan_file": "docs/01-plan/features/xcelium-mcp-v5.2-hierarchical-dump.plan.md",
       "design_file": "docs/02-design/features/xcelium-mcp-v5.2-hierarchical-dump.design.md",
       "acceptanceCriteria": [
@@ -1970,13 +1971,14 @@
         "run_batch_regression이 per-test 루프에서 dump_history를 실제로 갱신하는지 검증하는 테스트 추가",
         "pytest passes"
       ],
-      "notes": "docs/03-analysis/xcelium-mcp-v5.2-hierarchical-dump.analysis.md 'Coverage gap' 섹션 기반 — 순수 함수만 단위테스트되어 async wiring(_lazy_discover_boundaries, _update_dump_history, dump_stats 집계, regression 통합)이 미검증 상태였고 Gap #1-#3이 바로 이 영역에서 발생함. F-140 완료 후 새 스키마 기준으로 테스트 작성 권장."
+      "notes": "docs/03-analysis/xcelium-mcp-v5.2-hierarchical-dump.analysis.md 'Coverage gap' 섹션 기반 — 순수 함수만 단위테스트되어 async wiring(_lazy_discover_boundaries, _update_dump_history, dump_stats 집계, regression 통합)이 미검증 상태였고 Gap #1-#3이 바로 이 영역에서 발생함. F-140 완료 후 새 스키마 기준으로 테스트 작성 권장.\n\n[Verified 2026-07-08 during prd.json bookkeeping audit — already implemented, not newly done this session]: tests/test_dump_history_stats.py has test_lazy_discover_boundaries_* (4 tests) + test_update_dump_history_* + test_regression_updates_dump_history_and_dump_stats_shape.",
+      "completed_at": "2026-07-08"
     },
     {
       "id": "F-142",
       "title": "v5.2 gap-fix (Minor M2): datetime.utcnow() deprecation 해소",
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "plan_file": "docs/01-plan/features/xcelium-mcp-v5.2-hierarchical-dump.plan.md",
       "design_file": "docs/02-design/features/xcelium-mcp-v5.2-hierarchical-dump.design.md",
       "acceptanceCriteria": [
@@ -1987,13 +1989,14 @@
         "pytest 실행 시 DeprecationWarning: datetime.datetime.utcnow() ... 경고가 더 이상 발생하지 않음",
         "pytest passes"
       ],
-      "notes": "docs/03-analysis/xcelium-mcp-v5.2-hierarchical-dump.analysis.md (2026-07-02 재분석) Minor M2 기반. batch_runner.py:398. Python 3.12+에서 datetime.utcnow()가 deprecated — 현재 pytest 스위트에서 DeprecationWarning 2건 발생 중(3.14 환경). design.md §7 pseudocode 자체가 utcnow()를 쓰고 있어 스펙에서 물려받은 것이지 구현 드리프트는 아님. 사용자 확인: M2를 prd.json에 추가."
+      "notes": "docs/03-analysis/xcelium-mcp-v5.2-hierarchical-dump.analysis.md (2026-07-02 재분석) Minor M2 기반. batch_runner.py:398. Python 3.12+에서 datetime.utcnow()가 deprecated — 현재 pytest 스위트에서 DeprecationWarning 2건 발생 중(3.14 환경). design.md §7 pseudocode 자체가 utcnow()를 쓰고 있어 스펙에서 물려받은 것이지 구현 드리프트는 아님. 사용자 확인: M2를 prd.json에 추가.\n\n[Verified 2026-07-08 during prd.json bookkeeping audit — already implemented, not newly done this session]: batch_runner.py imports `from datetime import datetime, timezone` and uses datetime.now(timezone.utc) in _update_dump_history — no more utcnow().",
+      "completed_at": "2026-07-08"
     },
     {
       "id": "F-143",
       "title": "v5.2 gap-fix (Minor M4): _update_dump_history의 load_sim_config force=True 미사용",
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "plan_file": "docs/01-plan/features/xcelium-mcp-v5.2-hierarchical-dump.plan.md",
       "design_file": "docs/02-design/features/xcelium-mcp-v5.2-hierarchical-dump.design.md",
       "acceptanceCriteria": [
@@ -2003,7 +2006,8 @@
         "run_batch_regression의 per-test 루프에서 반복 호출 시에도 정상 동작 (순차 실행이라 회귀 없음 확인)",
         "pytest passes"
       ],
-      "notes": "docs/03-analysis/xcelium-mcp-v5.2-hierarchical-dump.analysis.md (2026-07-02 재분석) Minor M4 기반. batch_runner.py:391 vs Design §7. 현재는 save_sim_config의 캐시 무효화에 의존해 순차 regression 루프 안에서는 문제없이 동작하지만, 이론적으로 다른 프로세스/세션이 동시에 config를 갱신한 경우 stale 캐시를 읽을 가능성이 있음 — 저위험이지만 design.md 스펙과 정합시키기 위해 백로그 추가. 사용자 확인: M4를 prd.json에 추가."
+      "notes": "docs/03-analysis/xcelium-mcp-v5.2-hierarchical-dump.analysis.md (2026-07-02 재분석) Minor M4 기반. batch_runner.py:391 vs Design §7. 현재는 save_sim_config의 캐시 무효화에 의존해 순차 regression 루프 안에서는 문제없이 동작하지만, 이론적으로 다른 프로세스/세션이 동시에 config를 갱신한 경우 stale 캐시를 읽을 가능성이 있음 — 저위험이지만 design.md 스펙과 정합시키기 위해 백로그 추가. 사용자 확인: M4를 prd.json에 추가.\n\n[Verified 2026-07-08 during prd.json bookkeeping audit — already implemented, not newly done this session]: batch_runner.py _update_dump_history() calls load_sim_config(sim_dir, force=True); tests/test_dump_history_stats.py::test_update_dump_history_loads_config_with_force asserts this.",
+      "completed_at": "2026-07-08"
     },
     {
       "id": "F-144",
@@ -2018,7 +2022,7 @@
         "tests/test_bisect.py에 소수점 신호값 케이스 추가 — gt/lt/eq/ne 4개 op 전부 (현재 gt/lt는 정수값에 대해서도 테스트가 전무했으므로 함께 보강)",
         "pytest passes"
       ],
-      "notes": "사용자 버그 리포트: 'bisect를 csv 파일로 처리할 때 소수점 자리가 지원이 안 되는 문제'. Explore 에이전트 조사(2026-07-02) + 직접 코드 확인으로 원인 2곳 확정:\n1. csv_cache.py:246,266 — `ns = int(raw_time)` / `s_ns = int(raw_t)`가 simvisdbutil이 소수점 SimTime을 내보내는 경우 uncaught ValueError로 bisect_signal_dump 전체가 크래시.\n2. csv_cache.py:311-312 — `_eval_condition()`의 `int(cur_val, 0)`/`int(target, 0)`가 소수점 문자열을 거부(base-0 int parsing은 '3.3' 파싱 불가). except에서 조용히 삼켜지고(321-322) String fallback(325-329)으로 빠지는데, 이 fallback은 eq/ne만 구현되어 있어 gt/lt는 소수점 값에 대해 항상 False 반환 — AMS/analog 신호(실수값)에서 gt/lt bisect가 항상 '찾을 수 없음'으로 보고됨. 에러 메시지도 없이 조용히 실패해 사용자가 원인을 알기 어려움.\n테스트 갭: tests/test_bisect.py는 정수 SimTime/정수 값만 커버, gt/lt op 자체가 한 번도 테스트된 적 없음.\n관련이지만 범위 밖(별도 검토 필요): shell_utils.py _parse_time_ns(:369-383), tcl_preprocessing.py _parse_l1_time_ns(:20-31)도 \\d+-only 정규식이라 동일한 소수점 미지원 패턴이지만, 이건 bisect CSV 경로가 아니라 bridge/checkpoint 시간 파싱이라 이번 버그 리포트 범위 밖으로 분리함(F-146). waveform.py:15 _TIME_RE(`^\\d+(\\.\\d+)?...`)는 이미 소수점을 정상 지원하는 대조군.\n전체 코드 소수점 취약 지점 광범위 조사(2026-07-02) 결과 F-145/F-146/F-147로 분리 추가함 — 상세 내역은 각 태스크 notes 참조."
+      "notes": "사용자 버그 리포트: 'bisect를 csv 파일로 처리할 때 소수점 자리가 지원이 안 되는 문제'. Explore 에이전트 조사(2026-07-02) + 직접 코드 확인으로 원인 2곳 확정:\n1. csv_cache.py:246,266 — `ns = int(raw_time)` / `s_ns = int(raw_t)`가 simvisdbutil이 소수점 SimTime을 내보내는 경우 uncaught ValueError로 bisect_signal_dump 전체가 크래시.\n2. csv_cache.py:311-312 — `_eval_condition()`의 `int(cur_val, 0)`/`int(target, 0)`가 소수점 문자열을 거부(base-0 int parsing은 '3.3' 파싱 불가). except에서 조용히 삼켜지고(321-322) String fallback(325-329)으로 빠지는데, 이 fallback은 eq/ne만 구현되어 있어 gt/lt는 소수점 값에 대해 항상 False 반환 — AMS/analog 신호(실수값)에서 gt/lt bisect가 항상 '찾을 수 없음'으로 보고됨. 에러 메시지도 없이 조용히 실패해 사용자가 원인을 알기 어려움.\n테스트 갭: tests/test_bisect.py는 정수 SimTime/정수 값만 커버, gt/lt op 자체가 한 번도 테스트된 적 없음.\n관련이지만 범위 밖(별도 검토 필요): shell_utils.py _parse_time_ns(:369-383), tcl_preprocessing.py _parse_l1_time_ns(:20-31)도 \\d+-only 정규식이라 동일한 소수점 미지원 패턴이지만, 이건 bisect CSV 경로가 아니라 bridge/checkpoint 시간 파싱이라 이번 버그 리포트 범위 밖으로 분리함(F-146). waveform.py:15 _TIME_RE(`^\\d+(\\.\\d+)?...`)는 이미 소수점을 정상 지원하는 대조군.\n전체 코드 소수점 취약 지점 광범위 조사(2026-07-02) 결과 F-145/F-146/F-147로 분리 추가함 — 상세 내역은 각 태스크 notes 참조. [2026-07-08 cloud0 라이브 검증: NOT-LIVE-VERIFIABLE, passes는 false로 유지] venezia-t0 환경의 덤프 CSV time(ns) 컬럼은 항상 정수(설계 precision이 1ns — sim_run(duration='0.5ns') 실행해도 진행 없음으로 확인)라 소수점 SimTime이 애초에 발생하지 않음. bisect_signal 자체는 정상 동작(w_scl 엣지를 100155ns에서 정확히 탐색) 확인했으나 이 버그의 핵심인 '소수점 SimTime' 경로는 이 프로젝트 데이터로는 재현 불가 — 인위적으로 소수점을 주입해 억지 재현하지 않기로 함(로컬 pytest 신규 테스트로만 커버됨, 코드 수정 자체는 이미 커밋됨). 다른 프로젝트(실제 소수점 SimTime을 내보내는 simvisdbutil 환경)에서 재검증 기회가 있으면 그때 라이브 확인 가능."
     },
     {
       "id": "F-145",
@@ -2032,13 +2036,14 @@
         "tests/에 소수점 SimTime을 가진 두 CSV를 비교하는 compare_csv_diff 테스트 추가 (기존엔 simvision_ops.py에 대한 단위 테스트 자체가 부족했을 가능성 — 확인 후 신규 테스트 파일 필요 시 생성)",
         "pytest passes"
       ],
-      "notes": "F-144 조사 중 사용자 요청으로 전체 코드 광범위 재조사(2026-07-02) — F-144와 완전히 독립적으로 구현된 두 번째 'SimTime → int()' 크래시 지점 발견. simvision_ops.py:395-402 `_load_rows()`가 compare_csv_diff()(→ compare_waveforms MCP tool)에서 사용되는데, csv_cache.py의 bisect_csv()와 똑같이 `int(raw_time)`을 try/except 없이 호출함 — 두 파일이 SimTime 파싱 로직을 독립적으로 각자 구현해서 같은 버그가 두 곳에 따로 존재하게 된 것. F-144 구현 시 공용 헬퍼(예: csv_cache.py에 `_parse_sim_time_ns(raw: str) -> int`)로 추출해 이 파일에서도 import해서 쓰면 재발 방지에 유리 — 구현 순서상 F-144를 먼저 하고 F-145에서 그 헬퍼를 재사용하는 것을 권장."
+      "notes": "F-144 조사 중 사용자 요청으로 전체 코드 광범위 재조사(2026-07-02) — F-144와 완전히 독립적으로 구현된 두 번째 'SimTime → int()' 크래시 지점 발견. simvision_ops.py:395-402 `_load_rows()`가 compare_csv_diff()(→ compare_waveforms MCP tool)에서 사용되는데, csv_cache.py의 bisect_csv()와 똑같이 `int(raw_time)`을 try/except 없이 호출함 — 두 파일이 SimTime 파싱 로직을 독립적으로 각자 구현해서 같은 버그가 두 곳에 따로 존재하게 된 것. F-144 구현 시 공용 헬퍼(예: csv_cache.py에 `_parse_sim_time_ns(raw: str) -> int`)로 추출해 이 파일에서도 import해서 쓰면 재발 방지에 유리 — 구현 순서상 F-144를 먼저 하고 F-145에서 그 헬퍼를 재사용하는 것을 권장. [2026-07-08 cloud0 라이브 검증: NOT-LIVE-VERIFIABLE, passes는 false로 유지] F-144와 같은 이유 — venezia-t0의 유일한 real 타입 net(top.hw.r_Rect_V)이 실행한 디지털 테스트(i2c/gating) 동안 계속 0.0으로 고정돼 있어 덤프 데이터 자체에 소수점 값이 없음. compare_waveforms가 비교할 소수점 데이터가 없어 이 경로를 라이브로 재현할 수 없음(억지 주입 안 함) — 로컬 pytest 신규 테스트로만 커버됨."
     },
     {
       "id": "F-146",
       "title": "버그: 시간 문자열 파싱 3곳(_parse_time_ns/_parse_l1_time_ns/_DURATION_RE)이 소수점 미지원",
       "priority": 2,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-07-08",
       "acceptanceCriteria": [
         "shell_utils.py _parse_time_ns()의 4개 정규식(라인 371,374,377,380)이 `\\d+` 대신 `\\d+(?:\\.\\d+)?`로 소수점 초 단위(MS/US/NS 접두 카운트 부분)까지 파싱 — bridge `where` 명령 출력에 소수점이 포함된 경우도 정상 변환",
         "tcl_preprocessing.py _parse_l1_time_ns()의 정규식(라인 22, `r'(\\d+)\\s*(us|ms|ns)?'`)이 `l1_time` 파라미터에 소수점 값(예: '1.5ms')이 들어와도 정상 파싱해 ns로 환산",
@@ -2048,13 +2053,14 @@
         "각 파일에 대응하는 기존 단위 테스트(있는 경우)에 소수점 케이스 추가, 없으면 신규 테스트 추가",
         "pytest passes"
       ],
-      "notes": "F-144 notes에서 분리(사용자 지시, 2026-07-02) — bisect CSV 버그 리포트와는 다른 코드 경로(bridge where 응답 파싱 / checkpoint L1 저장 시각 / sim_run duration)지만 근본 원인은 동일한 클래스: 'N + 단위' 형태의 시간 문자열을 `\\d+`-only 정규식으로 파싱해 소수점(N.M단위)을 지원하지 않음. waveform.py의 _TIME_RE(`^\\d+(\\.\\d+)?...`)는 이미 이 패턴을 올바르게 구현해뒀으므로, 이번 수정은 그 패턴을 나머지 3곳에 맞춰 확장하는 작업. sim_lifecycle.py의 _DURATION_RE는 F-013(Tcl injection 방지)에서 도입된 보안 검증 정규식이기도 하므로, 소수점을 추가할 때 metachar를 다시 허용하지 않도록 주의 필요."
+      "notes": "F-144 notes에서 분리(사용자 지시, 2026-07-02) — bisect CSV 버그 리포트와는 다른 코드 경로(bridge where 응답 파싱 / checkpoint L1 저장 시각 / sim_run duration)지만 근본 원인은 동일한 클래스: 'N + 단위' 형태의 시간 문자열을 `\\d+`-only 정규식으로 파싱해 소수점(N.M단위)을 지원하지 않음. waveform.py의 _TIME_RE(`^\\d+(\\.\\d+)?...`)는 이미 이 패턴을 올바르게 구현해뒀으므로, 이번 수정은 그 패턴을 나머지 3곳에 맞춰 확장하는 작업. sim_lifecycle.py의 _DURATION_RE는 F-013(Tcl injection 방지)에서 도입된 보안 검증 정규식이기도 하므로, 소수점을 추가할 때 metachar를 다시 허용하지 않도록 주의 필요. [2026-07-08 cloud0 라이브 검증: PASS] venezia-t0에서 sim_run(duration='100.5ns')과 sim_run(duration='0.5ns') 둘 다 파싱 에러 없이 정상 수락, sim 진행 확인(1ns precision 설계라 정수 ns 경계로 착지하는 건 timescale 특성이지 파싱 결함 아님)."
     },
     {
       "id": "F-147",
       "title": "버그: deposit_signal 값 검증 정규식이 소수점(real/wreal analog 값) 미지원",
       "priority": 2,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-07-08",
       "acceptanceCriteria": [
         "tools/signal_inspection.py _DEPOSIT_VALUE_RE(라인 16, `^[\\d'bhBHdDoOxXzZ_]+$`)가 소수점 실수값(예: '3.3')을 허용하도록 확장 — real/wreal(AMS analog) 신호에 deposit_signal(signal=..., value='3.3') 호출 시 'Invalid deposit value' 에러 없이 통과",
         "음수(-1.5)와 과학적 표기법(1.2e-05) 지원 여부를 결정하고 반영 — AMS 테스트벤치에서 실제로 필요한 값 형식인지 확인 후 정규식에 반영 (불필요하면 명시적으로 범위 밖으로 문서화)",
@@ -2063,13 +2069,13 @@
         "tests/에 deposit_signal 소수점 값 케이스(정상 케이스 + 여전히 거부돼야 하는 injection 페이로드 케이스) 추가",
         "pytest passes"
       ],
-      "notes": "F-144 조사 중 사용자 요청('analog 값을 probe하여 처리하는 로직들도 영향을 받을 수 있어')에 따른 광범위 재조사(2026-07-02)로 발견. deposit_signal은 bisect와 무관하게 signal_inspection.py에서 독립적으로 값 검증을 하는데, 정규식이 digital literal(비트폭'진법값 형식)만 상정하고 있어 real/wreal 타입 net에 소수점 값을 강제로 넣으려 하면 애초에 Tcl에 도달하기 전에 Python 레이어에서 거부됨. bisect(읽기 경로)의 소수점 미지원과 짝을 이루는 쓰기 경로(deposit) 문제 — 두 경로 모두 고쳐야 AMS/analog 디버깅 워크플로우에서 실수값을 온전히 다룰 수 있음. _DEPOSIT_VALUE_RE는 F-012(Tcl injection 방지)에서 도입된 보안 검증이므로 확장 시 주의."
+      "notes": "F-144 조사 중 사용자 요청('analog 값을 probe하여 처리하는 로직들도 영향을 받을 수 있어')에 따른 광범위 재조사(2026-07-02)로 발견. deposit_signal은 bisect와 무관하게 signal_inspection.py에서 독립적으로 값 검증을 하는데, 정규식이 digital literal(비트폭'진법값 형식)만 상정하고 있어 real/wreal 타입 net에 소수점 값을 강제로 넣으려 하면 애초에 Tcl에 도달하기 전에 Python 레이어에서 거부됨. bisect(읽기 경로)의 소수점 미지원과 짝을 이루는 쓰기 경로(deposit) 문제 — 두 경로 모두 고쳐야 AMS/analog 디버깅 워크플로우에서 실수값을 온전히 다룰 수 있음. _DEPOSIT_VALUE_RE는 F-012(Tcl injection 방지)에서 도입된 보안 검증이므로 확장 시 주의. [2026-07-08 cloud0 라이브 검증: PASS] venezia-t0에 실제 real 타입 net(top.hw.r_Rect_V) 존재 확인 — deposit_signal로 '3.3'(양수)과 '-1.5'(음수) 둘 다 정상 기록되고 readback도 정확히 일치. 인위적 재현이 아니라 실제 analog net에 대한 정상 사용 시나리오로 검증됨."
     },
     {
       "id": "F-148",
       "title": "보안: sanitize_signal_name이 개행문자를 차단하지 않아 Tcl 명령 스머글링 가능",
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "shell_utils.py sanitize_signal_name()이 개행(\\n)과 캐리지리턴(\\r)을 포함한 입력을 ValueError로 거부",
         "기존 valid 테스트 케이스(top.hw.clk, top.hw.data[7:0], top.hw.bus[0] 등, tests/test_pure_helpers.py:280-286)는 전부 회귀 없이 그대로 통과",
@@ -2077,26 +2083,28 @@
         "tool 레벨 통합 테스트 최소 1개 — inspect_signal 또는 deposit_signal에 개행 포함 signal을 넘겼을 때 bridge.execute가 호출되지 않고 ERROR가 반환되는지 확인",
         "pytest passes"
       ],
-      "notes": "code-analyzer 에이전트의 광범위 코드 리뷰(2026-07-02)에서 발견, Claude가 직접 검증 완료. shell_utils.py:230-260의 sanitize_signal_name은 '[', '$', ';'만 거부하고 개행은 체크하지 않음. tcl_bridge.py:129의 self._writer.write((command + '\\n').encode(...))가 명령을 개행 1개로 프레이밍하고, tcl/mcp_bridge.tcl:162-186의 on_readable이 gets $channel line으로 한 줄씩 읽어 즉시 dispatch하는 것까지 직접 확인 — 신호명에 개행이 포함되면 두 개의 독립된 Tcl 명령으로 스플릿되어 두 번째 명령(예: 'database close')이 Python 클라이언트 모르게 실행됨. inspect_signal/deposit_signal/probe/bisect_signal/waveform 등 신호명을 받는 모든 tool이 영향권. 영향도 분석 결과 sanitize_signal_name의 모든 호출부(14곳)가 단일 신호명만 넘기고 있어 개행 거부 추가는 기존 기능에 영향 없음을 확인함."
+      "notes": "code-analyzer 에이전트의 광범위 코드 리뷰(2026-07-02)에서 발견, Claude가 직접 검증 완료. shell_utils.py:230-260의 sanitize_signal_name은 '[', '$', ';'만 거부하고 개행은 체크하지 않음. tcl_bridge.py:129의 self._writer.write((command + '\\n').encode(...))가 명령을 개행 1개로 프레이밍하고, tcl/mcp_bridge.tcl:162-186의 on_readable이 gets $channel line으로 한 줄씩 읽어 즉시 dispatch하는 것까지 직접 확인 — 신호명에 개행이 포함되면 두 개의 독립된 Tcl 명령으로 스플릿되어 두 번째 명령(예: 'database close')이 Python 클라이언트 모르게 실행됨. inspect_signal/deposit_signal/probe/bisect_signal/waveform 등 신호명을 받는 모든 tool이 영향권. 영향도 분석 결과 sanitize_signal_name의 모든 호출부(14곳)가 단일 신호명만 넘기고 있어 개행 거부 추가는 기존 기능에 영향 없음을 확인함.\n\n[Verified 2026-07-08 during prd.json bookkeeping audit — already implemented, not newly done this session]: shell_utils.py sanitize_signal_name() rejects \\n/\\r (explicit F-148 comment); tests/test_pure_helpers.py TestSanitizeSignalName + tests/test_deposit_signal.py tool-level test both present.",
+      "completed_at": "2026-07-08"
     },
     {
       "id": "F-149",
       "title": "보안: reload_waveform의 shm_path가 검증 없이 Tcl에 직접 삽입됨",
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "tools/simvision.py의 simvision(action='reload')가 reload_waveform(bridges, shm_path) 호출 전에 shm_path를 검증 — 최소 validate_path() 적용 (F-150에서 만들 Tcl-safe 검증 헬퍼가 있으면 그것도 함께 적용)",
         "'/tmp/x[exec id].shm' 같은 Tcl command substitution injection payload가 ERROR로 거부되고 bridge.execute가 호출되지 않음을 테스트로 확인",
         "정상 SHM 경로('/sim/run/dump/test.shm' 형태)는 회귀 없이 그대로 reload 동작",
         "pytest passes"
       ],
-      "notes": "code-analyzer 에이전트의 광범위 코드 리뷰(2026-07-02)에서 발견, Claude가 직접 검증 완료. simvision_ops.py:357의 await bridge.execute(f\"database open {shm_path}\")가 shm_path에 validate_path/sanitize 어느 것도 거치지 않은 상태로 도달함을 tools/simvision.py:134-135(호출부)부터 추적해 확인. 영향도 분석: 기존 테스트/코드의 SHM 경로 예시가 전부 평범한 Linux 경로뿐이라 검증 추가로 인한 기존 기능 회귀 없음."
+      "notes": "code-analyzer 에이전트의 광범위 코드 리뷰(2026-07-02)에서 발견, Claude가 직접 검증 완료. simvision_ops.py:357의 await bridge.execute(f\"database open {shm_path}\")가 shm_path에 validate_path/sanitize 어느 것도 거치지 않은 상태로 도달함을 tools/simvision.py:134-135(호출부)부터 추적해 확인. 영향도 분석: 기존 테스트/코드의 SHM 경로 예시가 전부 평범한 Linux 경로뿐이라 검증 추가로 인한 기존 기능 회귀 없음.\n\n[Verified 2026-07-08 during prd.json bookkeeping audit — already implemented, not newly done this session]: simvision_ops.py reload_waveform() calls validate_tcl_path() before any bridge call (F-149 comment); tests/test_validate_tcl_path.py::test_reload_waveform_* cover it.",
+      "completed_at": "2026-07-08"
     },
     {
       "id": "F-150",
       "title": "보안: validate_path가 Tcl 메타문자를 걸러내지 못해 open_database/compare_simvision 등에서 injection 가능",
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "shell_utils.py에 Tcl 바인딩 전용 경로 검증 함수 신설(예: validate_tcl_path()) — 기존 validate_path(파일시스템 전용: null byte, '..')와 별개로 '[', ']', '$', 공백, 개행, ';' 등 Tcl 메타문자를 allowlist 방식(re.fullmatch)으로 거부",
         "simvision_ops.py open_database()(라인 66, 74)와 compare_simvision()(라인 558)가 Tcl로 넘기기 전에 신규 함수로 shm_path를 검증",
@@ -2105,13 +2113,14 @@
         "csv_diff 모드(shell_quote 기반, 이미 안전)는 이 변경의 영향을 받지 않음을 확인",
         "pytest passes"
       ],
-      "notes": "code-analyzer 에이전트의 광범위 코드 리뷰(2026-07-02)에서 발견. F-148/F-149와 같은 근본 원인(denylist 검증의 구조적 우회 가능성) — validate_path는 파일시스템 안전성만 보장하고 Tcl 안전성은 보장하지 않는데도 Tcl 바인딩 지점에서 그대로 사용됨. 영향도 분석: Tcl로 가는 지점에만 추가 검증을 얹는 구조라 CSV 추출(shell 경로, 이미 shell_quote로 안전) 경로는 전혀 영향받지 않음을 확인."
+      "notes": "code-analyzer 에이전트의 광범위 코드 리뷰(2026-07-02)에서 발견. F-148/F-149와 같은 근본 원인(denylist 검증의 구조적 우회 가능성) — validate_path는 파일시스템 안전성만 보장하고 Tcl 안전성은 보장하지 않는데도 Tcl 바인딩 지점에서 그대로 사용됨. 영향도 분석: Tcl로 가는 지점에만 추가 검증을 얹는 구조라 CSV 추출(shell 경로, 이미 shell_quote로 안전) 경로는 전혀 영향받지 않음을 확인.\n\n[Verified 2026-07-08 during prd.json bookkeeping audit — already implemented, not newly done this session]: shell_utils.py validate_tcl_path() implemented exactly as specified, used in open_database/reload_waveform/compare_simvision; tests/test_validate_tcl_path.py comprehensive.",
+      "completed_at": "2026-07-08"
     },
     {
       "id": "F-151",
       "title": "보안: compare_simvision의 signals가 다른 tool과 달리 sanitize_signal_name을 거치지 않음",
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "simvision_ops.py compare_simvision()이 signals를 bridge에 넘기기 전(BEFORE 그룹, AFTER 그룹 둘 다 — 라인 565, 575)에 각 항목에 sanitize_signal_name() 적용",
         "compare_waveforms(output_mode='simvision')이 output_mode='csv_diff'와 동일한 수준의 신호명 검증을 갖도록 일관성 확보",
@@ -2119,51 +2128,55 @@
         "정상 signal 목록은 회귀 없이 그대로 BEFORE/AFTER 그룹에 추가됨",
         "pytest passes"
       ],
-      "notes": "code-analyzer 에이전트의 광범위 코드 리뷰(2026-07-02)에서 발견, Claude가 직접 검증 완료. compare_waveforms의 signals 파라미터는 csv_diff 모드(default)에서 이미 csv_cache.extract() → sanitize_signal_name을 거치고 있음(csv_cache.py:163) — simvision 모드만 이 검증이 빠져있는 비일관 상태. 이 사실 자체가 회귀 위험이 낮음을 뒷받침 — 지금 존재하는 어떤 정당한 signal 값도 이미 default 경로에서 sanitize를 통과하고 있는 것들이므로, simvision 모드에 동일 검증을 추가해도 깨질 입력이 있다면 이미 csv_diff 모드에서도 깨지고 있었을 것."
+      "notes": "code-analyzer 에이전트의 광범위 코드 리뷰(2026-07-02)에서 발견, Claude가 직접 검증 완료. compare_waveforms의 signals 파라미터는 csv_diff 모드(default)에서 이미 csv_cache.extract() → sanitize_signal_name을 거치고 있음(csv_cache.py:163) — simvision 모드만 이 검증이 빠져있는 비일관 상태. 이 사실 자체가 회귀 위험이 낮음을 뒷받침 — 지금 존재하는 어떤 정당한 signal 값도 이미 default 경로에서 sanitize를 통과하고 있는 것들이므로, simvision 모드에 동일 검증을 추가해도 깨질 입력이 있다면 이미 csv_diff 모드에서도 깨지고 있었을 것.\n\n[Verified 2026-07-08 during prd.json bookkeeping audit — already implemented, not newly done this session]: simvision_ops.py compare_simvision() sanitizes signals via sanitize_signal_name() before BEFORE/AFTER groups (F-151 comment); tests/test_validate_tcl_path.py::test_compare_simvision_rejects_injection_in_signals.",
+      "completed_at": "2026-07-08"
     },
     {
       "id": "F-152",
       "title": "성능: batch_runner.py regression 결과 파싱이 테스트당 4회 순차 subprocess (N+1)",
       "priority": 2,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-07-08",
       "acceptanceCriteria": [
         "batch_runner.py run_batch_regression()의 'Parse final results' 루프(test -f, ls -t fallback, grep 2회 — 약 815-833라인)를 asyncio.gather로 테스트별 병렬 실행하도록 변경",
         "각 테스트의 결과 수집이 서로 독립적임을 확인(공유 상태 없음) — per_test_results/per_test_errors dict에 대한 쓰기가 race condition 없이 안전한지 확인",
         "병렬화 후에도 결과 순서/내용이 기존 순차 실행과 동일함을 테스트로 확인",
         "pytest passes"
       ],
-      "notes": "code-analyzer 에이전트의 광범위 코드 리뷰(2026-07-02)에서 발견. 이미 완료된 시뮬레이션의 로그 파일을 읽기만 하는 순수 read-only, per-test 독립 작업이라 병렬화해도 순서 의존성 없음(Claude 검증). 대규모 regression에서 4·N회 순차 subprocess round-trip이 결과 수집 단계에서만 발생 — 병렬화 시 상당한 시간 단축 예상."
+      "notes": "code-analyzer 에이전트의 광범위 코드 리뷰(2026-07-02)에서 발견. 이미 완료된 시뮬레이션의 로그 파일을 읽기만 하는 순수 read-only, per-test 독립 작업이라 병렬화해도 순서 의존성 없음(Claude 검증). 대규모 regression에서 4·N회 순차 subprocess round-trip이 결과 수집 단계에서만 발생 — 병렬화 시 상당한 시간 단축 예상. [2026-07-08 cloud0 라이브 검증: PASS] venezia-t0에서 sim_regression([TOP014,TOP016])을 실제 2-테스트로 실행 — 결과가 뒤섞이지 않고 TOP014→waveform-COMPLETE, TOP016→3/3 PASS(V-24/25/26)로 각자의 =test= 섹션·$finish에 정확히 매핑됨을 확인."
     },
     {
       "id": "F-153",
       "title": "성능: discovery.py SDF 분석이 인스턴스별 순차 grep (N+1)",
       "priority": 2,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-07-08",
       "acceptanceCriteria": [
         "discovery.py _analyze_sdf_annotate()(약 242-251라인)의 인스턴스별 순차 grep -rl 호출을 asyncio.gather로 병렬 실행하거나, 단일 grep -rlE 'module\\s+(a|b|c)\\b' 형태로 병합",
         "기존 동작(인스턴스→모듈 매핑 결과)이 회귀 없이 동일함을 테스트로 확인",
         "pytest passes"
       ],
-      "notes": "code-analyzer 에이전트의 광범위 코드 리뷰(2026-07-02)에서 발견. sim_discover 시 1회성 실행이라 영향 범위는 top module의 인스턴스 수에 비례 — top module이 넓을수록 체감 지연 발생."
+      "notes": "code-analyzer 에이전트의 광범위 코드 리뷰(2026-07-02)에서 발견. sim_discover 시 1회성 실행이라 영향 범위는 top module의 인스턴스 수에 비례 — top module이 넓을수록 체감 지연 발생. [2026-07-08 cloud0 라이브 검증: PASS] venezia-t0에서 sim_discover(force=True) 재실행 — 에러 없이 완료, sdf_info 블록에 11개 SDF entry(DTOP/VTG_TOP/ALAMO_TOP × GATE/PRE/BEST/WORST/AMS) 전부 정상 scope→file→condition 매핑 확인."
     },
     {
       "id": "F-154",
       "title": "버그: cleanup_stale_csv의 mtime 탐지 휴리스틱이 SHM stem에 9자리 이상 숫자가 있으면 오작동 가능",
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "csv_cache.py cleanup_stale_csv()의 mtime 후보 탐지(약 460-463라인, `[p for p in parts if p.isdigit() and len(p) >= 9]`)를 '첫 9자리 이상 숫자 토큰' 대신 파일명 내 고정 위치(8자리 sig hash 다음 필드)로 앵커링",
         "SHM stem 자체에 9자리 이상 숫자가 포함된 케이스(예: 테스트명에 타임스탬프 유사 숫자가 들어간 경우)에 대한 회귀 테스트 추가 — 캐시 파일이 잘못 삭제되거나 stale 파일이 잘못 보존되지 않는지 확인",
         "기존 정상 케이스(숫자 없는 stem)는 회귀 없이 그대로 동작",
         "pytest passes"
       ],
-      "notes": "code-analyzer 에이전트의 광범위 코드 리뷰(2026-07-02)에서 발견. 도달 가능성은 낮음(stem은 보통 테스트명이라 9자리 이상 연속 숫자가 흔치 않음)이나 휴리스틱 자체가 fragile. Minor로 분류, 낮은 priority."
+      "notes": "code-analyzer 에이전트의 광범위 코드 리뷰(2026-07-02)에서 발견. 도달 가능성은 낮음(stem은 보통 테스트명이라 9자리 이상 연속 숫자가 흔치 않음)이나 휴리스틱 자체가 fragile. Minor로 분류, 낮은 priority.\n\n[Verified 2026-07-08 during prd.json bookkeeping audit — already implemented, not newly done this session]: csv_cache.py _STALE_CSV_MTIME_RE = r'_[0-9A-Za-z]{8}_(\\d{9,})(?:_\\d+_\\d+)?$' — anchored immediately after the 8-char sig_hash, not a bare 9+ digit search.",
+      "completed_at": "2026-07-08"
     },
     {
       "id": "F-155",
       "title": "아키텍처: run_batch_regression이 5개 이상 책임 혼재 — 순수 로직(verdict 분류/dump_stats 집계) 추출",
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "batch_runner.py에 classify_regression_results(test_list, per_test_results, per_test_errors) -> str 순수 함수 추출 — 기존 5-way verdict 분류 로직(약 841-891라인) 이전, mock 없이 직접 단위 테스트 가능",
         "batch_runner.py에 aggregate_dump_stats(per_test_dump_summaries) -> dict | None 순수 함수 추출 — 기존 dump_stats 집계 로직(약 893-919라인) 이전",
@@ -2172,13 +2185,14 @@
         "기존 tests/test_regression_summary.py, tests/test_dump_history_stats.py, tests/test_regression_result_collection.py 전부 회귀 없이 통과",
         "pytest passes"
       ],
-      "notes": "code-analyzer 아키텍처 리뷰(2026-07-02) Critical #1. run_batch_regression(batch_runner.py:527-921, 921줄 파일 중 400줄)이 job-resume 파싱, per-test 실행 루프, nohup/PID/watcher 플러밍, checkpoint Tcl 주입, dump_history 동기화, 결과 수집, 그리고 순수 로직(verdict 분류/dump_stats 집계)까지 전부 한 함수에 혼재. 순수 로직만 추출해도 F-140~152에서 반복됐던 '전체 regression을 무겁게 mock해야 테스트 가능' 문제가 부분적으로 해소됨. F-156/F-157과 함께 batch_runner.py 리팩터링의 첫 단계로 권장(agent 우선순위 2위)."
+      "notes": "code-analyzer 아키텍처 리뷰(2026-07-02) Critical #1. run_batch_regression(batch_runner.py:527-921, 921줄 파일 중 400줄)이 job-resume 파싱, per-test 실행 루프, nohup/PID/watcher 플러밍, checkpoint Tcl 주입, dump_history 동기화, 결과 수집, 그리고 순수 로직(verdict 분류/dump_stats 집계)까지 전부 한 함수에 혼재. 순수 로직만 추출해도 F-140~152에서 반복됐던 '전체 regression을 무겁게 mock해야 테스트 가능' 문제가 부분적으로 해소됨. F-156/F-157과 함께 batch_runner.py 리팩터링의 첫 단계로 권장(agent 우선순위 2위).\n\n[Verified 2026-07-08 during prd.json bookkeeping audit — already implemented, not newly done this session]: batch_runner.py has classify_regression_results() and aggregate_dump_stats() as standalone pure functions extracted from run_batch_regression (both docstrings cite F-155).",
+      "completed_at": "2026-07-08"
     },
     {
       "id": "F-156",
       "title": "아키텍처: run_batch_single/run_batch_regression의 job-resume 로직이 두 곳에 따로 구현되어 서로 어긋남",
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "parse_existing_job()(batch_runner.py:148-205, run_batch_single이 사용)과 run_batch_regression 내부 인라인 resume 로직(약 596-647라인, test_list 매칭 + _should_resume_regression 사용)을 공용 helper로 통합 — match predicate(단일 test_name 동등 비교 vs test_list 집합 비교)를 파라미터화",
         "통합 후에도 두 caller(run_batch_single, run_batch_regression)의 기존 동작(alive/dead PID 판별, _kill_stale_sim 호출 조건) 회귀 없음",
@@ -2186,26 +2200,28 @@
         "기존 tests/test_batch_helpers.py의 parse_existing_job 관련 테스트 전부 통과",
         "pytest passes"
       ],
-      "notes": "code-analyzer 아키텍처 리뷰(2026-07-02) Major #2. 두 구현이 이미 'test_list 매칭' 기능 유무 등으로 drift됨 — 이런 drift가 중복이 위험한 이유의 실증 사례. F-155와 함께 batch_runner.py 리팩터링 단계."
+      "notes": "code-analyzer 아키텍처 리뷰(2026-07-02) Major #2. 두 구현이 이미 'test_list 매칭' 기능 유무 등으로 drift됨 — 이런 drift가 중복이 위험한 이유의 실증 사례. F-155와 함께 batch_runner.py 리팩터링 단계.\n\n[Verified 2026-07-08 during prd.json bookkeeping audit — already implemented, not newly done this session]: batch_runner.py _read_job_status() extracts the shared read+parse+PID-check prefix; parse_existing_job()/_should_resume_regression() keep their differing match-predicates separate with an explicit documented rationale (F-156 docstring) for not forcing a single interface.",
+      "completed_at": "2026-07-08"
     },
     {
       "id": "F-157",
       "title": "아키텍처: launch_nohup_job 헬퍼가 있는데 regression 경로가 동일 로직을 인라인 재구현",
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "run_batch_single이 사용하는 launch_nohup_job()(batch_runner.py:275-332)을 run_batch_regression의 인라인 nohup-subshell + echo $! > pid_file + PID 읽기 + job-file 쓰기 + fire-and-forget watcher 시퀀스(약 730-761라인)에서도 재사용하도록 파라미터화 또는 공용 launch primitive로 추출",
         "regression 경로에서 job-file payload 구성(test_list, completed, current 등 regression 전용 필드)은 caller가 조립해 launch_nohup_job에 전달하는 형태로 정리",
         "기존 동작(F-020 SSH 호출 수 절감 특성 포함) 회귀 없음",
         "pytest passes"
       ],
-      "notes": "code-analyzer 아키텍처 리뷰(2026-07-02) Major #3. 두 nohup-launch 블록이 이미 다른 커밋 태그(P6-5b, F-020) 주석을 달고 각자 진화 중 — F-155/F-156과 함께 batch_runner.py의 job-lifecycle 관심사를 하나로 모으는 작업의 마지막 조각."
+      "notes": "code-analyzer 아키텍처 리뷰(2026-07-02) Major #3. 두 nohup-launch 블록이 이미 다른 커밋 태그(P6-5b, F-020) 주석을 달고 각자 진화 중 — F-155/F-156과 함께 batch_runner.py의 job-lifecycle 관심사를 하나로 모으는 작업의 마지막 조각.\n\n[Verified 2026-07-08 during prd.json bookkeeping audit — already implemented, not newly done this session]: batch_runner.py launch_nohup_job() is called from both run_batch_single (line ~536) and run_batch_regression (line ~873).",
+      "completed_at": "2026-07-08"
     },
     {
       "id": "F-158",
       "title": "아키텍처: build_eda_command 공용 헬퍼가 있는데 3곳이 인라인 재구현 + 이미 서로 어긋남(join 구분자 drift)",
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "batch_runner._resolve_exec_cmd()(약 123-128라인)의 source_separately 인라인 분기를 shell_utils.build_eda_command() 호출로 교체 — 기존엔 '; '가 아닌 ' && '로 join하는 drift가 있었음, build_eda_command의 '; ' join으로 통일(동작 의미 변경이므로 관련 테스트 확인 필요)",
         "simvision_ops.py에 _launch_simvision(runner, display, shm_path, log_name) 공용 함수 신설 — start_simvision()과 compare_simvision()의 거의 동일한 env-source + setenv DISPLAY + cd + simvision <shm> + nohup 시퀀스를 통합, 내부적으로 build_eda_command 사용",
@@ -2213,13 +2229,14 @@
         "기존 tests/test_pure_helpers.py의 start_simvision 관련 테스트, tests/test_validate_tcl_path.py의 compare_simvision 관련 테스트 전부 회귀 없이 통과 (join 구분자 변경으로 인한 의도된 동작 차이는 테스트 갱신)",
         "pytest passes"
       ],
-      "notes": "code-analyzer 아키텍처 리뷰(2026-07-02) Major #4, Claude가 직접 코드 확인 완료. F-017(2026-04-10 완료 처리, 'sim_runner.py/env_detection.py/simvision.py/checkpoint.py 5곳 중복 제거')이 있었음에도, 이후 새로 추가/리팩터링된 코드(_resolve_exec_cmd, compare_simvision)가 build_eda_command를 안 쓰고 다시 인라인 복붙 — 중복이 재발하는 실제 사례. join 구분자(';' vs '&&') 차이는 실제 동작 차이이므로 통일 시 신중히 검증 필요."
+      "notes": "code-analyzer 아키텍처 리뷰(2026-07-02) Major #4, Claude가 직접 코드 확인 완료. F-017(2026-04-10 완료 처리, 'sim_runner.py/env_detection.py/simvision.py/checkpoint.py 5곳 중복 제거')이 있었음에도, 이후 새로 추가/리팩터링된 코드(_resolve_exec_cmd, compare_simvision)가 build_eda_command를 안 쓰고 다시 인라인 복붙 — 중복이 재발하는 실제 사례. join 구분자(';' vs '&&') 차이는 실제 동작 차이이므로 통일 시 신중히 검증 필요.\n\n[Verified 2026-07-08 during prd.json bookkeeping audit — already implemented, not newly done this session]: shell_utils.build_eda_command() used in batch_runner._resolve_exec_cmd (line ~126); simvision_ops._launch_simvision() consolidates start_simvision()/compare_simvision()'s env+DISPLAY+cd+nohup sequence via build_eda_command, used at both call sites.",
+      "completed_at": "2026-07-08"
     },
     {
       "id": "F-159",
       "title": "아키텍처: checkpoints/manifest.json에 writer가 2곳 — registry.config_action이 스키마 모른 채 직접 씀",
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "registry.py config_action()의 file=='checkpoint' 분기(약 211-224, 252, 257라인)가 raw Path 읽기/_write_json_sync 대신 checkpoint_manager._read_manifest()/_write_manifest()를 호출하도록 변경 — manifest 스키마(compile_hash, checkpoints, tb_analysis_cache)에 대한 지식 없이 직접 파일을 만지지 않음",
         "mcp_config(file='checkpoint', action='set'/'delete', ...)의 기존 동작(dot-path get/set/delete)은 그대로 유지 — 데이터 접근 방식(_dot_get/_dot_set/_dot_delete)은 유지하되 read/write I/O만 checkpoint_manager를 경유",
@@ -2227,7 +2244,8 @@
         "checkpoint_manager.py의 다른 함수(register_checkpoint 등)와의 동시 사용 시 매니페스트 스키마가 깨지지 않음을 확인하는 회귀 테스트 추가",
         "pytest passes"
       ],
-      "notes": "code-analyzer 아키텍처 리뷰(2026-07-02) Major #5, Claude가 직접 코드 확인 완료(registry.py:211-224, checkpoint_manager.py:66-81). mcp_config tool을 통해 AI가 checkpoint manifest를 checkpoint_manager가 기대하지 않는 형태로 손상시킬 수 있는 실질적 데이터 무결성 리스크."
+      "notes": "code-analyzer 아키텍처 리뷰(2026-07-02) Major #5, Claude가 직접 코드 확인 완료(registry.py:211-224, checkpoint_manager.py:66-81). mcp_config tool을 통해 AI가 checkpoint manifest를 checkpoint_manager가 기대하지 않는 형태로 손상시킬 수 있는 실질적 데이터 무결성 리스크.\n\n[Verified 2026-07-08 during prd.json bookkeeping audit — already implemented, not newly done this session]: registry.py config_action()'s checkpoint branch calls _checkpoint_manager._read_manifest/_write_manifest instead of raw JSON I/O.",
+      "completed_at": "2026-07-08"
     },
     {
       "id": "F-160",
@@ -2250,7 +2268,7 @@
       "id": "F-161",
       "title": "아키텍처: resolve_sim_dir가 잘못된 모듈(discovery.py)에 있어 lazy import 4곳 유발",
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "discovery.py의 get_default_sim_dir()/resolve_sim_dir()(53-72라인, load_registry만 사용)를 registry.py로 이동",
         "registry.py:205, test_resolution.py:85, csv_cache.py:49,171의 'from xcelium_mcp.discovery import resolve_sim_dir' lazy import 4곳을 module-level 직접 import로 변경",
@@ -2258,39 +2276,42 @@
         "python -c 'import xcelium_mcp.server' 성공 (순환 임포트 없음 확인)",
         "pytest passes"
       ],
-      "notes": "code-analyzer 아키텍처 리뷰(2026-07-02) Minor #7, Claude가 직접 코드 확인 완료(discovery.py:53-72이 load_registry 외 다른 discovery 전용 의존성 없음을 확인, lazy import 4곳 grep으로 확인). 리스크 낮고 효과 확실 — agent가 다른 리팩터(F-155~159)보다 먼저 하라고 권장한 선행 작업."
+      "notes": "code-analyzer 아키텍처 리뷰(2026-07-02) Minor #7, Claude가 직접 코드 확인 완료(discovery.py:53-72이 load_registry 외 다른 discovery 전용 의존성 없음을 확인, lazy import 4곳 grep으로 확인). 리스크 낮고 효과 확실 — agent가 다른 리팩터(F-155~159)보다 먼저 하라고 권장한 선행 작업.\n\n[Verified 2026-07-08 during prd.json bookkeeping audit — already implemented, not newly done this session]: resolve_sim_dir()/get_default_sim_dir() live in registry.py (not discovery.py); no remaining `from xcelium_mcp.discovery import resolve_sim_dir` anywhere in src/.",
+      "completed_at": "2026-07-08"
     },
     {
       "id": "F-162",
       "title": "아키텍처: 모듈 레벨 싱글턴 캐시가 테스트 격리를 방해 + config_action이 캐시 무효화를 mtime 우연에 의존",
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "registry.py에 reset_caches() 함수 추가 — _config_cache 등 모듈 레벨 캐시를 초기화, 테스트에서 fixture로 사용 가능하게 함",
         "registry.py config_action()의 set/delete 분기(약 252, 257라인)가 _write_json_sync 직접 호출 대신 save_sim_config()를 경유하도록 변경(file != 'registry'/'checkpoint'인 경우) — save_sim_config가 이미 하는 _config_cache.pop() 캐시 무효화를 명시적으로 타도록 함, mtime 우연 일치에 의존하지 않음",
         "캐시 무효화가 mtime 비교 없이도 정상 동작함을 확인하는 회귀 테스트 추가 (예: 같은 mtime 내에 set 후 즉시 get 시 최신 값 반환 확인)",
         "pytest passes"
       ],
-      "notes": "code-analyzer 아키텍처 리뷰(2026-07-02) Minor #8. registry._config_cache, shell_utils._USER_TMP, csv_cache._simvisdbutil_path 등 프로세스 전역 mutable 캐시에 리셋 훅이 없음 — 427개 테스트 스위트가 현재는 우회하며 동작 중이나 명시적 seam이 없는 상태. 이번 태스크는 registry._config_cache + config_action 캐시 무효화 문제만 범위로 하고, shell_utils/csv_cache의 다른 캐시는 별도 검토(범위 밖)."
+      "notes": "code-analyzer 아키텍처 리뷰(2026-07-02) Minor #8. registry._config_cache, shell_utils._USER_TMP, csv_cache._simvisdbutil_path 등 프로세스 전역 mutable 캐시에 리셋 훅이 없음 — 427개 테스트 스위트가 현재는 우회하며 동작 중이나 명시적 seam이 없는 상태. 이번 태스크는 registry._config_cache + config_action 캐시 무효화 문제만 범위로 하고, shell_utils/csv_cache의 다른 캐시는 별도 검토(범위 밖).\n\n[Verified 2026-07-08 during prd.json bookkeeping audit — already implemented, not newly done this session]: registry.py has reset_caches(); config_action's set/delete branch (non-registry/checkpoint) is explicitly commented '# F-162: write through save_sim_config()'.",
+      "completed_at": "2026-07-08"
     },
     {
       "id": "F-163",
       "title": "Verbosity: test_pure_helpers.py의 debug_snapshot 테스트 6개가 ~20줄 보일러플레이트를 반복",
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "tests/test_pure_helpers.py:531-713의 debug_snapshot 관련 테스트 6개(mock 구성 + register + 호출 패턴이 거의 동일)를 pytest fixture(예: run_snapshot)로 공통화",
         "각 테스트는 fixture를 호출해 케이스별 차이(입력값/기대값)만 표현하도록 축소",
         "테스트 커버리지(assert 대상)는 리팩터 전과 동일하게 유지 — 케이스 삭제/축소 금지",
         "pytest passes (테스트 개수 동일 또는 fixture 분리로 인한 변화만 허용, 기존 assert 로직 손실 없음)"
       ],
-      "notes": "code-analyzer verbosity 리뷰(2026-07-02) High-Impact #1. ~120줄을 ~45줄로 축소 가능하다고 에이전트가 추정."
+      "notes": "code-analyzer verbosity 리뷰(2026-07-02) High-Impact #1. ~120줄을 ~45줄로 축소 가능하다고 에이전트가 추정.\n\n[Verified 2026-07-08 during prd.json bookkeeping audit — already implemented, not newly done this session]: tests/test_pure_helpers.py has a run_snapshot fixture used by 5 debug_snapshot tests (consolidated from inline mock-wiring).",
+      "completed_at": "2026-07-08"
     },
     {
       "id": "F-164",
       "title": "Verbosity: tools/batch.py의 sim_batch_run/sim_regression이 dump_depth/sdf_corner/dump_scopes 검증을 거의 그대로 중복",
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "src/xcelium_mcp/tools/batch.py의 sim_batch_run(93-117라인 근방)과 sim_regression(251-267라인 근방)에 중복된 dump_depth/sdf_corner/dump_scopes 검증 로직을 공용 함수 _validate_run_params()로 추출",
         "추출한 함수는 검증 실패 시 에러 메시지 문자열을 반환(성공 시 None), 두 호출부 모두 동일한 패턴(if err: return err)으로 사용",
@@ -2298,121 +2319,132 @@
         "기존 에러 메시지 문구/포맷은 그대로 유지 (호출자 입장에서 동작 변화 없음)",
         "pytest passes, 기존 batch.py 관련 테스트 모두 통과 + 필요시 _validate_run_params 자체에 대한 단위 테스트 추가"
       ],
-      "notes": "code-analyzer verbosity 리뷰(2026-07-02) High-Impact #2. Claude가 직접 코드 확인 완료 — 두 함수의 검증 블록이 사실상 동일하며, 변수명까지 접미사(2)로만 구분한 상태라 두 곳이 따로 진화하며 검증 로직이 어긋날 sync-drift 위험이 실질적으로 있음."
+      "notes": "code-analyzer verbosity 리뷰(2026-07-02) High-Impact #2. Claude가 직접 코드 확인 완료 — 두 함수의 검증 블록이 사실상 동일하며, 변수명까지 접미사(2)로만 구분한 상태라 두 곳이 따로 진화하며 검증 로직이 어긋날 sync-drift 위험이 실질적으로 있음.\n\n[Verified 2026-07-08 during prd.json bookkeeping audit — already implemented, not newly done this session]: tools/batch.py has _validate_run_params() used identically at both sim_batch_run and sim_regression call sites; no _re_ds2/_valid_ds_values2/_key_re2 duplicate-suffix variables remain.",
+      "completed_at": "2026-07-08"
     },
     {
       "id": "F-165",
       "title": "Verbosity: simvision_ops.py compare_simvision의 try/except BRIDGE_ERRORS 블록 3개가 거의 동일",
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "src/xcelium_mcp/simvision_ops.py:581-607 compare_simvision 내 반복되는 try/except BRIDGE_ERRORS 블록 3개를 로컬 클로저(예: async def _try(cmd, errmsg))로 통합",
         "각 호출부는 _try(...)를 호출하는 형태로 축소, 에러 메시지 문구는 기존과 동일하게 유지",
         "pytest passes, compare_simvision 관련 기존 테스트 모두 통과"
       ],
-      "notes": "code-analyzer verbosity 리뷰(2026-07-02) Medium #3."
+      "notes": "code-analyzer verbosity 리뷰(2026-07-02) Medium #3.\n\n[Verified 2026-07-08 during prd.json bookkeeping audit — already implemented, not newly done this session]: simvision_ops.py compare_simvision() has a local async def _try(cmd, errmsg) closure, used at all 3 former try/except BRIDGE_ERRORS call sites.",
+      "completed_at": "2026-07-08"
     },
     {
       "id": "F-166",
       "title": "Verbosity: tcl_preprocessing.py의 read_setup_tcl이 _read_setup_tcl_sync를 그대로 감싸기만 하는 불필요한 래퍼",
       "priority": 4,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "src/xcelium_mcp/tcl_preprocessing.py:70-76의 read_setup_tcl() 함수를 삭제",
         "유일한 호출부인 batch_runner.py:729의 read_setup_tcl(runner, sim_dir) 호출을 _read_setup_tcl_sync(runner, sim_dir) 직접 호출로 변경(import도 함께 수정)",
         "read_setup_tcl_async는 그대로 유지 (asyncio.to_thread로 _read_setup_tcl_sync를 감싸는 실질적 역할이 있음)",
         "pytest passes, python -c 'import xcelium_mcp.server' 성공"
       ],
-      "notes": "code-analyzer verbosity 리뷰(2026-07-02) Medium #4. Claude가 직접 확인 — read_setup_tcl은 죽은 코드는 아니고(batch_runner.py:729에서 호출) 있으나 마나 한 3중 레이어 래퍼."
+      "notes": "code-analyzer verbosity 리뷰(2026-07-02) Medium #4. Claude가 직접 확인 — read_setup_tcl은 죽은 코드는 아니고(batch_runner.py:729에서 호출) 있으나 마나 한 3중 레이어 래퍼.\n\n[Verified 2026-07-08 during prd.json bookkeeping audit -- already implemented, not newly done this session]: tcl_preprocessing.py no longer has a bare read_setup_tcl() passthrough -- only _read_setup_tcl_sync() (real impl) and read_setup_tcl_async() (a genuine asyncio.to_thread wrapper, not a no-op), used by _preprocess_setup_tcl.",
+      "completed_at": "2026-07-08"
     },
     {
       "id": "F-167",
       "title": "Verbosity: batch_runner.py의 dump-history scope 로딩 로직이 run_batch_single/run_batch_regression 사이 중복",
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "src/xcelium_mcp/batch_runner.py:469-475와 811-822의 dump-history scope 로딩 중복 로직을 공용 헬퍼 _history_scopes()로 추출",
         "두 호출부 모두 추출한 헬퍼를 사용하도록 변경, 기존 동작(반환값/부작용) 동일하게 유지",
         "pytest passes, batch_runner 관련 기존 테스트(F-140/F-155/F-156 등) 모두 통과"
       ],
-      "notes": "code-analyzer verbosity 리뷰(2026-07-02) Medium #5."
+      "notes": "code-analyzer verbosity 리뷰(2026-07-02) Medium #5.\n\n[Verified 2026-07-08 during prd.json bookkeeping audit — already implemented, not newly done this session]: batch_runner.py _history_scopes() is a standalone helper used at both call sites (run_batch_single and run_batch_regression).",
+      "completed_at": "2026-07-08"
     },
     {
       "id": "F-168",
       "title": "Verbosity: 테스트 헬퍼 _make_inspect_tool 미재사용 + shell_run_with_retry 테스트 2개의 mock-wiring 6줄 중복",
       "priority": 4,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "기존 _make_inspect_tool 헬퍼를 재사용하지 않고 있는 인근 테스트 4개를 조사해 해당 헬퍼를 사용하도록 리팩터 (헬퍼가 부족하면 확장)",
         "shell_run_with_retry 관련 테스트 2개에서 중복된 6줄짜리 mock-wiring 블록을 공용 fixture/헬퍼로 추출",
         "pytest passes, 테스트 assert 내용은 리팩터 전후 동일"
       ],
-      "notes": "code-analyzer verbosity 리뷰(2026-07-02) Medium #6."
+      "notes": "code-analyzer verbosity 리뷰(2026-07-02) Medium #6.\n\n[Verified 2026-07-08 during prd.json bookkeeping audit — already implemented, not newly done this session]: tests/test_pure_helpers.py has _make_inspect_tool (9 usages) and _patched_asyncio_passthrough shared context manager used by both shell_run_with_retry retry tests.",
+      "completed_at": "2026-07-08"
     },
     {
       "id": "F-169",
       "title": "Verbosity: registry.py의 _write_json이 어디서도 호출되지 않는 죽은 코드",
       "priority": 4,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "src/xcelium_mcp/registry.py:129-131의 _write_json() 함수를 삭제 (실사용은 _write_json_sync만 존재)",
         "삭제 전 grep으로 다른 호출부가 정말 없는지 재확인",
         "pytest passes, python -c 'import xcelium_mcp.server' 성공"
       ],
-      "notes": "code-analyzer verbosity 리뷰(2026-07-02) Low #7. Claude가 grep으로 직접 재확인 완료 — 자기 정의 외 호출부 없음."
+      "notes": "code-analyzer verbosity 리뷰(2026-07-02) Low #7. Claude가 grep으로 직접 재확인 완료 — 자기 정의 외 호출부 없음.\n\n[Verified 2026-07-08 during prd.json bookkeeping audit — already implemented, not newly done this session]: src/xcelium_mcp/registry.py no longer contains a _write_json() function — only _write_json_sync remains.",
+      "completed_at": "2026-07-08"
     },
     {
       "id": "F-170",
       "title": "Verbosity: batch_polling.py의 watch_pid_and_poll이 미사용 pid 파라미터 + 2줄 본문에 과도한 docstring 보유",
       "priority": 4,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "src/xcelium_mcp/batch_polling.py:51-73 watch_pid_and_poll()의 사용되지 않는 pid 파라미터를 제거(호출부도 함께 수정) — 단, 실제로 미사용인지 먼저 grep/코드 확인 필수",
         "함수 본문(2줄) 대비 과도하게 긴 docstring을 함수가 실제로 하는 일에 맞게 축약",
         "pytest passes"
       ],
-      "notes": "code-analyzer verbosity 리뷰(2026-07-02) Low #8. 이 항목은 Claude가 직접 재확인하지 않았으므로, 구현 착수 시 pid 파라미터가 정말 미사용인지 먼저 확인할 것."
+      "notes": "code-analyzer verbosity 리뷰(2026-07-02) Low #8. 이 항목은 Claude가 직접 재확인하지 않았으므로, 구현 착수 시 pid 파라미터가 정말 미사용인지 먼저 확인할 것.\n\n[Verified 2026-07-08 during prd.json bookkeeping audit — already implemented, not newly done this session]: batch_polling.py watch_pid_and_poll(log_file, job_file, timeout) has no pid parameter; docstring is a single concise line.",
+      "completed_at": "2026-07-08"
     },
     {
       "id": "F-171",
       "title": "Verbosity: batch_runner.py 702라인의 로컬 'import re as _re2'가 이미 모듈 상단(17라인)에 있는 'import re as _re'와 중복",
       "priority": 4,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "src/xcelium_mcp/batch_runner.py:702의 'import re as _re2' 및 703라인 _re2 사용을 제거하고 모듈 상단의 _re를 사용하도록 변경",
         "pytest passes, ruff check src/ clean"
       ],
-      "notes": "code-analyzer verbosity 리뷰(2026-07-02) Low #9. Claude가 직접 확인 완료."
+      "notes": "code-analyzer verbosity 리뷰(2026-07-02) Low #9. Claude가 직접 확인 완료.\n\n[Verified 2026-07-08 during prd.json bookkeeping audit — already implemented, not newly done this session]: batch_runner.py has only `import re as _re` at module top; no _re2 anywhere in the file.",
+      "completed_at": "2026-07-08"
     },
     {
       "id": "F-172",
       "title": "Verbosity: debug_tools.py 76-98라인의 주석이 CLAUDE.md 컨벤션(WHAT 재서술 금지)을 위반",
       "priority": 4,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "src/xcelium_mcp/debug_tools.py:76-98의 코드가 이미 하는 일을 그대로 재서술하는 주석들을 제거",
         "WHY(숨은 제약/이유)를 설명하는 주석만 필요시 남기고, 나머지는 삭제",
         "pytest passes, ruff check src/ clean"
       ],
-      "notes": "code-analyzer verbosity 리뷰(2026-07-02) Low #10."
+      "notes": "code-analyzer verbosity 리뷰(2026-07-02) Low #10.\n\n[Verified 2026-07-08 during prd.json bookkeeping audit — already implemented, not newly done this session]: debug_tools.py's only standalone Python-level comments are two section-divider headers; no WHAT-restating comments remain in the generate_debug_tcl_content function (lines that look like '#' comments are Tcl content inside lines.append(\"# ...\") string literals, part of the generated output, not Python source comments).",
+      "completed_at": "2026-07-08"
     },
     {
       "id": "F-173",
       "title": "Verbosity: registry.py의 _dot_get/_dot_delete가 parts[:-1] 순회 로직을 중복 구현",
       "priority": 4,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "src/xcelium_mcp/registry.py:172-207의 _dot_get/_dot_delete(및 필요시 _dot_set)이 공유하는 dict 순회 로직을 공용 헬퍼로 추출하거나, 추출이 오히려 복잡도를 높인다면 현행 유지 사유를 notes에 기록",
         "리팩터할 경우 pytest passes 및 기존 _dot_get/_dot_set/_dot_delete 테스트 모두 통과",
         "리팩터하지 않기로 결정한 경우 prd.json notes에 판단 근거 기록"
       ],
-      "notes": "code-analyzer verbosity 리뷰(2026-07-02) Low #11 (경미). 에이전트도 marginal이라고 평가 — 실제 구현 시 추출이 가독성을 해치면 스킵도 허용.\n\n[검토 결과: 리팩터하지 않기로 결정] _dot_get은 parts 전체를 순회하며 각 단계에서 존재 확인(없으면 _MISSING 반환), _dot_set은 parts[:-1]만 순회하며 중간 dict가 없으면 새로 생성(auto-vivify)한 뒤 마지막 키를 설정, _dot_delete는 parts[:-1]만 순회하되 중간 dict가 없으면 실패(False) 처리 후 마지막 키가 있으면 삭제. 세 함수는 순회 범위(전체 vs [:-1]), 중간 노드 부재 시 동작(생성 vs 실패), 실패 시 반환값(_MISSING sentinel vs bool)이 모두 달라 — 공용 헬퍼로 묶으려면 이 3가지 축을 각각 파라미터화해야 하는데, 그러면 호출부마다 플래그 조합을 머릿속으로 시뮬레이션해야 이해 가능한 코드가 되어 현재의 7줄 내외 독립 함수 3개보다 오히려 가독성이 떨어짐. 표면적으로는 '순회'가 중복돼 보이지만 핵심 로직(생성/실패/반환)은 서로 달라 추출 이득이 낮다고 판단, 현행 유지."
+      "notes": "code-analyzer verbosity 리뷰(2026-07-02) Low #11 (경미). 에이전트도 marginal이라고 평가 — 실제 구현 시 추출이 가독성을 해치면 스킵도 허용.\n\n[검토 결과: 리팩터하지 않기로 결정] _dot_get은 parts 전체를 순회하며 각 단계에서 존재 확인(없으면 _MISSING 반환), _dot_set은 parts[:-1]만 순회하며 중간 dict가 없으면 새로 생성(auto-vivify)한 뒤 마지막 키를 설정, _dot_delete는 parts[:-1]만 순회하되 중간 dict가 없으면 실패(False) 처리 후 마지막 키가 있으면 삭제. 세 함수는 순회 범위(전체 vs [:-1]), 중간 노드 부재 시 동작(생성 vs 실패), 실패 시 반환값(_MISSING sentinel vs bool)이 모두 달라 — 공용 헬퍼로 묶으려면 이 3가지 축을 각각 파라미터화해야 하는데, 그러면 호출부마다 플래그 조합을 머릿속으로 시뮬레이션해야 이해 가능한 코드가 되어 현재의 7줄 내외 독립 함수 3개보다 오히려 가독성이 떨어짐. 표면적으로는 '순회'가 중복돼 보이지만 핵심 로직(생성/실패/반환)은 서로 달라 추출 이득이 낮다고 판단, 현행 유지.\n\n[bookkeeping fix 2026-07-08]: 2026-07-02 검토 커밋(d2690c8)에서 notes만 갱신되고 passes:true 반영이 누락되어 있었음 -- acceptanceCriteria가 \"리팩터하지 않기로 결정한 경우 notes에 판단 근거 기록\"을 유효한 완료 조건으로 명시하므로, 그 결정이 이미 기록된 상태를 이번에 passes:true로 정정.",
+      "completed_at": "2026-07-02"
     },
     {
       "id": "F-174",
       "title": "버그: poll_batch_log의 완료 판별 키워드($finish/PASS/FAIL substring)가 진행 중 로그에서도 오탐해 sim_batch_run이 조기 반환",
       "priority": 1,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-07-08",
       "acceptanceCriteria": [
         "src/xcelium_mcp/batch_polling.py:35-37의 완료 판별 키워드에서 '$finish' 단독 substring 제거 — xmsim이 실제 종료 시에만 출력하는 'Simulation complete via $finish' 문구로 앵커링",
         "동일 위치에서 'PASS'/'FAIL' 단독 substring을 완료 신호에서 제거 — 개별 assertion 로그(예: '[V-18] PASS: ...')와 구분 불가능하므로 완료 판정 근거로 부적합. done_file(.done 마커) 및 'COMPLETE'/'Errors:' 앵커드 문구에 위임",
@@ -2422,13 +2454,14 @@
         "회귀 테스트: 'Simulation complete via $finish(1) at time ...' 포함 시 정상 완료 판정, done_file 존재 시 키워드 무관하게 즉시 완료 판정(기존 동작 유지)",
         "pytest passes"
       ],
-      "notes": "venezia-fpga 세션에서 TOP015(VENEZIA_TOP015_i2c_8bit_offset_test) sim_batch_run 실행 중 실전 재현(2026-07-03) — sim_batch_run이 수 초 만에 \"completed\"를 반환했으나 SSH로 직접 확인한 결과 xmsim이 95.9% CPU로 계속 실행 중이었고 실제로는 2분 30초 후에야 Errors: 0으로 정상 종료. Root cause: venezia-t0의 scripts/setup_rtl_batch.tcl 1번째 줄 주석(\"# setup_rtl_batch.tcl — batch xmsim: dump all signals + run to $finish (no MCP bridge)\")이 xmsim -input 처리 시 로그 최상단에 echo되는데, 첫 poll(P6-1 interval 2.0s 시작) 시점에 tail -10이 아직 이 주석 줄을 포함하고 있어 '$finish' substring 매칭으로 즉시(오)완료 판정됨. 상세 분석 및 대안(F-2: done_file 우선 + 키워드 2차 확인)은 docs/01-plan/features/xcelium-mcp-batch-poll-false-completion.plan.md 참조. ssh-timeout-fix가 만든 done_file 메커니즘 자체는 정상 — 그 옆의 키워드 fast-path가 별개 원인."
+      "notes": "venezia-fpga 세션에서 TOP015(VENEZIA_TOP015_i2c_8bit_offset_test) sim_batch_run 실행 중 실전 재현(2026-07-03) — sim_batch_run이 수 초 만에 \"completed\"를 반환했으나 SSH로 직접 확인한 결과 xmsim이 95.9% CPU로 계속 실행 중이었고 실제로는 2분 30초 후에야 Errors: 0으로 정상 종료. Root cause: venezia-t0의 scripts/setup_rtl_batch.tcl 1번째 줄 주석(\"# setup_rtl_batch.tcl — batch xmsim: dump all signals + run to $finish (no MCP bridge)\")이 xmsim -input 처리 시 로그 최상단에 echo되는데, 첫 poll(P6-1 interval 2.0s 시작) 시점에 tail -10이 아직 이 주석 줄을 포함하고 있어 '$finish' substring 매칭으로 즉시(오)완료 판정됨. 상세 분석 및 대안(F-2: done_file 우선 + 키워드 2차 확인)은 docs/01-plan/features/xcelium-mcp-batch-poll-false-completion.plan.md 참조. ssh-timeout-fix가 만든 done_file 메커니즘 자체는 정상 — 그 옆의 키워드 fast-path가 별개 원인. [2026-07-08 cloud0 라이브 재검증: PASS] verilog-rtl-debugger agent가 venezia-t0에서 sim_batch_run(TOP015, force=True)을 재현 시나리오와 동일하게 재실행 — 조기 완료 없이 실행이 끝까지 블로킹되어 [LINK]~[V-23] 전체 시퀀스와 finalize된 SHM을 정상 반환. TOP014/TOP016 regression도 각각 실제 $finish(45,594,777ns / 52,241,088ns)까지 정상 실행 확인."
     },
     {
       "id": "F-175",
       "title": "기능: sim_batch_run/sim_regression/sim_bridge_run이 실행에 쓰인 TB 소스 파일의 provenance(경로+체크섬)를 결과/checkpoint 메타데이터에 기록",
       "priority": 2,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-07-08",
       "acceptanceCriteria": [
         "sim_batch_run/sim_regression/sim_bridge_run 3개 tool 모두 실행 시 컴파일에 쓰인 TB 소스 파일(들)의 절대경로 + sha256 체크섬을 계산해 결과(shm_path와 함께 반환되는 dict/JSON)에 포함 — 3개 모두 동일한 '컴파일+실행' 경로를 타므로 공통 헬퍼로 구현",
         "checkpoint(action=save)의 기존 compile_hash(inca/ object mtime MD5, checkpoint_manager.py:28 compute_compile_hash)는 '재컴파일 여부'만 감지하고 '어떤 TB 소스인지'는 알려주지 않음 — 이번 신규 provenance 필드(TB 소스 경로+내용 체크섬)는 이를 대체하지 않고 보완. checkpoint manifest에도 신규 provenance 필드를 추가로 저장(기존 compile_hash 필드는 유지)",
@@ -2438,20 +2471,21 @@
         "신규 테스트: sim_regression으로 여러 테스트 실행 시 테스트별로 각자의 TB 소스 provenance가 개별 기록되는지 검증(공통 TB 소스를 쓰는 테스트끼리는 체크섬이 같아야 함)",
         "pytest passes"
       ],
-      "notes": "venezia-fpga 세션에서 verilog-rtl-debugger agent를 T-002(TOP014 V-13 FIFO overflow 커버리지 갭) 실사례로 테스트하던 중 발견(2026-07-06). 로컬 venezia-fpga repo(todoc-hw-venezia-fpga, 317 lines, 2026-03-26 커밋)에 xcelium-mcp가 실제로 시뮬레이션에 쓰는 TB 소스(venezia-t0/cloud0, todoc-chip-venezia-t0, 362 lines, mtime 2026-06-15, git-untracked)와 같은 이름의 stale 사본이 있었음. TB 분석(verilog-tb-analyst)이 이 로컬 사본을 읽고 분석서를 작성했는데, 실제 파형을 만든 cloud0 TB와 test_v13_fifo_semaphore 태스크 내용이 달라(로컬은 루프 내 repeat(2) drain + 종료 시 repeat(10), cloud0는 drain 없이 종료 시 1회) 근본원인 서술이 틀어졌었다. venezia-fpga(FPGA 검증용)와 venezia-t0(ASIC 전체검증/시뮬레이션용, RTL은 이미 submodule로 공유)는 서로 다른 org의 별도 git 저장소이고, TB 실행 정본은 항상 venezia-t0/cloud0이며 로컬엔 사본을 두지 않기로 함(venezia-fpga 쪽 stale 사본은 제거함). 하지만 이런 저장소 구조 결정과 무관하게, MCP를 통해 실제로 수집한 정보가 항상 분석 근거의 기준이 되어야 한다는 게 사용자의 명시적 요구사항 — 이 provenance 캡처가 그 원칙을 시스템적으로 보장하는 방법. 참고: F-176(TB 분석 시 항상 MCP-resolve 경로를 읽도록 하는 방법론 문서화)과 짝을 이루는 코드 측 기능. [2026-07-06 추가 조사] 사용자 질문(\"sim_batch_run만 문제냐\")으로 범위 재확인 — 실제로 컴파일+실행을 새로 하는 tool은 sim_batch_run/sim_regression/sim_bridge_run 3개 전부이며 셋 다 동일한 gap(반환값에 TB provenance 없음)이 있음이 코드 확인됨(batch.py:74 sim_batch_run, batch.py:231 sim_regression, sim_lifecycle.py:228 sim_bridge_run 독스트링 \"Compile + launch + connect bridge\"). checkpoint_manager.py에 이미 compute_compile_hash()(inca/ object mtime MD5, '재컴파일 여부'만 감지)가 있으나 이건 checkpoint save/restore/cleanup 내부 전용이고 sim_batch_run 등의 반환값엔 노출 안 됨 + TB 소스 경로/내용 식별 기능 없음 — 이번 F-175는 이를 대체하지 않고 3개 tool 반환값 전체에 TB 소스 경로+체크섬을 노출하는 별개 보완 기능."
+      "notes": "venezia-fpga 세션에서 verilog-rtl-debugger agent를 T-002(TOP014 V-13 FIFO overflow 커버리지 갭) 실사례로 테스트하던 중 발견(2026-07-06). 로컬 venezia-fpga repo(todoc-hw-venezia-fpga, 317 lines, 2026-03-26 커밋)에 xcelium-mcp가 실제로 시뮬레이션에 쓰는 TB 소스(venezia-t0/cloud0, todoc-chip-venezia-t0, 362 lines, mtime 2026-06-15, git-untracked)와 같은 이름의 stale 사본이 있었음. TB 분석(verilog-tb-analyst)이 이 로컬 사본을 읽고 분석서를 작성했는데, 실제 파형을 만든 cloud0 TB와 test_v13_fifo_semaphore 태스크 내용이 달라(로컬은 루프 내 repeat(2) drain + 종료 시 repeat(10), cloud0는 drain 없이 종료 시 1회) 근본원인 서술이 틀어졌었다. venezia-fpga(FPGA 검증용)와 venezia-t0(ASIC 전체검증/시뮬레이션용, RTL은 이미 submodule로 공유)는 서로 다른 org의 별도 git 저장소이고, TB 실행 정본은 항상 venezia-t0/cloud0이며 로컬엔 사본을 두지 않기로 함(venezia-fpga 쪽 stale 사본은 제거함). 하지만 이런 저장소 구조 결정과 무관하게, MCP를 통해 실제로 수집한 정보가 항상 분석 근거의 기준이 되어야 한다는 게 사용자의 명시적 요구사항 — 이 provenance 캡처가 그 원칙을 시스템적으로 보장하는 방법. 참고: F-176(TB 분석 시 항상 MCP-resolve 경로를 읽도록 하는 방법론 문서화)과 짝을 이루는 코드 측 기능. [2026-07-06 추가 조사] 사용자 질문(\"sim_batch_run만 문제냐\")으로 범위 재확인 — 실제로 컴파일+실행을 새로 하는 tool은 sim_batch_run/sim_regression/sim_bridge_run 3개 전부이며 셋 다 동일한 gap(반환값에 TB provenance 없음)이 있음이 코드 확인됨(batch.py:74 sim_batch_run, batch.py:231 sim_regression, sim_lifecycle.py:228 sim_bridge_run 독스트링 \"Compile + launch + connect bridge\"). checkpoint_manager.py에 이미 compute_compile_hash()(inca/ object mtime MD5, '재컴파일 여부'만 감지)가 있으나 이건 checkpoint save/restore/cleanup 내부 전용이고 sim_batch_run 등의 반환값엔 노출 안 됨 + TB 소스 경로/내용 식별 기능 없음 — 이번 F-175는 이를 대체하지 않고 3개 tool 반환값 전체에 TB 소스 경로+체크섬을 노출하는 별개 보완 기능. [2026-07-08 cloud0 라이브 검증: PASS, 전체 acceptanceCriteria 커버] sim_batch_run(TOP015)의 tb_source는 직전 세션에서 이미 확인. 이번엔 나머지를 확인: (a) sim_bridge_run(TOP015)도 tb_source 블록(테스트+dependency 3개, 파일별 sha256, combined_sha256 a4344cf4…) 정상 반환. (b) sim_regression([TOP014,TOP016])이 테스트별로 개별 tb_provenance 기록(TOP014 2a33f1fd…, TOP016 1fd7f046…) — 공용 TB 소스 뒤섞임 없음. (c) checkpoint(action=save) manifest에 compile_hash와 별개 필드로 tb_source가 저장되며, regression의 combined_sha256과 정확히 일치 확인."
     },
     {
       "id": "F-176",
       "title": "문서: xcelium-sim skill(TB 분석 절차)에 '로컬 저장소 사본을 TB 분석 근거로 쓰지 말고 항상 sim_discover가 resolve한 실제 sim_dir을 ssh-mcp로 직접 읽어라'는 원칙을 명시",
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "skill-src/xcelium-sim/references/phase-0-discovery.md(또는 phase-1-analysis.md)에 'TB 소스 분석 시 로컬 프로젝트 저장소의 동일 파일명 사본을 신뢰하지 말고, mcp_config/sim_discover가 resolve한 sim_dir 경로를 ssh-mcp(file_read/file_grep)로 직접 읽는 것을 기본 경로로 한다'는 내용 추가",
         "verilog-tb-analyst / verilog-rtl-debugger agent(chip-design-skills 소유, 별도 저장소)가 이 원칙을 따르도록 하려면 해당 agent 문서에도 같은 원칙이 반영돼야 함을 notes에 명시(이 prd 항목은 xcelium-mcp 쪽 skill-src만 수정 대상 — chip-design-skills 쪽은 별도 처리 필요)",
         "F-175(provenance 체크섬)가 구현되면 이 문서에 '체크섬으로 검증 가능하면 검증하고, 안 되면 최소한 MCP-resolve 경로를 1차 소스로 쓴다'는 순서로 갱신",
         "review only — 코드 변경 없음"
       ],
-      "notes": "F-175와 짝. venezia-fpga(todoc-hw)/venezia-t0(todoc-chip)처럼 TB 테스트 파일이 여러 저장소에 중복 존재할 수 있는 구조에서, 어떤 저장소를 쓰든 agent의 TB 분석 근거는 항상 MCP로 수집한 정보(sim_discover가 resolve한 실제 경로)여야 한다는 게 사용자가 명시적으로 확인한 원칙(2026-07-06) — 저장소 토폴로지(submodule화 여부 등)는 별도 결정 사항이고 이 원칙과 독립적으로 지켜져야 함."
+      "notes": "F-175와 짝. venezia-fpga(todoc-hw)/venezia-t0(todoc-chip)처럼 TB 테스트 파일이 여러 저장소에 중복 존재할 수 있는 구조에서, 어떤 저장소를 쓰든 agent의 TB 분석 근거는 항상 MCP로 수집한 정보(sim_discover가 resolve한 실제 경로)여야 한다는 게 사용자가 명시적으로 확인한 원칙(2026-07-06) — 저장소 토폴로지(submodule화 여부 등)는 별도 결정 사항이고 이 원칙과 독립적으로 지켜져야 함.\n\n[Verified 2026-07-08 during prd.json bookkeeping audit — already implemented, not newly done this session]: skill-src/xcelium-sim/references/phase-0-discovery.md has a dedicated '0-Prep-2. TB 소스 읽기 원칙 — 로컬 사본 금지' section stating the exact required principle verbatim, plus the checksum-based verification-order note in §0C.",
+      "completed_at": "2026-07-08"
     },
     {
       "id": "F-177",
