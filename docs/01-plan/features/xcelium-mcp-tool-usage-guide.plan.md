@@ -205,6 +205,7 @@ CLAUDE.md의 "Debugging Workflow" 섹션(6-phase, Phase 0~5)이 이미 방법론
 - 위임 대상 결정 배경: RTL 분석서는 `verilog-rtl-analyst`(Phase 1B)가 전담하는데, TB 분석서(Phase 0A/0B — 공유 컴포넌트·테스트케이스 분석서 작성)는 위임 대상이 없어 이 skill이 방법론을 직접 안고 있던 비대칭을 해소하기 위해 도입. `xcelium-mcp-debugging-workflow.plan.md` §Agent 위임 구조(v2.7)가 정본.
 - **동일한 역방향 의존 구조 적용**: `verilog-rtl-debugger`가 `references/phase-2~4*.md`를 런타임에 Read하는 것과 같은 원칙으로, `verilog-tb-analyst`도 `references/phase-0-discovery.md`(§0A/0B)·`phase-1-analysis.md`(§1A)를 자체 system prompt에 복사하지 않고 런타임에 Read하도록 설계한다 — build 순서: 이 skill의 phase-0/1 reference 완성 → `verilog-tb-analyst` Do 단계.
 - 이 문서는 agent 구현을 기다리지 않고 "어디서 호출하는가"만 먼저 확정한다(FR-13) — agent 부재 시 fallback 문구로 즉시 착수 가능.
+- **2026-07-03 갱신**: `chip-design-skills/docs/01-plan/features/verilog-tb-analyst.plan.md` v0.1 작성 완료 — `verilog-rtl-analyst.md`(이 repo의 기존 자매 agent)를 컨벤션으로 벤치마크, 이 skill의 phase-0-discovery.md/phase-1-analysis.md를 런타임 Read하는 원칙을 처음부터 반영.
 
 ---
 

@@ -203,7 +203,7 @@
 
 - [x] cloud0 배포 완료(crontab 등록, 클라이언트 설정 교체 가이드 제공)
 - [ ] T-3(6h idle 실측)을 실사용 중 자연스럽게 관찰 — 별도 조치 불필요, 이상 발견 시 재조사
-- [ ] 사용자가 실제 `~/.claude.json`을 `deploy/claude-json-mcpServers-snippet.json` 기준으로 교체(직접 실행 필요 — 로컬 설정 변경은 이 세션 범위 밖)
+- [x] 사용자가 실제 `~/.claude.json`을 `deploy/claude-json-mcpServers-snippet.json` 기준으로 교체 — **2026-07-08 완료**. venezia-fpga 세션에서 cloud0에 xcelium-mcp 프로세스가 독립 SSH 연결로 2개(12:27/12:55) 중복 기동된 것을 발견 → 원인 추적 결과 supervisor(Jul07 18:39부터 unix socket에서 정상 리슨 중)를 아무 클라이언트도 거치지 않고 있었던 것으로 확인(이 체크박스가 미실행 상태였던 것이 근본 원인). 1차 시도 시 `stdio_forward.py::_pump_stdin_to_sock()`의 `stdin.read(_CHUNK_SIZE)`(65536)가 64KB가 모이거나 EOF가 올 때까지 블로킹하는 버그로 30초 타임아웃 발생(T-8 원래 검증이 "메시지 1개+즉시 EOF" 방식이라 이 블로킹을 못 잡았던 것으로 확인) → `~/.claude.json` 임시 원복 + `plans/prd.json` F-180으로 등록 → `stdin.read()` → `stdin.read1()` 수정 커밋(`446a375`) 반영 확인 후 재시도. stdin을 열어둔 채(EOF 없이) 재검증한 결과 정상 응답 확인(수정 전 0바이트 → 수정 후 즉시 347바이트), `~/.claude.json` 재교체 후 재연결 성공 — `/proc/<supervisor_pid>/task/*/children`에 실제 fork 워커 등록 확인(cutover 실제 동작 실증). 1차 시도 중 남은 구버전 standalone 프로세스는 수동 정리 완료.
 
 ### 8.2 Next PDCA Cycle
 
