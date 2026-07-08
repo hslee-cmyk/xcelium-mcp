@@ -2618,7 +2618,8 @@
       "id": "F-185",
       "title": "inspect_signal action=list — xmsim 대상(non-recursive)에서 PNOOBJ 에러 (scope+pattern 조합 무관 재현)",
       "priority": 4,
-      "passes": false,
+      "passes": true,
+      "completed_at": "2026-07-08",
       "acceptanceCriteria": [
         "inspect_signal(action='list', scope='top' 또는 'top.hw', pattern='*clk*'|'clk'|'*') 를 xmsim 대상(target 미지정 auto 포함)으로 호출했을 때 PNOOBJ 에러 없이 정상적으로 매칭 신호 목록을 반환하거나, xmsim에서는 list가 근본적으로 불가능하다면 명확한 안내 메시지(예: 'list action requires SimVision, use execute_tcl scope -describe for xmsim' 등 F-132와 동일한 톤의 auto-fallback/에러 메시지)로 대체된다",
         "pattern='*clk*', 'clk', '*' 3가지 입력 모두 재현 확인 및 수정 후 회귀 없음 확인",
