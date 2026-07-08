@@ -3,7 +3,7 @@
 > **Feature**: Verilog 하드웨어 디자인 검증 워크플로우
 >
 > **Date**: 2026-04-03
-> **Status**: Draft v1.13
+> **Status**: Draft v1.14
 > **Predecessor**: `xcelium-mcp-debugging-workflow.plan.md` — Phase 0~5 상세, TB 캐시, 실전 히스토리
 > **Scope**: 시뮬레이터 독립적 범용 HW 검증 프레임워크. 첫 번째 백엔드: xcelium-mcp
 
@@ -624,20 +624,26 @@ regression 복수 FAIL 시 Agent 병렬 분석:
   "시뮬레이션 관련 요청 감지. /sim skill 사용 권장."
 ```
 
-### 6.4 Hook 파일 구조
+### 6.4 Hook 파일 구조 (2026-07-08 갱신 — §4.3과 동일한 실제 구조로 정정)
+
+> 이 다이어그램은 §4.3을 실제 Phase 1 산출물 기준으로 재작성할 때 함께 갱신했어야 했는데 누락됐던 중복 다이어그램이다 — §4.3과 반드시 같은 그림이어야 한다.
 
 ```
-~/.claude/skills/xcelium-sim/
+skill-src/xcelium-sim/                    (git 정본, cp -r로 ~/.claude/skills/에 배포)
 ├── SKILL.md
 ├── hooks/
-│   ├── sim-post-compound.js     ← PostToolUse (compound tool 실행 후)
+│   ├── sim-post-compound.js     ← PostToolUse (compound tool 실행 후) — §6 참고 각주: 언어 일관성 재검토 대상
 │   └── sim-prompt-detect.js     ← UserPromptSubmit (키워드 감지)
 └── references/
-    ├── run-guide.md
-    ├── analyze-guide.md
-    ├── debug-guide.md
+    ├── phase-0-discovery.md
+    ├── phase-1-analysis.md
+    ├── phase-2-simulation.md
+    ├── phase-3-triage.md
+    ├── phase-4-waveform.md
+    ├── phase-5-fix-regression.md
     ├── tool-map.md
-    └── backend-interface.md
+    ├── server-ops.md                ← (2026-07-08, F-184) Phase 1 산출물, Phase 2와 무관
+    └── backend-interface.md         ← Phase 2가 실제로 추가하는 유일한 신규 reference(§4.3 참조)
 ```
 
 ---
@@ -718,14 +724,10 @@ Phase B: CLI + MCP Compound Tools (xcelium-mcp)
   B-3. tools/compound.py register() — 3 MCP tools
   B-4. server.py에 compound tool register() 호출 추가
 
-Phase C: /sim Skill
-  C-1. SKILL.md — subcommand + next-skill-map + 트리거
-  C-2. references/run-guide.md
-  C-3. references/analyze-guide.md + FAIL 유형 분류표
-  C-4. references/debug-guide.md + origin linking
-  C-5. references/tool-map.md
-  C-6. references/backend-interface.md
-  C-7. TB 분석서 YAML frontmatter 추가 (tb_TOP012~016)
+Phase C: /sim Skill (2026-07-08 갱신 — run-guide/analyze-guide/debug-guide는 이미 phase-0~5.md로 완료돼 있어 C-2~C-4 제거, §4.3 참조)
+  C-1. SKILL.md — 기존 `<!-- PHASE 2 확장점 -->` 마커 아래에 subcommand + next-skill-map + 트리거 추가
+  C-2. references/backend-interface.md — Phase 2가 실제로 추가하는 유일한 신규 reference
+  C-3. TB 분석서 YAML frontmatter 추가 (tb_TOP012~016, §5.2 갱신된 형식 — last_verified 아닌 tb_source.combined_sha256)
 
 Phase D: Hook 자동화
   D-1. hooks/sim-post-compound.js — phase 전환 제안
@@ -901,6 +903,7 @@ Backend가 coverage report 경로를 CompoundResult.details에 포함하면 Skil
 | **1.11** | **2026-07-08** | **CLI(FR-06) 설계를 실제 확립된 컨벤션에 맞게 재설계 — 논리적 충돌 발견 및 수정**: 이 plan 이후 실제로 완료된 `xcelium-mcp-server-process-lifecycle` feature(supervisor+fork 배포 모델, `pyproject.toml [project.scripts]`에 `xcelium-mcp-supervisor`/`xcelium-mcp-culler` 등 독립 console_script 3개 기존 확립)와 v1.0~1.10의 "CLI를 `server.py:main()` 안에 `sys.argv` 분기로 추가" 설계가 충돌함을 소스 재검증으로 발견. 근거: supervisor가 MCP 연결마다 `_xcelium_server.main()`을 fork 후 **직접 함수 호출**하므로(subprocess 재실행 아님) 연결별 sys.argv 전달 경로 자체가 없고, 이 저장소는 이미 "새 관심사 = 새 모듈 + 새 console_script" 패턴(`stdio_forward.py`/`sim_session_reaper.py`도 독립 `-m` 모듈)을 스스로 확립해놨다. **수정**: FR-06/§3.4/§7(전면)/§8.1/§8.2 B단계/Impact Analysis(Changed Resources·Current Consumers·Verification)/§11 리스크 테이블 전부 갱신 — CLI를 `server.py` 무변경의 독립 console_script `xcelium-mcp-cli`로 재설계, `server.py`는 compound tool 3개 `register()` 추가만 받도록 스코프 축소. "sys.argv 분기로 MCP 깨짐" 리스크 항목 제거(해당 없음). 부수적으로 CLAUDE.md(xcelium-mcp 자신) "Deployment" 섹션이 구 배포 모델(`"command": "xcelium-mcp"`)을 그대로 보여주는 별개의 문서 부채도 함께 확인(이 plan 범위 밖, Impact Analysis에서 그 부채에 의존하지 않도록만 일반화). |
 | **1.12** | **2026-07-08** | **§5.1/§5.2 소스 재검증 — 이미 구현된 더 나은 메커니즘과의 중복 발견**: (1) §5.1 `sim-state.json`(신규 파일 제안)이 이 plan 이후 완료된 `xcelium-mcp-session-state-reattach`(F-D)와 부분 중복 — `registry.py`의 `environments[sim_dir]`에 이미 `current_test_name`/`current_tb_source` 영속 추적(`update_session_state`/`get_session_state`)이 구현·배포됨. Phase 2 Design 착수 시 "새 파일 vs 기존 registry 확장" 결정이 선행되어야 함을 각주로 명시(레포 자체가 F-C/F-D로 후자 방향 확립). (2) §5.2 TB YAML frontmatter의 `last_verified`(수동 날짜) 필드를 F-175의 자동 `tb_source.combined_sha256` 체크섬 방식(`phase-0-discovery.md` §0C)으로 교체 — 사람이 날짜를 갱신할 필요가 없는 이미 구현된 방법으로 대체. (3) §6 Hook 자동화에 언어 일관성 참고(JS 제안 vs 이 사용자 환경의 실제 Python hook 컨벤션) 각주 추가(약한 발견, Phase D 후행이라 지금 강제 수정 안 함). |
 | **1.13** | **2026-07-08** | **문서 전체 커버리지 완료 — 나머지 미검증 섹션 확인**: §10(향후 확장)/Migration Note를 마저 검증 — 둘 다 forward-looking 또는 순수 사실 기록이라 수정 사항 없음(clean). §5.1 변경(v1.12)의 하위 영향으로 FR-05와 Success Criteria DoD가 여전히 "sim-state.json"을 확정된 파일명처럼 서술하던 것을 "신규 파일 vs registry.py 확장, §5.1 참조"로 정합화(본문 곳곳의 "sim-state.json" 개념적 표기 자체는 유지 — 실제 저장 메커니즘은 구현 세부사항으로 Phase 2 Design에 위임). 이로써 이 문서의 전 섹션(§1~11, Requirements, Dependencies, Impact Analysis, Success Criteria, Migration Note)에 대한 소스 재검증 커버리지 완료. |
+| **1.14** | **2026-07-08** | **§6.4 Hook 파일 구조 중복 다이어그램 누락분 수정 + §8.2 Phase C 단계 정합화**: v1.10에서 §4.3의 가상 파일 구조를 실제 Phase 1 산출물로 교체했으나, **동일한 파일 구조를 그리는 §6.4의 중복 다이어그램은 그때 갱신에서 누락**돼 여전히 `run-guide.md`/`analyze-guide.md`/`debug-guide.md`를 보여주고 있었음(사용자 지적). §4.3과 동일한 실제 구조(phase-0~5+tool-map+server-ops+backend-interface)로 교체. 같은 이유로 §8.2 Phase C 구현 순서(C-2~C-4가 존재하지 않는 run-guide/analyze-guide/debug-guide 작성을 지시)도 함께 발견해 정합화 — C-2/C-3(FAIL 분류표·origin linking)를 제거하고 backend-interface.md 작성 + TB frontmatter 갱신(§5.2의 새 combined_sha256 형식)만 남김. **교훈**: 같은 정보를 그리는 중복 다이어그램/목록이 문서 내 여러 곳에 있으면, 한 곳을 고칠 때 나머지도 grep으로 전부 찾아 같이 고쳐야 한다 — §4.3만 고치고 §6.4를 놓친 게 이번 재발 사례. |
 
 ---
 

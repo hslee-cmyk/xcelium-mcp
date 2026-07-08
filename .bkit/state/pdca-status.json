@@ -55,6 +55,10 @@
           {
             "note": "v1.13: 문서 전체 커버리지 완료 -- SS10/Migration Note 검증(clean, 수정 없음), FR-05/DoD를 v1.12의 SS5.1 변경과 정합화. 전 섹션 소스 재검증 완료",
             "ts": "2026-07-08T00:00:00.000Z"
+          },
+          {
+            "note": "v1.14: SS6.4 Hook 파일구조 중복 다이어그램이 v1.10 SS4.3 갱신 때 누락되어 stale하다고 사용자 지적 -- SS4.3과 동일한 실제 구조로 교정, SS8.2 Phase C 구현순서(존재하지 않는 run-guide/analyze-guide/debug-guide 작성 지시)도 함께 발견해 정합화",
+            "ts": "2026-07-08T00:00:00.000Z"
           }
         ],
         "retryCount": 0,
