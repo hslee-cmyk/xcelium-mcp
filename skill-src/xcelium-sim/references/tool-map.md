@@ -15,7 +15,7 @@
 |-------|------|-----------------|------|
 | 0 | `sim_discover` | `sim_dir`, `force`, `top_module`, `run_dir`, `boundary_depth`(v5.2) | 시뮬레이션 환경 자동 감지(TB type, shell, EDA, sdf_info, top_module). `boundary_depth`는 v5.2 Flow B(Yosys JSON lazy discovery)의 블록 경계 탐색 깊이 |
 | 0 | `mcp_config` | `action`: "show"(전체 dump)/"get"(키 조회)/"set"(키 쓰기)/"delete"(키 삭제); `file`: "config"/"registry"/"checkpoint" | mcp_sim_config/mcp_registry/checkpoint manifest 조회·수정 |
-| 0 | `list_tests` | `sim_dir`, `pattern` | 테스트케이스 목록 조회(캐시) |
+| 0 | `list_tests` | `sim_dir`, `pattern` | 테스트케이스 목록 조회(캐시). `pattern`은 glob(`*`,`?`,`[]`, 전체 문자열 매칭·대소문자 구분) 또는 메타문자 없으면 substring — 중간 매칭엔 `"*TOP01*"`처럼 앞뒤 `*` 필요(phase-0-discovery.md 참조) |
 | 2A | `sim_bridge_run` | `test_name`, `sim_mode`, `dump_depth`, `auto_boundaries`(v5.2) | Bridge(interactive) mode 시작. `auto_boundaries=True`는 v5.2 Flow A — SimVision `scope -describe`로 런타임 블록 경계 자동 탐색 |
 | 2B | `connect_simulator` | `host`, `port`(0=자동감지), `target`: "xmsim"/"simvision"/"auto" | 기존 xmsim/SimVision에 bridge (재)연결. v4.1 multi-bridge 지원 |
 | 2B | `sim_disconnect` | `action`: "bridge"(연결만 해제)/"shutdown"(안전 종료, SHM 보존) | **주의**: 디버깅 세션 종료 시 항상 "shutdown" 사용 — 일반 disconnect나 pkill은 SHM 유실 |

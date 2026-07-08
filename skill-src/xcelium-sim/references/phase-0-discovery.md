@@ -88,9 +88,11 @@ RTL 합성·CDC 설계 규칙(verilog-rtl §1~§7, §11)이나 AMS 아날로그 
 
 ```python
 sim_discover(sim_dir="", force=False)
-list_tests(pattern="TOP01*")
+list_tests(pattern="*TOP01*")
 mcp_config(action="show", file="registry")
 ```
+
+> **`pattern` 사용 시 유의(2026-07-08 정정)**: glob 와일드카드(`*`, `?`, `[]`)를 지원하지만 매칭은 **테스트명 전체**에 대해 이루어지므로, 테스트명 중간 어딘가에 포함된 문자열을 찾으려면 `"TOP01*"`처럼 앞쪽만 와일드카드 없이 쓰지 말고 `"*TOP01*"`처럼 앞뒤 모두 `*`를 붙여야 한다(예: `VENEZIA_TOP015_test`는 `"TOP01*"`와 매칭 안 됨 — `VENEZIA_`로 시작하기 때문). 또한 대소문자를 구분한다(플랫폼 무관). 메타문자가 전혀 없으면 기존처럼 단순 substring 매칭.
 
 ## verilog-tb-analyst agent 위임
 
