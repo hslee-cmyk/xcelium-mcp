@@ -1053,96 +1053,89 @@ async def test_inspect_signal_list_recursive_default_false_backward_compat() -> 
 
 
 # ---------------------------------------------------------------------------
-# F-185: inspect_signal list non-recursive — xmsim glob PNOOBJ → SimVision fallback
+# F-185: inspect_signal list non-recursive — xmsim PNOOBJ on zero matches
 #
-# xmsim's 'describe' requires an exact existing object path and raises
-# "*SE,PNOOBJ: Path element could not be found" for any glob pattern (or even a
-# bare non-wildcard name that isn't a literal signal) — reproduced with
-# pattern='*clk*'/'clk'/'*' regardless of scope. The xmsim-routing guard
-# previously only wrapped the recursive branch; it must also cover non-recursive.
+# Live-verified against a real xmsim session (venezia-t0, TOP013 test): xmsim's
+# 'describe' DOES support glob patterns fine when there is at least one match
+# (e.g. 'describe top.hw.*clk*' returns real signals). It only raises
+# "*SE,PNOOBJ: Path element could not be found" instead of an empty result when
+# the pattern matches ZERO direct children of scope -- either because scope's
+# immediate children are all sub-instances with no leaf signals (reproduced with
+# scope='top', whose only two children are module instances 'hw'/'sw'), or
+# because a bare non-wildcard pattern isn't an exact existing object name
+# (reproduced with scope='top.hw', pattern='clk' -- no signal is literally named
+# just "clk", only e.g. "sys_clk"/"w_i2c_clk"). This is NOT an xmsim-vs-SimVision
+# capability gap (unlike F-131/F-132's 'scope show', which really is SimVision-
+# only) -- it's PNOOBJ standing in for "no matches", which must be turned into
+# the same graceful message the recursive branch already returns on zero hits.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_nonrecursive_list_xmsim_autofallback_to_simvision() -> None:
-    """recursive=False (default) + target=xmsim → auto-switch to SimVision bridge."""
+async def test_nonrecursive_list_xmsim_success_passthrough() -> None:
+    """xmsim describe with a matching glob pattern returns the raw result untouched."""
     from unittest.mock import MagicMock
 
-    xmsim_bridge = MagicMock()
-    xmsim_bridge.connected = True
+    executed: list[str] = []
 
-    sv_executed: list[str] = []
-
-    class _SVBridge:
-        connected = True
+    class _FakeBridge:
         async def execute(self, cmd: str, timeout: float = 30) -> str:
-            sv_executed.append(cmd)
-            return "top.hw.clk wire"
-
-    sv_bridge = _SVBridge()
+            executed.append(cmd)
+            return "top.hw.sys_clk...net (wire/tri) logic = StX\n"
 
     fake_bridges = MagicMock()
-    fake_bridges.get_bridge.return_value = xmsim_bridge   # returns xmsim
-    fake_bridges.xmsim_raw = xmsim_bridge                  # bridge is xmsim_raw → triggers fallback
-    fake_bridges.simvision_raw = sv_bridge                 # SimVision available
+    fake_bridges.get_bridge.return_value = _FakeBridge()
 
     tool_fn = _make_inspect_tool(fake_bridges)
     result = await tool_fn(action="list", scope="top.hw", pattern="*clk*", recursive=False)
 
-    # SimVision bridge was used (describe called on sv_bridge, not xmsim_bridge)
-    assert sv_executed == ["describe top.hw.*clk*"], f"Unexpected: {sv_executed}"
+    assert executed == ["describe top.hw.*clk*"]
+    assert "sys_clk" in result
     assert "ERROR" not in result
+    assert "No signals matching" not in result
 
 
 @pytest.mark.asyncio
-async def test_nonrecursive_list_xmsim_no_simvision_returns_error() -> None:
-    """recursive=False + target=xmsim + no SimVision → clear error, no PNOOBJ forwarded to xmsim."""
+async def test_nonrecursive_list_pnoobj_becomes_no_match_message() -> None:
+    """xmsim PNOOBJ (zero matches) is translated into a graceful 'no signals' message."""
     from unittest.mock import MagicMock
 
-    xmsim_bridge = MagicMock()
-    xmsim_bridge.connected = True
+    from xcelium_mcp.tcl_bridge import TclError
 
-    fake_bridges = MagicMock()
-    fake_bridges.get_bridge.return_value = xmsim_bridge
-    fake_bridges.xmsim_raw = xmsim_bridge
-    fake_bridges.simvision_raw = None                      # no SimVision
-
-    tool_fn = _make_inspect_tool(fake_bridges)
-
-    for pattern in ("*clk*", "clk", "*"):
-        result = await tool_fn(action="list", scope="top.hw", pattern=pattern, recursive=False)
-        assert "ERROR" in result
-        assert "SimVision" in result
-        # xmsim_bridge.execute must never have been called with a describe command
-        xmsim_bridge.execute.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_nonrecursive_list_simvision_target_unchanged() -> None:
-    """recursive=False + target=simvision uses SimVision directly (no xmsim check)."""
-    from unittest.mock import MagicMock
-
-    sv_executed: list[str] = []
-
-    class _SVBridge:
-        connected = True
+    class _FakeBridge:
         async def execute(self, cmd: str, timeout: float = 30) -> str:
-            sv_executed.append(cmd)
-            return "top.hw.clk wire"
-
-    sv_bridge = _SVBridge()
+            raise TclError("xmsim: *SE,PNOOBJ: Path element could not be found: clk.")
 
     fake_bridges = MagicMock()
-    fake_bridges.get_bridge.return_value = sv_bridge       # target=simvision returns sv_bridge
-    fake_bridges.xmsim_raw = MagicMock()                   # different object → no fallback triggered
-    fake_bridges.simvision_raw = sv_bridge
+    fake_bridges.get_bridge.return_value = _FakeBridge()
 
     tool_fn = _make_inspect_tool(fake_bridges)
-    result = await tool_fn(action="list", scope="top.hw", pattern="*clk*",
-                           target="simvision", recursive=False)
 
-    assert sv_executed == ["describe top.hw.*clk*"]
-    assert "ERROR" not in result
+    for scope, pattern in (("top", "*clk*"), ("top", "*"), ("top.hw", "clk")):
+        result = await tool_fn(action="list", scope=scope, pattern=pattern, recursive=False)
+        assert "No signals matching" in result
+        assert "PNOOBJ" not in result
+        assert "ERROR" not in result
+
+
+@pytest.mark.asyncio
+async def test_nonrecursive_list_non_pnoobj_tclerror_still_raises() -> None:
+    """A TclError unrelated to PNOOBJ is not swallowed -- it propagates as before."""
+    from unittest.mock import MagicMock
+
+    from xcelium_mcp.tcl_bridge import TclError
+
+    class _FakeBridge:
+        async def execute(self, cmd: str, timeout: float = 30) -> str:
+            raise TclError("xmsim: some other unrelated failure")
+
+    fake_bridges = MagicMock()
+    fake_bridges.get_bridge.return_value = _FakeBridge()
+
+    tool_fn = _make_inspect_tool(fake_bridges)
+
+    with pytest.raises(TclError):
+        await tool_fn(action="list", scope="top.hw", pattern="*clk*", recursive=False)
 
 
 # ---------------------------------------------------------------------------

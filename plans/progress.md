@@ -1107,3 +1107,42 @@ python -m pytest && python -m ruff check src/
 - prd.json `passes` 필드는 이번에도 건드리지 않음 (F-185는 여전히 passes:false로 남겨둠, 사용자 리뷰 대기).
 
 ---
+
+## 2026-07-08 - F-185 근본원인 정정: 라이브 xmsim 재검증으로 1차 수정이 틀렸음을 발견
+
+### 배경
+
+사용자가 "SimVision에서는 문제없는데 xmsim에서 사용돼서 문제가 된 거냐"고 확인 질문 → 답변하면서 "SimVision이 실제로 되는지 이번 세션에서 직접 재검증하진 않았다"고 정직하게 인정 → 사용자가 "SimVision에서 실제로 재현/검증해줘"라고 요청 → venezia-t0에 `sim_bridge_run`으로 xmsim 세션을 새로 기동해 라이브로 재검증하는 과정에서, **1차 수정(이 파일 위 항목, non-recursive list를 SimVision로 강제 라우팅)이 잘못된 진단에 기반했음을 발견**.
+
+### 무엇이 틀렸었나
+
+라이브로 `inspect_signal(action="list", scope="top.hw", pattern="*clk*", target="xmsim")`를 호출하니 **정상적으로 매칭 신호 목록을 반환**함 — 즉 xmsim의 `describe`는 glob 패턴을 문제없이 지원한다. 1차 수정에서 "xmsim의 describe는 glob을 아예 지원 안 하고 SimVision 전용"이라고 단정한 건 F-131/F-132(recursive의 `scope show`가 SimVision 전용)에서 유추한 추측이었을 뿐, 실제로 검증하지 않고 코드를 고쳤던 것.
+
+### 진짜 근본원인 (라이브로 확인)
+
+PNOOBJ는 **매칭이 0건일 때만** 발생. 두 가지 경로로 0건이 됨:
+- scope='top' 자체: `scope -describe top`으로 직접 확인해보니 직속 자식이 인스턴스 2개(`hw`, `sw`)뿐이고 leaf 신호가 하나도 없음 — 어떤 pattern을 줘도 `describe top.*`은 0건.
+- scope='top.hw', pattern='clk'(와일드카드 없는 리터럴): leaf 신호는 많지만 정확히 `clk`라는 이름의 신호는 없음(`sys_clk`/`w_i2c_clk` 등만 존재) — 리터럴 이름 그대로 찾으니 0건.
+
+xmsim은 이 "0건"을 빈 결과가 아니라 예외(PNOOBJ)로 던진다는 게 진짜 원인. SimVision 전용 기능 문제가 아니었음.
+
+### 재수정
+
+- `src/xcelium_mcp/tools/signal_inspection.py`: 1차 수정에서 추가했던 "xmsim이면 SimVision로 강제 전환/에러" 분기를 non-recursive 경로에서 **제거**(recursive 분기는 F-131/F-132 그대로 유지 — `scope show`는 실제로 xmsim에 없는 명령이 맞음). 대신 non-recursive `describe scope.pattern` 호출을 try/except로 감싸 `TclError` 메시지에 `PNOOBJ`가 있으면 recursive 분기와 동일한 `"No signals matching ... found"` 메시지로 치환, 그 외 TclError는 그대로 re-raise.
+- 테스트 3건 교체: 잘못된 가정("xmsim+no SimVision→에러") 기반 테스트 2개 제거, 대신 (1) 매칭 성공 시 raw 결과 그대로 통과 (2) PNOOBJ→graceful 메시지 치환 (3) PNOOBJ 아닌 다른 TclError는 그대로 raise, 3건으로 교체.
+- docstring도 "SimVision 필요" 문구를 되돌려 "xmsim에서 glob 정상 동작, recursive만 SimVision 필요"로 정정.
+
+**Files changed:**
+- src/xcelium_mcp/tools/signal_inspection.py (재수정)
+- tests/test_pure_helpers.py (테스트 교체)
+- plans/prd.json (F-185 notes에 정정 이력 추가)
+- plans/progress.md (this entry)
+
+**Learnings:**
+- **전례(F-131/F-132)로부터의 유추는 라이브 검증을 대체할 수 없다** — 겉보기에 같은 계열의 버그(xmsim vs SimVision 능력 차이)로 보여도, 실제로 재현해보지 않으면 진단이 틀릴 수 있다. 이번 건은 "SimVision 전용 기능"이 아니라 "0-매칭을 예외로 던지는 xmsim의 동작 방식" — 완전히 다른 카테고리의 버그였음.
+- 실제 세션(venezia-t0, TOP013)에 `sim_bridge_run`으로 새로 기동해 라이브 재현 → `execute_tcl`로 `describe`/`scope -describe` 여러 조합을 직접 실험 → 정확한 조건(scope의 직속 leaf 신호 유무, pattern의 wildcard 유무)을 분리해낸 뒤에야 정확한 수정이 나왔다.
+- 검증 후 `sim_disconnect(action="shutdown", target="xmsim")`으로 세션 정리 — xcelium-sim skill의 "세션 종료 시 반드시 shutdown" 규칙 준수.
+- pytest 617 passed, ruff clean 재확인.
+- prd.json `passes` 필드는 이번에도 건드리지 않음 (F-185는 여전히 passes:false, 사용자 리뷰 대기).
+
+---

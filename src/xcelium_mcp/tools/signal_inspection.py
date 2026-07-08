@@ -138,10 +138,9 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
         Args:
             action:  "value" — read current values of one or more signals.
                      "describe" — detailed info (type, width, direction) for a signal.
-                     "list" — list signals in a scope, filtered by pattern. Glob-pattern
-                     matching (recursive or not) requires SimVision; auto-switches from
-                     xmsim if SimVision is connected, else returns an actionable error
-                     (F-185 — xmsim's 'describe'/'scope show' don't support globs).
+                     "list" — list signals in a scope, filtered by pattern. Works on
+                     xmsim directly (glob patterns are supported); recursive search
+                     still requires SimVision ('scope show' has no xmsim equivalent).
                      "drivers" — find all drivers of a signal (useful for X/Z debugging).
                      "check_dump" — check which signals exist in an SHM dump file.
                      "extract_csv" — extract signals from an SHM dump to CSV (via csv_cache,
@@ -198,28 +197,35 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> None:
             if not scope:
                 return "ERROR: 'scope' is required for action='list'."
             bridge = bridges.get_bridge(target)
-            # F-185: glob-pattern listing (both recursive 'scope show' and non-recursive
-            # 'describe scope.pattern') is a SimVision-only capability — xmsim's own
-            # 'describe' requires an exact existing object path and raises
-            # "*SE,PNOOBJ: Path element could not be found" for any glob/non-literal
-            # pattern, even a bare non-wildcard name. Auto-switch or fail clearly for
-            # both modes rather than forwarding a command xmsim cannot execute.
-            if bridge is bridges.xmsim_raw:
-                if bridges.simvision_raw and bridges.simvision_raw.connected:
-                    bridge = bridges.simvision_raw
-                else:
-                    mode = "recursive list" if recursive else "list"
-                    return (
-                        f"ERROR: {mode} requires SimVision (xmsim's 'describe' does not support "
-                        "glob patterns and has no 'scope show' equivalent). Start SimVision, or "
-                        "use execute_tcl(\"scope -describe <scope>\") for a raw xmsim listing."
-                    )
             if recursive:
+                # scope show is a SimVision-only Tcl command; auto-switch if needed
+                if bridge is bridges.xmsim_raw:
+                    if bridges.simvision_raw and bridges.simvision_raw.connected:
+                        bridge = bridges.simvision_raw
+                    else:
+                        return (
+                            "ERROR: recursive list requires SimVision (scope show is unavailable "
+                            "in xmsim). Start SimVision first."
+                        )
                 hits = await _list_signals_via_tcl(bridge, scope, pattern, scope_prefixes)
                 if not hits:
                     return f"No signals matching {pattern!r} found under {scope} (recursive search)"
                 return "\n".join(hits)
-            return await bridge.execute(f"describe {scope}.{pattern}")
+            # F-185: xmsim's 'describe' DOES support glob patterns (verified live against
+            # a real xmsim session — e.g. 'describe top.hw.*clk*' returns matches fine).
+            # It raises *SE,PNOOBJ ("Path element could not be found") instead of an empty
+            # result when the pattern matches zero direct children of scope — either
+            # because scope's immediate children are all sub-instances with no leaf
+            # signals (e.g. scope='top', whose only children are module instances), or
+            # because a non-wildcard literal pattern isn't an exact existing object name.
+            # Treat that as a graceful "no matches" the same way the recursive branch
+            # already does, instead of surfacing the raw Tcl error.
+            try:
+                return await bridge.execute(f"describe {scope}.{pattern}")
+            except TclError as e:
+                if "PNOOBJ" in str(e):
+                    return f"No signals matching {pattern!r} found under {scope}"
+                raise
 
         elif action == "drivers":
             if not signal:
