@@ -2588,7 +2588,7 @@
       "id": "F-183",
       "title": "견고성: build_test_discovery_dict의 의존성 스캔 1건 실패 시 전체 cached_dependency_files 결과 폐기 + orphan 태스크 발생",
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "test_discovery_scan.py::build_test_discovery_dict()의 asyncio.gather(*(scan_test_dependencies(...) for n in names))에 return_exceptions=True를 전달",
         "결과 처리 루프에서 각 항목이 Exception 인스턴스인 경우 해당 테스트명만 로그(debug, non-fatal) 후 cached_dependency_files에서 제외, 나머지 성공한 항목은 정상적으로 저장",
@@ -2596,7 +2596,8 @@
         "기존 테스트(test_dependency_scan_failure_is_non_fatal 등) 회귀 없이 통과",
         "pytest passes"
       ],
-      "notes": "code-analyzer agent 리뷰(2026-07-08) Minor #2(confidence 80%). asyncio.gather 기본값(return_exceptions=False)이 첫 실패 시 나머지 진행 중인 스캔들을 미완료 상태로 남기고(orphan) 예외를 던지는데, 이를 감싸는 except가 gather+반영 루프 전체를 감싸서 이미 성공한 스캔 결과까지 전부 버려짐(해당 테스트만이 아니라 전체가 빈 맵으로 기록됨). build_tb_provenance가 다음 호출에서 개별 self-heal 하므로 데이터 손실은 아니고 효율성/견고성 문제."
+      "notes": "code-analyzer agent 리뷰(2026-07-08) Minor #2(confidence 80%). asyncio.gather 기본값(return_exceptions=False)이 첫 실패 시 나머지 진행 중인 스캔들을 미완료 상태로 남기고(orphan) 예외를 던지는데, 이를 감싸는 except가 gather+반영 루프 전체를 감싸서 이미 성공한 스캔 결과까지 전부 버려짐(해당 테스트만이 아니라 전체가 빈 맵으로 기록됨). build_tb_provenance가 다음 호출에서 개별 self-heal 하므로 데이터 손실은 아니고 효율성/견고성 문제.",
+      "completed_at": "2026-07-08"
     }
   ]
 }

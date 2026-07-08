@@ -1,6 +1,20 @@
 
 ---
 
+## 2026-07-08 - F-183: 의존성 스캔 부분 실패 시 전체 결과 폐기 수정 (prd.json 전 항목 완료)
+
+### 배경
+code-analyzer 리뷰(bug/security/performance) Minor #2. `build_test_discovery_dict()`의 `asyncio.gather(*(scan_test_dependencies(...) for n in names))`가 기본값(`return_exceptions=False`)이라 테스트 1개의 스캔만 실패해도 예외가 던져지고, 이를 감싸는 `except`가 gather+반영 루프 전체를 감싸서 **이미 성공한 다른 테스트들의 스캔 결과까지 전부 버려짐**.
+
+### 구현
+- `asyncio.gather(..., return_exceptions=True)`로 변경, 결과 루프에서 각 항목이 `BaseException` 인스턴스인지 확인해 실패한 테스트만 로그(debug)하고 `cached_dependency_files`에서 제외, 나머지는 정상 저장
+- 신규 테스트: 3개 테스트 중 1개(TOP2)만 스캔 실패하도록 mock — TOP1/TOP3는 정상 기록되고 TOP2만 빠지는지 검증(수정 전이었다면 3개 전부 빈 상태)
+
+### 결과
+614 tests passed(613→614), ruff clean. **이번 세션에서 prd.json에 등록된 pending 항목(F-144/F-145 제외 — 사용자 지시로 skip 처리, 다른 프로젝트에서 검증 예정)이 모두 완료됨.**
+
+---
+
 ## 2026-07-08 - F-182: _filter_test_names의 fnmatch 대소문자 플랫폼 불일치 수정
 
 ### 배경

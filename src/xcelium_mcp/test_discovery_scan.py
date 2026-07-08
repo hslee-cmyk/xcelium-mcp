@@ -105,17 +105,26 @@ async def build_test_discovery_dict(sim_dir: str, tb_type: str) -> dict:
     # here, once, at discovery time — never unconditionally on the per-run
     # hot path (sim_batch_run/sim_regression/sim_bridge_run only re-scan if
     # the primary file's content changed since — see tb_provenance.py).
+    #
+    # F-183: return_exceptions=True — a single test's scan failing must not
+    # discard every OTHER test's already-successful scan (the previous
+    # all-or-nothing try/except around the whole gather did exactly that),
+    # nor leave the other in-flight scans orphaned (gather's default
+    # return_exceptions=False raises on the first failure and abandons the
+    # rest). Each result is checked individually; failures are logged and
+    # simply excluded from cached_dependency_files for that one test.
     cached_dependency_files: dict[str, dict] = {}
     if cached_test_files:
         names = list(cached_test_files.keys())
-        try:
-            scan_results = await asyncio.gather(
-                *(scan_test_dependencies(cached_test_files[n], sim_dir) for n in names)
-            )
-            for name, entry in zip(names, scan_results):
-                cached_dependency_files[name] = entry
-        except (RuntimeError, OSError, asyncio.TimeoutError) as e:
-            logger.debug("dependency file discovery failed (non-fatal): %s", e)
+        scan_results = await asyncio.gather(
+            *(scan_test_dependencies(cached_test_files[n], sim_dir) for n in names),
+            return_exceptions=True,
+        )
+        for name, entry in zip(names, scan_results):
+            if isinstance(entry, BaseException):
+                logger.debug("dependency file discovery failed for %s (non-fatal): %s", name, entry)
+                continue
+            cached_dependency_files[name] = entry
 
     return {
         "command": test_cmd,

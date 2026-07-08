@@ -85,6 +85,41 @@ class TestBuildTestDiscoveryDict:
         assert result["cached_dependency_files"] == {}
 
     @pytest.mark.asyncio
+    async def test_one_dependency_scan_failure_does_not_discard_the_others(self) -> None:
+        """F-183: previously, ANY single test's scan_test_dependencies
+        failure discarded the whole cached_dependency_files map (the
+        try/except wrapped the entire gather + assembly loop). With
+        return_exceptions=True, only the failed test's entry is skipped —
+        every other test that scanned successfully must still be recorded."""
+        grep_output = (
+            "/sim/tb/tests/top1_test.sv:1:class TOP1 extends uvm_test;\n"
+            "/sim/tb/tests/top2_test.sv:1:class TOP2 extends uvm_test;\n"
+            "/sim/tb/tests/top3_test.sv:1:class TOP3 extends uvm_test;\n"
+        )
+        good_entry = {"scanned_primary_sha256": "abc", "deps": []}
+
+        async def _fake_scan(primary_path: str, sim_dir: str) -> dict:
+            if "top2" in primary_path:
+                raise RuntimeError("scan failed for TOP2 only")
+            return good_entry
+
+        with (
+            patch("xcelium_mcp.test_discovery_scan.shell_run", new_callable=AsyncMock,
+                  return_value=grep_output),
+            patch("xcelium_mcp.test_discovery_scan.scan_test_dependencies", side_effect=_fake_scan),
+        ):
+            result = await build_test_discovery_dict("/sim", "uvm")
+
+        assert result["cached_dependency_files"] == {
+            "TOP1": good_entry,
+            "TOP3": good_entry,
+        }
+        assert "TOP2" not in result["cached_dependency_files"]
+        # cached_test_files is unaffected — the dependency scan is a separate
+        # sub-step from the primary discovery scan.
+        assert set(result["cached_test_files"]) == {"TOP1", "TOP2", "TOP3"}
+
+    @pytest.mark.asyncio
     async def test_no_tests_found_returns_empty_maps(self) -> None:
         with patch("xcelium_mcp.test_discovery_scan.shell_run", new_callable=AsyncMock,
                     return_value=""):
