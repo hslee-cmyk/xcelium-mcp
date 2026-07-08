@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from xcelium_mcp.schema_migration import CURRENT_TEST_DISCOVERY_SCHEMA_VERSION
-from xcelium_mcp.test_resolution import resolve_test_name
+from xcelium_mcp.test_resolution import resolve_test_name, resolve_test_names_batch
 
 
 @pytest.mark.asyncio
@@ -142,3 +142,77 @@ async def test_no_config_passes_through_short_name(tmp_path) -> None:
         result = await resolve_test_name("TOP015", sim_dir)
 
     assert result == "TOP015"
+
+
+# ---------------------------------------------------------------------------
+# F-181: resolve_test_names_batch() — one migration for N names, not N
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_batch_resolve_migrates_exactly_once_for_many_names(tmp_path) -> None:
+    """sim_regression's old per-test asyncio.gather(resolve_test_name(...))
+    re-ran the full migration (and its own O(N) dependency scan) once per
+    test when a migration was actually pending — an O(N^2) thundering herd.
+    resolve_test_names_batch() must migrate/load exactly once regardless of
+    how many names it resolves."""
+    sim_dir = str(tmp_path)
+    cfg = {
+        "test_discovery": {
+            "cached_tests": [f"VENEZIA_TOP{i:03d}_test" for i in range(15)],
+            "cached_at": "2026-04-16T15:38:04",
+        }
+    }
+    grep_output = "\n".join(
+        f"/sim/tb/tests/top{i:03d}_test.sv:1:class VENEZIA_TOP{i:03d}_test extends uvm_test;"
+        for i in range(15)
+    )
+
+    with (
+        patch("xcelium_mcp.test_resolution.resolve_sim_dir", new_callable=AsyncMock,
+              return_value=sim_dir),
+        patch("xcelium_mcp.test_resolution.load_sim_config", new_callable=AsyncMock,
+              return_value=cfg),
+        patch("xcelium_mcp.schema_migration.save_sim_config", new_callable=AsyncMock),
+        patch("xcelium_mcp.schema_migration.analyze_tb_type", new_callable=AsyncMock,
+              return_value="uvm") as mock_tb_type,
+        patch("xcelium_mcp.test_discovery_scan.shell_run", new_callable=AsyncMock,
+              return_value=grep_output) as mock_shell,
+        patch("xcelium_mcp.test_discovery_scan.scan_test_dependencies", new_callable=AsyncMock,
+              return_value={"scanned_primary_sha256": "x", "deps": []}),
+    ):
+        short_names = [f"TOP{i:03d}" for i in range(15)]
+        result = await resolve_test_names_batch(short_names, sim_dir)
+
+    assert result == [f"VENEZIA_TOP{i:03d}_test" for i in range(15)]
+    # The migration (tb_type detection + the discovery shell command) must
+    # run exactly once for all 15 names, not once per name.
+    mock_tb_type.assert_awaited_once()
+    mock_shell.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_batch_resolve_no_migration_needed_still_resolves_all(tmp_path) -> None:
+    """Already-current schema: no migration calls at all, every name resolves."""
+    sim_dir = str(tmp_path)
+    cfg = {
+        "test_discovery": {
+            "cached_tests": ["TOP1_test", "TOP2_test"],
+            "cached_test_files": {},
+            "cached_dependency_files": {},
+            "schema_version": CURRENT_TEST_DISCOVERY_SCHEMA_VERSION,
+        }
+    }
+    with (
+        patch("xcelium_mcp.test_resolution.resolve_sim_dir", new_callable=AsyncMock,
+              return_value=sim_dir),
+        patch("xcelium_mcp.test_resolution.load_sim_config", new_callable=AsyncMock,
+              return_value=cfg),
+        patch("xcelium_mcp.schema_migration.save_sim_config", new_callable=AsyncMock) as mock_save,
+        patch("xcelium_mcp.schema_migration.analyze_tb_type", new_callable=AsyncMock) as mock_tb_type,
+    ):
+        result = await resolve_test_names_batch(["TOP1", "TOP2"], sim_dir)
+
+    assert result == ["TOP1_test", "TOP2_test"]
+    mock_tb_type.assert_not_awaited()
+    mock_save.assert_not_awaited()

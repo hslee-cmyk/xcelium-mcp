@@ -1,6 +1,23 @@
 
 ---
 
+## 2026-07-08 - F-181: sim_regression 스키마 마이그레이션 O(N^2) thundering herd 수정
+
+### 배경
+code-analyzer 리뷰(bug/security/performance 관점) Important #1. `sim_regression`이 test_list 전체를 `asyncio.gather(*(resolve_test_name(t, ...) for t in test_list))`로 동시 호출하는데, 마이그레이션이 실제로 필요한 상황(schema_version 구버전)이면 N개 호출 전부가 독립적으로 전체 마이그레이션(+각자 내부에서 또 N개 의존성 스캔)을 실행 — N x (1+N) ~= O(N^2) grep/find subprocess.
+
+### 구현
+- `test_resolution.py`: `resolve_test_name()`의 body를 `_load_cached_tests(sim_dir)`(마이그레이션+config 로드, I/O 있음) + `_match_short_name(short_name, cached)`(순수 매칭 로직, I/O 없음) 두 개로 분리
+- 신규 `resolve_test_names_batch(short_names, sim_dir)`: `_load_cached_tests`를 **한 번만** 호출한 뒤, 각 이름을 로컬에서 `_match_short_name`으로 매칭(추가 I/O 없음)
+- `tools/batch.py::sim_regression()`이 `asyncio.gather(*(resolve_test_name(t,...) for t in test_list))` 대신 `resolve_test_names_batch(test_list, resolved_sim_dir)` 호출로 교체
+- `sim_batch_run()`의 단일 테스트 resolve(`resolve_test_name` 직접 호출)는 원래부터 1개 호출이라 영향 없음, 변경 없음
+- 신규 테스트 2개: 15개 테스트명으로 마이그레이션이 필요한 상황을 시뮬레이션해 `analyze_tb_type`/`shell_run`이 정확히 1회만 호출됨을 검증(이전엔 15회 호출됐을 것) + 이미 마이그레이션된 경우 마이그레이션 호출 자체가 없음을 검증
+
+### 결과
+612 tests passed(610→612, +2), ruff clean, 순환 임포트 없음. 일회성 비용(스키마 업그레이드 직후 딱 한 번) 최적화라 기능적 회귀 리스크는 낮음.
+
+---
+
 ## 2026-07-08 - F-180: stdio_forward.py 블로킹 read 버그 수정 (priority 1, ralph-loop --next 픽)
 
 ### 배경

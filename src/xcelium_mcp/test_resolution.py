@@ -73,44 +73,24 @@ def resolve_sim_params(
     }
 
 
-async def resolve_test_name(short_name: str, sim_dir: str = "") -> str:
-    """Short name → full test name via cached_tests.
+def _match_short_name(short_name: str, cached: list[str]) -> str:
+    """Match short_name against an already-resolved cached_tests list.
 
     "TOP015" → "VENEZIA_TOP015_i2c_8bit_offset_test"
     Exact match → return. 1 substring match → return. 0 → error. 2+ → candidates.
-    Cache miss → triggers list_tests (mcp_config 경유 캐시 저장).
+    No cache at all → pass short_name through unresolved (existing contract).
+
+    F-181: split out of resolve_test_name() so a batch caller (resolve_test_names_batch)
+    can migrate/load the config ONCE and then match each name locally, instead of every
+    name re-running the full resolve (and, if a migration is pending, the full
+    migration) independently.
     """
-    try:
-        resolved_dir = await resolve_sim_dir(sim_dir)
-    except ValueError:
-        resolved_dir = sim_dir  # fallback: use as-is
-    cfg = await load_sim_config(resolved_dir) if resolved_dir else None
-    cached: list[str] = []
-
-    if cfg:
-        # F-175 migration gap fix: schema_version-driven migration instead of
-        # an "is cached_tests empty" check — a project whose cached_tests was
-        # already populated before F-175 existed (tb_type/cached_test_files
-        # missing) used to fall through this check forever, since this is the
-        # actual hot-path entry point sim_batch_run/sim_regression call
-        # before build_tb_provenance(). See schema_migration.py / the
-        # xcelium-mcp-f175-provenance-migration-gap plan+design docs.
-        #
-        # TRUST BOUNDARY: test_discovery.command comes from .mcp_sim_config.json
-        # which is a user-controlled config file (written by sim_discover or
-        # mcp_config set). The "test_discovery.command" key is in _PROTECTED_KEYS
-        # (registry.py), so it cannot be overwritten via mcp_config set — only
-        # sim_discover can populate it. We treat this as trusted user input.
-        cached = await ensure_and_persist_test_discovery(resolved_dir, cfg)
-
     if not cached:
-        return short_name  # No cache, no command → pass through
+        return short_name
 
-    # Exact match
     if short_name in cached:
         return short_name
 
-    # Substring match
     matches = [t for t in cached if short_name in t]
     if len(matches) == 1:
         return matches[0]
@@ -122,3 +102,55 @@ async def resolve_test_name(short_name: str, sim_dir: str = "") -> str:
             + "\n".join(f"  {m}" for m in matches)
             + "\nSpecify more precisely."
         )
+
+
+async def _load_cached_tests(sim_dir: str) -> list[str]:
+    """Resolve sim_dir, load config, and migrate/persist test_discovery ONCE.
+
+    Shared by resolve_test_name() and resolve_test_names_batch() — the actual
+    schema migration + cached_tests lookup, done exactly once per call site
+    invocation regardless of how many short names need matching afterward.
+    """
+    try:
+        resolved_dir = await resolve_sim_dir(sim_dir)
+    except ValueError:
+        resolved_dir = sim_dir  # fallback: use as-is
+    cfg = await load_sim_config(resolved_dir) if resolved_dir else None
+    if not cfg:
+        return []
+
+    # F-175 migration gap fix: schema_version-driven migration instead of
+    # an "is cached_tests empty" check — a project whose cached_tests was
+    # already populated before F-175 existed (tb_type/cached_test_files
+    # missing) used to fall through this check forever, since this is the
+    # actual hot-path entry point sim_batch_run/sim_regression call
+    # before build_tb_provenance(). See schema_migration.py / the
+    # xcelium-mcp-f175-provenance-migration-gap plan+design docs.
+    #
+    # TRUST BOUNDARY: test_discovery.command comes from .mcp_sim_config.json
+    # which is a user-controlled config file (written by sim_discover or
+    # mcp_config set). The "test_discovery.command" key is in _PROTECTED_KEYS
+    # (registry.py), so it cannot be overwritten via mcp_config set — only
+    # sim_discover can populate it. We treat this as trusted user input.
+    return await ensure_and_persist_test_discovery(resolved_dir, cfg)
+
+
+async def resolve_test_name(short_name: str, sim_dir: str = "") -> str:
+    """Short name → full test name via cached_tests (single-test resolution,
+    e.g. sim_batch_run). See resolve_test_names_batch() for the N-name path."""
+    cached = await _load_cached_tests(sim_dir)
+    return _match_short_name(short_name, cached)
+
+
+async def resolve_test_names_batch(short_names: list[str], sim_dir: str = "") -> list[str]:
+    """Resolve N short names against ONE migration/config load (F-181).
+
+    sim_regression() used to asyncio.gather() resolve_test_name() per test —
+    when a schema migration was actually pending, all N concurrent calls
+    independently ran the full migration (each doing its own O(N) dependency
+    scan), an O(N^2) thundering herd. Here the migrate-and-load happens once,
+    then each name is matched locally (pure, no I/O) against the same
+    cached_tests list.
+    """
+    cached = await _load_cached_tests(sim_dir)
+    return [_match_short_name(name, cached) for name in short_names]

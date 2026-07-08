@@ -20,7 +20,7 @@ from xcelium_mcp.tb_provenance import (
     provenance_unavailable_reason,
 )
 from xcelium_mcp.tcl_bridge import TclError
-from xcelium_mcp.test_resolution import resolve_test_name
+from xcelium_mcp.test_resolution import resolve_test_name, resolve_test_names_batch
 
 # Type alias for the restore_checkpoint callable passed from server.py
 RestoreCheckpointFn = Callable[..., Coroutine[Any, Any, str]]
@@ -311,11 +311,12 @@ def register(
                     "Provide test_list explicitly."
                 )
 
-        # v4.1: resolve short test names → full names (parallel resolution)
+        # F-181: resolve short test names → full names via a single shared
+        # migration/config load (resolve_test_names_batch), not N concurrent
+        # resolve_test_name() calls — see its docstring for the O(N^2)
+        # thundering-herd this replaces.
         try:
-            test_list = list(await asyncio.gather(
-                *(resolve_test_name(t, resolved_sim_dir) for t in test_list)
-            ))
+            test_list = await resolve_test_names_batch(test_list, resolved_sim_dir)
         except ValueError as e:
             return f"ERROR: {e}"
 

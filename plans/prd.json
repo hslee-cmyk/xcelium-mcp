@@ -2560,14 +2560,15 @@
       "id": "F-181",
       "title": "성능: sim_regression에서 스키마 마이그레이션 필요 시 resolve_test_name 동시 호출로 O(N^2) thundering herd 발생",
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "tools/batch.py::sim_regression()이 test_list 전체를 resolve_test_name()으로 asyncio.gather 동시 호출하기 전에, ensure_and_persist_test_discovery()를 1회만 먼저 호출해 마이그레이션을 완료시키고, 그 결과(cached_tests)로 로컬에서 이름 매칭하도록 변경 -- 또는 schema_migration.ensure_and_persist_test_discovery()를 resolved_dir별 asyncio.Lock으로 감싸 동시 호출 시 첫 호출만 실제 마이그레이션을 수행하고 나머지는 그 결과를 기다리도록 함",
         "신규 테스트: schema_version이 구버전인 config에서 test_list 10개 이상으로 sim_regression(또는 동등한 병렬 resolve_test_name 호출)을 시뮬레이션했을 때, build_test_discovery_dict/analyze_tb_type이 정확히 1회만 호출되는지 검증(현재는 N회 호출됨)",
         "기존 동작(마이그레이션 이미 완료된 경우 무비용 통과, 각 테스트 이름 정상 resolve) 회귀 없음",
         "pytest passes"
       ],
-      "notes": "code-analyzer agent 리뷰(2026-07-08, F-175/177/178/179 커밋 대상 bug/security/performance 리뷰) Important #1(confidence 82%). sim_regression이 test_list를 asyncio.gather로 동시에 resolve_test_name하는데, 마이그레이션이 실제로 필요한 상황이면 N개 호출 전부가 독립적으로 전체 마이그레이션(+ 각자 내부에서 또 N개 의존성 스캔)을 실행해 순수 계산으로 N x (1+N) ~= O(N^2) grep/find subprocess 발생. 50개 테스트 regression이면 약 2,550개 subprocess -- 스키마 업그레이드 직후 첫 regression에서 분 단위 스파이크 가능. 일회성 비용(그 다음부턴 no-op)이고 config 손실(lost-update)은 아님(공유 dict라 오히려 수렴) -- 순수 낭비성 중복 작업."
+      "notes": "code-analyzer agent 리뷰(2026-07-08, F-175/177/178/179 커밋 대상 bug/security/performance 리뷰) Important #1(confidence 82%). sim_regression이 test_list를 asyncio.gather로 동시에 resolve_test_name하는데, 마이그레이션이 실제로 필요한 상황이면 N개 호출 전부가 독립적으로 전체 마이그레이션(+ 각자 내부에서 또 N개 의존성 스캔)을 실행해 순수 계산으로 N x (1+N) ~= O(N^2) grep/find subprocess 발생. 50개 테스트 regression이면 약 2,550개 subprocess -- 스키마 업그레이드 직후 첫 regression에서 분 단위 스파이크 가능. 일회성 비용(그 다음부턴 no-op)이고 config 손실(lost-update)은 아님(공유 dict라 오히려 수렴) -- 순수 낭비성 중복 작업.",
+      "completed_at": "2026-07-08"
     },
     {
       "id": "F-182",
