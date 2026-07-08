@@ -3,7 +3,7 @@
 > **Feature**: Verilog 하드웨어 디자인 검증 워크플로우
 >
 > **Date**: 2026-04-03
-> **Status**: Draft v1.10
+> **Status**: Draft v1.11
 > **Predecessor**: `xcelium-mcp-debugging-workflow.plan.md` — Phase 0~5 상세, TB 캐시, 실전 히스토리
 > **Scope**: 시뮬레이터 독립적 범용 HW 검증 프레임워크. 첫 번째 백엔드: xcelium-mcp
 
@@ -28,7 +28,7 @@
 |-----|-------|
 | **WHY** | 시뮬레이터별 도구·절차가 제각각이라 표준화된 검증 워크플로우가 없고, 25개 개별 tool을 세션마다 개별 호출해야 해서 trigger가 과다함 |
 | **WHO** | xcelium-mcp로 RTL 검증을 수행하는 AI 에이전트 및 엔지니어 (현재 소비 프로젝트: `venezia-fpga`) |
-| **RISK** | sys.argv 분기로 기존 MCP stdio 진입점이 깨질 수 있음(§11); `compound.py`가 기존 batch/CSV 로직을 재구현하면 이미 검증된 경로(617 tests)와 별개로 새 버그 표면이 생김(§3.4 주의) |
+| **RISK** | `compound.py`가 기존 batch/CSV 로직을 재구현하면 이미 검증된 경로(617 tests)와 별개로 새 버그 표면이 생김(§3.4 주의) — sys.argv 분기 리스크는 2026-07-08 CLI를 독립 console_script로 재설계하며 해소됨(§7.1, §11) |
 | **SUCCESS** | `/sim verify {test}` 1회 호출로 run→analyze→(debug) 자동 체이닝; 기존 25 tool 전량 하위호환 유지; tool trigger 세션당 60% 감소 |
 | **SCOPE** | Phase A-C(Backend 조합 계층 + CLI + Skill) 우선 구현 → 검증 후 Phase D(Hook 자동화) 후행. Backend Interface(§3, 다중 시뮬레이터 추상화)는 두 번째 backend가 실제로 필요해지기 전까지 YAGNI 후보(§D 참조) |
 
@@ -45,7 +45,7 @@
 | FR-03 | Debug: RTL 분석서 기반 FAIL 원인 추적 + 수정 제안, verilog-rtl skill 연계 | High | Pending |
 | FR-04 | Verify: run→analyze→(FAIL시)debug 자동 체이닝, 수정 후 재진입 | High | Pending |
 | FR-05 | sim-state.json: 테스트별 phase/결과/origin_chain 영속 상태 추적(§5.1) | High | Pending |
-| FR-06 | CLI: AI 없이 `xcelium-mcp run/analyze/regression` 직접 실행(§7) | Medium | Pending |
+| FR-06 | CLI: AI 없이 `xcelium-mcp-cli run/analyze/regression` 직접 실행(§7, 2026-07-08 갱신 — `server.py` 공유 entry point가 아니라 독립 console_script) | Medium | Pending |
 | FR-07 | Backend Interface: compound operation 3종 규격화(§3) — **YAGNI 후보**, 두 번째 backend(vcs-mcp 등) 착수 전까지 interface만 정의하고 범용화 자체는 보류 검토 | Low | Pending |
 | FR-08 | Hook 자동화: PostToolUse phase 전환 제안 + UserPromptSubmit 키워드 트리거(§6) — Phase D, A-C 검증 후 후행 | Medium | Pending |
 | FR-09 | Tool 사용법 가이드(25개 raw tool의 phase별 선택 매트릭스, `references/tool-map.md` 상당)는 **이 `/sim` skill과 동일한 `~/.claude/skills/xcelium-sim/` 디렉터리의 Phase 1**로 구현 — compound.py(Layer 3) 완성을 기다리지 않고 즉시 착수 가능. 상세 plan: `xcelium-mcp-tool-usage-guide`(§Dependencies 참조, v0.2에서 별도 skill 안이 이 skill로 통합됨) | High | Pending (선행 feature, Phase 1) |
@@ -138,9 +138,9 @@ Layer 3: Simulator Backend (교체 가능 추상화)
     │  (향후) verilator-mcp — Verilator
     │  각 backend가 compound operations + 개별 tools 제공
     │
-Layer 2: CLI Commands (backend별)
-    │  xcelium-mcp run / analyze / regression
-    │  (향후) vcs-mcp run / analyze / regression
+Layer 2: CLI Commands (backend별, server.py와 무관한 독립 entry point — §7.1)
+    │  xcelium-mcp-cli run / analyze / regression
+    │  (향후) vcs-mcp-cli run / analyze / regression
     │
 Layer 1: Hook 자동화 (Claude Code plugin)
     │  PostToolUse: phase 자동 전환, next-skill 제안
@@ -249,9 +249,9 @@ src/xcelium_mcp/
 │   ├── analyze_waveform()   csv_extract → multi-condition bisect
 │   └── regression_summary() batch_regression → per-test log → csv on fail
 ├── sim_state.py             ← sim-state.json 읽기/쓰기 (§5.1)
-├── cli.py                   ← CLI argparse → compound.py 호출
+├── cli.py                   ← CLI argparse → compound.py 호출. 독립 entry point(§7.1 갱신 참조) — server.py의 sys.argv 분기 아님
 ├── tools/compound.py        ← MCP tool 3개 → compound.py 호출
-└── server.py                ← sys.argv 분기 + compound tool 등록
+└── server.py                ← compound tool 3개 register() 추가만 — CLI 관련 변경 없음
 ```
 
 **주의 — 신규 구현이 아니라 조합(wrap)**: `run_and_check`/`analyze_waveform`/`regression_summary`는 새 로직이 아니라 이미 완료된 v3 Improvement Plan(`batch_runner.py`의 `run_batch_single`/`run_batch_regression`, `csv_cache.py`의 `extract`/`bisect_signal_dump`)을 시퀀스로 묶는 **얇은 조합 계층**이다. `compound.py` 구현 시 이 함수들을 그대로 호출·재사용하고, batch 실행이나 CSV 추출 로직 자체를 재작성하지 않는다 — 그러지 않으면 이미 검증된(326 tests passing) 경로와 별개로 새 버그 표면이 생긴다.
@@ -640,17 +640,18 @@ regression 복수 FAIL 시 Agent 병렬 분석:
 
 ### 7.1 설계 원칙
 
-- Backend별 CLI — `xcelium-mcp run`, `vcs-mcp run` (향후)
+- Backend별 CLI — `xcelium-mcp-cli run`, `vcs-mcp-cli run` (향후)
 - 공유 CompoundResult 출력 형식 — 어떤 backend든 동일한 `[TAG]` 형식
 - `compound.py`에 로직 1번 작성, CLI와 MCP tool이 공유
+- **독립 entry point — `server.py`의 sys.argv 분기가 아니다(2026-07-08 갱신)**: 원래 이 문서는 CLI를 `server.py:main()` 안에서 `len(sys.argv) > 1` 분기로 얹는 안을 전제했으나, 이 plan 이후 실제로 완료된 `xcelium-mcp-server-process-lifecycle` feature가 이미 이 저장소의 실제 컨벤션을 확립해놨다 — `pyproject.toml [project.scripts]`에 `xcelium-mcp`(server:main) 외에 `xcelium-mcp-supervisor`(supervisor:main)/`xcelium-mcp-culler`(idle_culler:main)가 **각자 독립 console_script**로 등록돼 있고, `stdio_forward.py`/`sim_session_reaper.py`도 각자 독립 `-m` 모듈이다. 게다가 supervisor 배포 이후 MCP 연결은 `WorkerHandler.handle()`이 `_xcelium_server.main()`을 **fork 후 직접 함수 호출**하는 방식이라(subprocess 재실행이 아님), 연결별로 다른 sys.argv가 애초에 전달될 방법이 없다. 따라서 CLI는 `server.py`를 전혀 건드리지 않고 `xcelium-mcp-cli = "xcelium_mcp.cli:main"`을 새 console_script로 추가하는 것으로 스코프를 변경한다 — 이 저장소 자신이 이미 증명한 패턴("새 관심사 = 새 모듈 + 새 console_script")을 그대로 따르는 것이며, 부수적으로 §11의 "sys.argv 분기로 MCP 깨짐" 리스크 자체가 사라진다(server.py 무변경이므로).
 
-### 7.2 xcelium-mcp CLI
+### 7.2 xcelium-mcp-cli
 
 ```bash
-xcelium-mcp                          # 기존 MCP server (하위호환)
-xcelium-mcp run TOP015 [옵션]        # 실행 + 로그 + CSV
-xcelium-mcp analyze [옵션]           # CSV 추출 + 검색
-xcelium-mcp regression [옵션]        # regression + 요약
+xcelium-mcp                          # 기존 MCP server(하위호환, 이 feature로 인한 변경 전혀 없음)
+xcelium-mcp-cli run TOP015 [옵션]    # 실행 + 로그 + CSV
+xcelium-mcp-cli analyze [옵션]       # CSV 추출 + 검색
+xcelium-mcp-cli regression [옵션]    # regression + 요약
 ```
 
 **출력 형식** (모든 backend 공통):
@@ -667,12 +668,13 @@ xcelium-mcp regression [옵션]        # regression + 요약
 
 ```
 src/xcelium_mcp/
-├── compound.py          ← compound operation 핵심 로직
+├── compound.py          ← compound operation 핵심 로직(CLI와 MCP tool이 공유)
 ├── sim_state.py         ← sim-state.json 관리
-├── cli.py               ← argparse → compound.py
-├── tools/compound.py    ← MCP tool → compound.py
-└── server.py            ← sys.argv 분기 + MCP 등록
+├── cli.py               ← argparse → compound.py 호출. pyproject.toml에 xcelium-mcp-cli로 등록되는 독립 entry point
+└── tools/compound.py    ← MCP tool 3개 → compound.py 호출(server.py가 register()만 추가)
 ```
+
+`server.py`는 이 다이어그램에 없다 — compound tool 3개를 `register()`하는 것 외에 CLI 관련 변경이 전혀 없기 때문이다(§7.1).
 
 ---
 
@@ -684,11 +686,12 @@ src/xcelium_mcp/
 |------|------|:-----:|
 | `xcelium-mcp/src/xcelium_mcp/compound.py` | **신규**: CompoundResult + 3 compound 함수 | L3 |
 | `xcelium-mcp/src/xcelium_mcp/sim_state.py` | **신규**: sim-state.json CRUD + phase 전이 | L3 |
-| `xcelium-mcp/src/xcelium_mcp/cli.py` | **신규**: argparse CLI | L2 |
+| `xcelium-mcp/src/xcelium_mcp/cli.py` | **신규**: argparse CLI, `xcelium-mcp-cli` 독립 entry point(§7.1, 2026-07-08 갱신 — server.py 분기 아님) | L2 |
 | `xcelium-mcp/src/xcelium_mcp/tools/compound.py` | **신규**: MCP tool 3개 | L3 |
-| `xcelium-mcp/src/xcelium_mcp/server.py` | **수정**: sys.argv 분기 + compound 등록 | L2+L3 |
-| `~/.claude/skills/xcelium-sim/SKILL.md` | **신규**: /sim skill | L4 |
-| `~/.claude/skills/xcelium-sim/references/*.md` | **신규**: 5개 reference | L4 |
+| `xcelium-mcp/pyproject.toml` | **수정**: `[project.scripts]`에 `xcelium-mcp-cli = "xcelium_mcp.cli:main"` 추가(2026-07-08 신규 — 기존 `xcelium-mcp`/`xcelium-mcp-supervisor`/`xcelium-mcp-culler`와 동일 패턴) | L2 |
+| `xcelium-mcp/src/xcelium_mcp/server.py` | **수정**: compound tool 3개 `register()` 추가만 — CLI 관련 변경 없음(2026-07-08 갱신, 이전엔 sys.argv 분기로 서술돼 있었음) | L3 |
+| `~/.claude/skills/xcelium-sim/SKILL.md` | **수정**(2026-07-08 갱신 — Phase 1에서 이미 생성됨, 신규 아님): 기존 `<!-- PHASE 2 확장점 -->` 마커 아래에 subcommand 라우팅만 추가 | L4 |
+| `~/.claude/skills/xcelium-sim/references/backend-interface.md` | **신규 1개**(2026-07-08 갱신 — 나머지 phase-0~5/tool-map.md/server-ops.md 7개는 Phase 1에서 이미 완료, §4.3 참조) | L4 |
 | `~/.claude/skills/xcelium-sim/hooks/*.js` | **신규**: 2개 hook (PostToolUse, UserPromptSubmit) | L1 |
 | `{project}/.ai/analysis/tb_*.analysis.md` | **수정**: YAML frontmatter 추가 | — |
 | `venezia-fpga/CLAUDE.md` | **수정**: `/sim` skill 안내로 간소화 | — |
@@ -704,10 +707,10 @@ Phase A: Backend 공유 로직 (xcelium-mcp)
   A-5. regression_summary() + sim-state 갱신
 
 Phase B: CLI + MCP Compound Tools (xcelium-mcp)
-  B-1. server.py sys.argv 분기
-  B-2. cli.py argparse (run/analyze/regression)
+  B-1. cli.py argparse (run/analyze/regression)
+  B-2. pyproject.toml에 xcelium-mcp-cli console_script 등록(2026-07-08 갱신 — server.py 분기 아님, §7.1)
   B-3. tools/compound.py register() — 3 MCP tools
-  B-4. server.py Phase 5 등록
+  B-4. server.py에 compound tool register() 호출 추가
 
 Phase C: /sim Skill
   C-1. SKILL.md — subcommand + next-skill-map + 트리거
@@ -724,7 +727,7 @@ Phase D: Hook 자동화
 
 Phase E: CLAUDE.md + 검증
   E-1. CLAUDE.md 시뮬레이션 섹션 간소화
-  E-2. CLI: xcelium-mcp run TOP015 (cloud0)
+  E-2. CLI: xcelium-mcp-cli run TOP015 (원격 host)
   E-3. MCP: run_and_check + sim-state 갱신 확인
   E-4. Skill: /sim run → analyze → debug → verify e2e
   E-5. Skill: /sim verify --regression + parallel FAIL
@@ -762,8 +765,8 @@ Phase A~D ──→ Phase E (검증은 모든 구현 후)
 운용 가이드: `.ai/knowledge/mcp-operations-guide.md`
 
 CLI (AI 없이 직접 실행):
-- `xcelium-mcp run TOP015 --csv`
-- `xcelium-mcp regression --csv-on-fail`
+- `xcelium-mcp-cli run TOP015 --csv`
+- `xcelium-mcp-cli regression --csv-on-fail`
 ```
 
 ---
@@ -824,13 +827,15 @@ Backend가 coverage report 경로를 CompoundResult.details에 포함하면 Skil
 
 ## Impact Analysis
 
-> 이 plan은 `server.py`(기존 MCP 진입점)에 sys.argv 분기를 추가하고 기존 25 tool 위에 compound 계층을 얹는 변경이므로, 기존 소비자 인벤토리를 명시한다.
+> **2026-07-08 갱신**: 이 plan은 원래 `server.py`(기존 MCP 진입점)에 sys.argv 분기를 추가하는 안이었으나, §7.1에서 확정한 대로 CLI는 이제 `xcelium-mcp-cli`라는 독립 console_script다 — `server.py`는 compound tool 3개 `register()` 추가만 받는다. 아래 표는 그에 맞춰 갱신했다. 또한 원격 배포 모델 자체가 이 plan 작성 이후 완료된 `xcelium-mcp-server-process-lifecycle` feature로 바뀌었다(supervisor+fork 구조, `deploy/README.md`) — "Claude Desktop/Code MCP config"의 실제 현재 형태는 xcelium-mcp 자신의 루트 `CLAUDE.md` "Deployment" 섹션에 아직 반영되지 않은 별개의 문서 부채이며, 이 표는 그 부채에 의존하지 않도록 일반화했다.
 
 ### Changed Resources
 
 | Resource | Type | Change Description |
 |----------|------|---------------------|
-| `src/xcelium_mcp/server.py` | MCP entry point | sys.argv 분기 추가 (`len(sys.argv) > 1` → CLI, else → 기존 MCP stdio) |
+| `src/xcelium_mcp/cli.py` | Python module (신규) | argparse 기반 CLI, `xcelium-mcp-cli` 독립 entry point로 등록 — `server.py`와 무관 |
+| `pyproject.toml` | `[project.scripts]` | `xcelium-mcp-cli = "xcelium_mcp.cli:main"` 신규 등록 (기존 `xcelium-mcp`/`xcelium-mcp-supervisor`/`xcelium-mcp-culler`와 동일 패턴) |
+| `src/xcelium_mcp/server.py` | MCP entry point | compound tool 3개 `register()` 호출 추가만 — entry point 자체(`main()`)는 무변경 |
 | 기존 25 tool | MCP tool | 변경 없음 — compound tool 3개만 신규 추가 |
 | `src/xcelium_mcp/` 패키지 | Python module | `compound.py`, `sim_state.py`, `cli.py` 신규 파일 추가 |
 
@@ -838,14 +843,15 @@ Backend가 coverage report 경로를 CompoundResult.details에 포함하면 Skil
 
 | Resource | Operation | Code Path | Impact |
 |----------|-----------|-----------|--------|
-| `server.py` entry point | INVOKE (인자 없음) | Claude Desktop/Code MCP config (`"command": "xcelium-mcp"`, CLAUDE.md Deployment) | None — `len(sys.argv) > 1` 가드가 정확하면 기존 무인자 실행 경로는 변경 없음 |
-| `server.py` entry point | INVOKE (인자 있음) | (신규) CLI `xcelium-mcp run/analyze/regression` | 신규 경로, 기존 소비자 없음 |
+| `server.py:main()` | INVOKE (MCP 연결 처리, 인자 없음) | 원격 supervisor(`xcelium_mcp.supervisor`)가 연결마다 fork 후 `_xcelium_server.main()`을 **직접 함수 호출**(subprocess 재실행 아님) — 이 경로는 CLI 분기가 애초에 필요 없다(§7.1) | None — `server.py`의 entry point 로직 자체를 건드리지 않으므로 영향 없음 |
+| `xcelium-mcp-cli` (신규) | INVOKE | 사람이 원격/로컬 shell에서 직접 실행 — supervisor/MCP 경로와 완전히 분리된 별도 프로세스 | 신규 경로, 기존 소비자 없음, `server.py`와 프로세스 자체가 다름 |
 | 기존 25 tool | CALL | Claude Code MCP `tool_use` (bridge 모드 개별 tool 직접 호출) | None — compound tool은 추가일 뿐 기존 tool 제거·시그니처 변경 없음 |
 | `xcelium_mcp` 패키지 | IMPORT | `pytest tests/` (617 tests) | Needs verification — `compound.py`/`cli.py` 추가가 기존 import 그래프에 순환참조를 만들지 않는지 확인 필요 |
 
 ### Verification
 
-- [ ] Claude Desktop/Code 설정으로 무인자 실행 시 기존 MCP stdio 동작 불변 확인
+- [ ] `server.py:main()`이 supervisor의 fork-후-직접호출 경로에서 compound tool 3개 register 추가 후에도 그대로 동작하는지 확인(사람이 별도로 argv를 넘길 방법이 없는 경로이므로, sys.argv 분기 자체가 아예 없다는 전제를 재확인하는 성격의 검증)
+- [ ] `xcelium-mcp-cli` 신규 console_script가 supervisor/MCP 세션과 무관하게 독립적으로 동작 확인
 - [ ] 기존 25 tool 전체 `pytest` 회귀 없음
 - [ ] `cli.py`/`compound.py` 추가 후 `python -m pytest --collect-only` 로 import 순환 없음 확인
 
@@ -858,7 +864,7 @@ Backend가 coverage report 경로를 CompoundResult.details에 포함하면 Skil
 | CLI EDA 환경변수 미설정 | batch 실행 실패 | compound.py가 login_shell_cmd 재사용 |
 | Compound 중간 실패 | 부분 결과 손실 | CompoundResult `PARTIAL` + 실패 단계 명시 |
 | Skill trigger 미동작 | 수동 `/sim` 필요 | SKILL.md trigger + CLAUDE.md + Hook |
-| sys.argv 분기로 MCP 깨짐 | 기존 MCP 불가 | `len(sys.argv) > 1` 조건만 분기 |
+| ~~sys.argv 분기로 MCP 깨짐~~ | ~~기존 MCP 불가~~ | **2026-07-08 제거**: CLI를 `xcelium-mcp-cli` 독립 console_script로 재설계(§7.1)해 `server.py`를 아예 건드리지 않으므로 이 리스크 자체가 해당 없음 |
 | sim-state.json 동시 접근 | 상태 충돌 | 단일 사용자, lock 불필요 |
 | TB frontmatter 형식 불일치 | Skill 파싱 실패 | 없으면 AI 본문 읽기 fallback |
 | 병렬 FAIL analysis 과부하 | Agent 과다 | 최대 3개 병렬, 나머지 순차 |
@@ -886,6 +892,7 @@ Backend가 coverage report 경로를 CompoundResult.details에 포함하면 Skil
 | **1.8** | **2026-07-03** | **Design 문서 분리 결정** — tool-usage-guide와 Design을 병합할지 여부 확정: **별도 유지**. 이 문서의 Design은 compound.py(Layer 3) 완성 후 착수, tool-usage-guide Design이 남길 SKILL.md 확장점에 맞춰 진행 |
 | **1.9** | **2026-07-03** | **소스 재검증 감사(변경 없음 확인)** — Design 착수 전 §3.4에서 재사용을 전제하는 `batch_runner.py`(`run_batch_single`/`run_batch_regression`)와 `csv_cache.py`(`extract`/`bisect_signal_dump`)가 실제 소스에 정확히 그 이름으로 현재도 존재함을 재확인. `runner_detection.py`도 존재 확인(§Dependencies v5.1 관계 서술 유효). 수정 사항 없음 — 정합성 확인만 기록 |
 | **1.10** | **2026-07-08** | **Phase 1 완료 반영(`xcelium-mcp-tool-usage-guide.design.md`, matchRate 98% 대조) — v1.0 이후 처음 실제 산출물 기준 갱신**: (1) tool 개수 24→25(`grep -c "@mcp.tool()"` 재감사, F-3 `list_active_sessions` 반영) — 전 문서 13개 지점 일괄 수정 + Dependencies에 "고정값 아님, 매번 재감사" 각주 추가; (2) `pytest` 기준선 472→617 tests(3개 지점); (3) **§4.3 전면 재작성** — v1.0~1.9가 가정했던 가상 파일명(`run-guide.md`/`analyze-guide.md`/`debug-guide.md`)을 실제 Phase 1 산출물(`phase-0-discovery.md`~`phase-5-fix-regression.md`+`tool-map.md`+`server-ops.md`, 8개)로 전면 교체 — Phase 2는 새 reference를 만드는 게 아니라 이 8개 위에 라우팅만 얹는 것으로 스코프 재정의(`backend-interface.md`만 Phase 2의 순수 신규 파일로 남음); (4) §4.5 `verilog-rtl-debugger` agent "신설 예정" → 생성 완료로 갱신 |
+| **1.11** | **2026-07-08** | **CLI(FR-06) 설계를 실제 확립된 컨벤션에 맞게 재설계 — 논리적 충돌 발견 및 수정**: 이 plan 이후 실제로 완료된 `xcelium-mcp-server-process-lifecycle` feature(supervisor+fork 배포 모델, `pyproject.toml [project.scripts]`에 `xcelium-mcp-supervisor`/`xcelium-mcp-culler` 등 독립 console_script 3개 기존 확립)와 v1.0~1.10의 "CLI를 `server.py:main()` 안에 `sys.argv` 분기로 추가" 설계가 충돌함을 소스 재검증으로 발견. 근거: supervisor가 MCP 연결마다 `_xcelium_server.main()`을 fork 후 **직접 함수 호출**하므로(subprocess 재실행 아님) 연결별 sys.argv 전달 경로 자체가 없고, 이 저장소는 이미 "새 관심사 = 새 모듈 + 새 console_script" 패턴(`stdio_forward.py`/`sim_session_reaper.py`도 독립 `-m` 모듈)을 스스로 확립해놨다. **수정**: FR-06/§3.4/§7(전면)/§8.1/§8.2 B단계/Impact Analysis(Changed Resources·Current Consumers·Verification)/§11 리스크 테이블 전부 갱신 — CLI를 `server.py` 무변경의 독립 console_script `xcelium-mcp-cli`로 재설계, `server.py`는 compound tool 3개 `register()` 추가만 받도록 스코프 축소. "sys.argv 분기로 MCP 깨짐" 리스크 항목 제거(해당 없음). 부수적으로 CLAUDE.md(xcelium-mcp 자신) "Deployment" 섹션이 구 배포 모델(`"command": "xcelium-mcp"`)을 그대로 보여주는 별개의 문서 부채도 함께 확인(이 plan 범위 밖, Impact Analysis에서 그 부채에 의존하지 않도록만 일반화). |
 
 ---
 

@@ -43,6 +43,10 @@
           {
             "note": "v1.10: Phase 1(tool-usage-guide.design.md, matchRate 98%) 완료 반영 -- tool count 24->25 재감사, pytest 기준선 472->617, SS4.3 가상 파일 구조를 실제 Phase 1 산출물(phase-0~5+tool-map+server-ops)로 전면 교체, verilog-rtl-debugger agent 생성 완료 반영",
             "ts": "2026-07-08T00:00:00.000Z"
+          },
+          {
+            "note": "v1.11: CLI(FR-06) 설계 논리 충돌 발견+수정 -- server.py sys.argv 분기 안이 실제로 완료된 server-process-lifecycle feature(supervisor fork-직접호출, 독립 console_script 3개 기확립)와 충돌. xcelium-mcp-cli 독립 console_script로 재설계, server.py 무변경으로 스코프 축소, sys.argv 리스크 제거",
+            "ts": "2026-07-08T00:00:00.000Z"
           }
         ],
         "retryCount": 0,
