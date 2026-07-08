@@ -57,14 +57,22 @@ def _filter_test_names(names: list[str], pattern: str) -> list[str]:
     """Filter test names by pattern (F-177).
 
     If pattern contains a glob metacharacter (*, ?, [), match via
-    fnmatch.fnmatch — test names commonly contain no literal '*'/'?'/'['
+    fnmatch.fnmatchcase — test names commonly contain no literal '*'/'?'/'['
     themselves, so a caller writing `pattern="*TOP01*"` expecting glob
     semantics previously got a silent, always-empty substring match instead.
     Otherwise falls back to the original plain substring match, so existing
     callers passing a literal fragment (no metacharacters) see no change.
+
+    F-182: fnmatch.fnmatch() runs both operands through os.path.normcase,
+    which is case-insensitive on Windows and case-sensitive on POSIX — so the
+    glob branch would behave differently on a Windows dev/test box than on
+    the actual cloud0 (Linux) deployment target, and inconsistently with the
+    always-case-sensitive substring branch above even on one platform.
+    fnmatch.fnmatchcase() is platform-independent and case-sensitive, matching
+    the substring branch's semantics.
     """
     if any(c in pattern for c in _GLOB_META_CHARS):
-        return [t for t in names if fnmatch.fnmatch(t, pattern)]
+        return [t for t in names if fnmatch.fnmatchcase(t, pattern)]
     return [t for t in names if pattern in t]
 
 

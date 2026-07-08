@@ -2574,14 +2574,15 @@
       "id": "F-182",
       "title": "버그: _filter_test_names의 fnmatch.fnmatch가 Windows에서는 대소문자 무시, Linux(cloud0)에서는 구분 -- 플랫폼 간 동작 불일치",
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "tools/sim_lifecycle.py::_filter_test_names()의 fnmatch.fnmatch(t, pattern) 호출을 fnmatch.fnmatchcase(t, pattern)로 교체 -- os.path.normcase 기반 플랫폼 의존 대소문자 처리 제거, substring 폴백 분기(대소문자 구분)와도 일관되게 맞춤",
         "신규 테스트: 소문자 pattern(\"*top01*\")이 대문자 포함 테스트명(\"VENEZIA_TOP015_test\")과 매칭되지 않음을 검증(fnmatchcase는 대소문자 구분) -- 기존 fnmatch 사용 시 Windows에서는 매칭되지만 fnmatchcase 교체 후에는 매칭 안 됨을 확인하는 회귀 테스트",
         "기존 테스트(test_sim_lifecycle.py::TestFilterTestNames) 전부 회귀 없이 통과(대소문자가 일치하는 케이스만 사용하므로 영향 없어야 함)",
         "pytest passes"
       ],
-      "notes": "code-analyzer agent 리뷰(2026-07-08) Minor #1(confidence 82%). fnmatch.fnmatch는 두 인자 모두 os.path.normcase를 거쳐 Windows 개발 환경에서는 대소문자 무시, 실제 배포 대상인 cloud0(Linux)에서는 대소문자 구분 -- 개발 환경에서만 통과하는 함정. 또한 같은 _filter_test_names 내 substring 폴백 분기와도 대소문자 처리가 불일치."
+      "notes": "code-analyzer agent 리뷰(2026-07-08) Minor #1(confidence 82%). fnmatch.fnmatch는 두 인자 모두 os.path.normcase를 거쳐 Windows 개발 환경에서는 대소문자 무시, 실제 배포 대상인 cloud0(Linux)에서는 대소문자 구분 -- 개발 환경에서만 통과하는 함정. 또한 같은 _filter_test_names 내 substring 폴백 분기와도 대소문자 처리가 불일치.",
+      "completed_at": "2026-07-08"
     },
     {
       "id": "F-183",

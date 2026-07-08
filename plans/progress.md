@@ -1,6 +1,20 @@
 
 ---
 
+## 2026-07-08 - F-182: _filter_test_names의 fnmatch 대소문자 플랫폼 불일치 수정
+
+### 배경
+code-analyzer 리뷰(bug/security/performance) Minor #1. `fnmatch.fnmatch()`는 두 인자 모두 `os.path.normcase`를 거쳐 Windows에서는 대소문자 무시, 실제 배포 대상인 cloud0(Linux)에서는 대소문자 구분 — 같은 `_filter_test_names` 내 substring 폴백 분기(항상 대소문자 구분)와도 불일치.
+
+### 구현
+- `tools/sim_lifecycle.py::_filter_test_names()`의 `fnmatch.fnmatch(t, pattern)` → `fnmatch.fnmatchcase(t, pattern)`로 교체
+- 신규 테스트: 소문자 pattern(`*top015*`)이 대문자 포함 테스트명(`VENEZIA_TOP015_test`)과 매칭 안 됨을 검증
+
+### 결과
+613 tests passed(612→613), ruff clean. 기존 F-177 테스트 전부(대소문자 일치 케이스만 사용) 회귀 없음.
+
+---
+
 ## 2026-07-08 - F-181: sim_regression 스키마 마이그레이션 O(N^2) thundering herd 수정
 
 ### 배경

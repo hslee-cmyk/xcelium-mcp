@@ -834,6 +834,17 @@ class TestFilterTestNames:
 
         assert _filter_test_names([], "*TOP01*") == []
 
+    def test_glob_pattern_is_case_sensitive(self) -> None:
+        """F-182: fnmatch.fnmatch() is case-insensitive on Windows (via
+        os.path.normcase) but case-sensitive on the actual cloud0/Linux
+        deployment target, and inconsistent with the always-case-sensitive
+        substring branch. fnmatchcase() must be used so a lowercase pattern
+        does NOT match an uppercase test name on any platform."""
+        from xcelium_mcp.tools.sim_lifecycle import _filter_test_names
+
+        names = ["VENEZIA_TOP015_test"]
+        assert _filter_test_names(names, "*top015*") == []
+
 
 @pytest.mark.asyncio
 async def test_list_tests_glob_pattern_matches_cached_tests() -> None:
