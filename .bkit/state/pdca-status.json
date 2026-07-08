@@ -2,10 +2,6 @@
   "version": "3.0",
   "lastUpdated": "2026-07-08T03:11:43.721Z",
   "activeFeatures": [
-    "tools",
-    "xcelium_mcp",
-    ".claude",
-    "tests",
     "xcelium-mcp-v5.2-hierarchical-dump",
     "xcelium-mcp-debug-workflow-v2",
     "xcelium-mcp-f175-provenance-migration-gap",
@@ -14,128 +10,8 @@
     "xcelium-mcp-session-state-reattach",
     "xcelium-mcp-sim-session-reaper"
   ],
-  "primaryFeature": "tools",
+  "primaryFeature": "xcelium-mcp-debug-workflow-v2",
   "features": {
-    "tools": {
-      "phase": "do",
-      "phaseNumber": 3,
-      "matchRate": null,
-      "iterationCount": 0,
-      "requirements": [],
-      "documents": {},
-      "timestamps": {
-        "started": "2026-04-10T04:12:44.863Z",
-        "lastUpdated": "2026-04-22T04:00:36.094Z"
-      },
-      "lastFile": "C:\\Users\\HSLEE\\Documents\\Todoc\\fpga\\xcelium-mcp\\src\\xcelium_mcp\\tools\\debug.py",
-      "stateMachine": {
-        "currentState": "do",
-        "previousState": null,
-        "stateHistory": [],
-        "retryCount": 0,
-        "maxRetries": 5,
-        "circuitBreakerOpen": false
-      },
-      "metrics": {
-        "qualityScore": null,
-        "conventionCompliance": null,
-        "apiCompliance": null,
-        "cycleTimeMs": null,
-        "iterationEfficiency": null
-      },
-      "phaseTimestamps": {},
-      "automationLevel": 2
-    },
-    "xcelium_mcp": {
-      "phase": "do",
-      "phaseNumber": 3,
-      "matchRate": null,
-      "iterationCount": 0,
-      "requirements": [],
-      "documents": {},
-      "timestamps": {
-        "started": "2026-04-10T04:14:20.513Z",
-        "lastUpdated": "2026-04-22T04:02:55.929Z"
-      },
-      "lastFile": "C:\\Users\\HSLEE\\Documents\\Todoc\\fpga\\xcelium-mcp\\src\\xcelium_mcp\\csv_cache.py",
-      "stateMachine": {
-        "currentState": "do",
-        "previousState": null,
-        "stateHistory": [],
-        "retryCount": 0,
-        "maxRetries": 5,
-        "circuitBreakerOpen": false
-      },
-      "metrics": {
-        "qualityScore": null,
-        "conventionCompliance": null,
-        "apiCompliance": null,
-        "cycleTimeMs": null,
-        "iterationEfficiency": null
-      },
-      "phaseTimestamps": {},
-      "automationLevel": 2
-    },
-    ".claude": {
-      "phase": "do",
-      "phaseNumber": 3,
-      "matchRate": null,
-      "iterationCount": 0,
-      "requirements": [],
-      "documents": {},
-      "timestamps": {
-        "started": "2026-04-10T04:24:41.562Z",
-        "lastUpdated": "2026-04-15T08:37:33.200Z"
-      },
-      "lastFile": "C:\\Users\\HSLEE\\.claude\\statusline-command.sh",
-      "stateMachine": {
-        "currentState": "do",
-        "previousState": null,
-        "stateHistory": [],
-        "retryCount": 0,
-        "maxRetries": 5,
-        "circuitBreakerOpen": false
-      },
-      "metrics": {
-        "qualityScore": null,
-        "conventionCompliance": null,
-        "apiCompliance": null,
-        "cycleTimeMs": null,
-        "iterationEfficiency": null
-      },
-      "phaseTimestamps": {},
-      "automationLevel": 2
-    },
-    "tests": {
-      "phase": "do",
-      "phaseNumber": 3,
-      "matchRate": null,
-      "iterationCount": 0,
-      "requirements": [],
-      "documents": {},
-      "timestamps": {
-        "started": "2026-04-10T08:31:01.136Z",
-        "lastUpdated": "2026-04-22T04:01:59.367Z"
-      },
-      "lastFile": "C:\\Users\\HSLEE\\Documents\\Todoc\\fpga\\xcelium-mcp\\tests\\test_f136_f137.py",
-      "stateMachine": {
-        "currentState": "do",
-        "previousState": null,
-        "stateHistory": [],
-        "retryCount": 0,
-        "maxRetries": 5,
-        "circuitBreakerOpen": false
-      },
-      "metrics": {
-        "qualityScore": null,
-        "conventionCompliance": null,
-        "apiCompliance": null,
-        "cycleTimeMs": null,
-        "iterationEfficiency": null
-      },
-      "phaseTimestamps": {},
-      "automationLevel": 2
-    },
     "xcelium-mcp-debug-workflow-v2": {
       "phase": "plan",
       "phaseNumber": 1,
