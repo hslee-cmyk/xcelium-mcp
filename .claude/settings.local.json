@@ -22,7 +22,28 @@
       "Bash(C:/Python314/python.exe:*)",
       "Bash(pip install:*)",
       "Bash(python -m pytest:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Skill(ralph-loop)",
+      "Skill(statusline)",
+      "mcp__plugin_bkit_bkit-pdca__bkit_pdca_status",
+      "PowerShell(python -c \"import json; data = json.load\\(open\\('C:/Users/HSLEE/Documents/Todoc/fpga/xcelium-mcp/plans/prd.json'\\)\\); features = data['features']; last = features[-1]; print\\(f'Total features: {len\\(features\\)}'\\); print\\(f'Last: {last[\\\\\"id\\\\\"]} - {last[\\\\\"title\\\\\"][:60]}'\\); print\\(f'passes: {last[\\\\\"passes\\\\\"]}'\\)\")",
+      "Skill(bkit:bkit)",
+      "Skill(code-review)",
+      "mcp__ssh__ssh_run",
+      "mcp__plugin_bkit_bkit-analysis__bkit_audit_search",
+      "mcp__xcelium-mcp__mcp_config",
+      "mcp__ssh__file_write",
+      "mcp__xcelium-mcp__sim_status",
+      "Skill(bkit:pdca)",
+      "Bash(rm -rf ~/.claude/plugins/cache/claude-code-warp ~/.claude/plugins/data/warp-claude-code-warp)",
+      "Read(//c/Users/HSLEE/.claude/plugins/cache/**)",
+      "mcp__xcelium-mcp__list_active_sessions",
+      "mcp__xcelium-mcp__inspect_signal",
+      "mcp__xcelium-mcp__connect_simulator",
+      "mcp__xcelium-mcp__sim_discover",
+      "mcp__xcelium-mcp__sim_bridge_run",
+      "mcp__xcelium-mcp__execute_tcl",
+      "mcp__xcelium-mcp__sim_disconnect"
     ]
   }
 }
