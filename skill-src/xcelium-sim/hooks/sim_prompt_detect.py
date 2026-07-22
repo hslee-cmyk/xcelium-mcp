@@ -24,12 +24,37 @@ Code hooks spec). Output: exit 0 + `{"hookSpecificOutput": {"hookEventName":
 there's no trigger match or no pending state. Never blocks (exit 2 is
 available for that per spec, but this hook has no reason to reject a
 prompt). Fails open on any parse problem.
+
+**F-189 stdin encoding note**: `sys.stdin`'s default encoding follows the
+platform locale, not UTF-8 -- on Windows this is often a legacy codepage
+(e.g. cp949 for Korean Windows). `json.load(sys.stdin)` does NOT raise on
+that mismatch; it silently decodes non-ASCII bytes into mojibake via
+surrogateescape, so a Korean trigger keyword in `_TRIGGER_KEYWORDS` below
+would then just never match -- no error, no output, indistinguishable from
+"no trigger present". `_read_stdin_json()` reads the raw bytes and decodes
+them as UTF-8 explicitly, sidestepping the platform locale entirely.
 """
 from __future__ import annotations
 
 import json
 import sys
 from pathlib import Path
+
+
+def _read_stdin_json() -> dict:
+    """Parse stdin as UTF-8 JSON regardless of the platform's stdin encoding.
+
+    `sys.stdin.buffer` is the raw byte stream underneath the text wrapper --
+    reading it directly and decoding as UTF-8 ourselves means the OS/locale
+    default codec (e.g. cp949 on Windows) never gets a chance to mangle
+    non-ASCII input. Falls back to `sys.stdin.read()` when there is no
+    `.buffer` (e.g. tests that monkeypatch stdin with `io.StringIO`, which
+    is already a decoded str -- nothing to re-decode there).
+    """
+    raw = sys.stdin.buffer.read() if hasattr(sys.stdin, "buffer") else sys.stdin.read()
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8")
+    return json.loads(raw)
 
 # Same keyword list as SKILL.md's frontmatter description trigger list —
 # kept in sync manually (no shared source; SKILL.md is prose, this needs a
@@ -65,7 +90,7 @@ def _pending_summary(project_root: str) -> str:
 
 def main() -> int:
     try:
-        data = json.load(sys.stdin)
+        data = _read_stdin_json()
     except Exception:
         return 0
 

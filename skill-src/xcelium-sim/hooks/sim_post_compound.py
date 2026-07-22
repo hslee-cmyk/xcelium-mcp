@@ -23,12 +23,28 @@ Output: exit 0 + `{"hookSpecificOutput": {"hookEventName": "PostToolUse",
 already ran) — this hook only ever adds informational context or does
 nothing; it never errors loudly. Fails open (exit 0, no output) on any
 parse problem.
+
+**F-189 stdin encoding note**: see `sim_prompt_detect.py`'s matching
+docstring/`_read_stdin_json()` -- same fix applied here for consistency,
+even though this hook's own `_STATUS_RE` match target ("status: PASS" etc.)
+is ASCII-only and not itself at risk; `tool_output.text` in general (e.g.
+future log content) is not guaranteed to be.
 """
 from __future__ import annotations
 
 import json
 import re
 import sys
+
+
+def _read_stdin_json() -> dict:
+    """Parse stdin as UTF-8 JSON regardless of the platform's stdin encoding.
+    See sim_prompt_detect.py's identical helper for the full rationale (F-189).
+    """
+    raw = sys.stdin.buffer.read() if hasattr(sys.stdin, "buffer") else sys.stdin.read()
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8")
+    return json.loads(raw)
 
 _TOOL_NEXT_STEP = {
     "sim_run_and_check": {
@@ -54,7 +70,7 @@ _STATUS_RE = re.compile(r"^status:\s*(\w+)", re.MULTILINE)
 
 def main() -> int:
     try:
-        data = json.load(sys.stdin)
+        data = _read_stdin_json()
     except Exception:
         return 0
 

@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -175,3 +177,75 @@ class TestRegisteredHookCommand:
             assert "||" in cmd and re.search(r"\|\|\s*python\b(?!3)", cmd), (
                 f"hook command has no python3->python fallback (F-188 regression): {cmd}"
             )
+
+
+class TestStdinEncoding:
+    """F-189: sys.stdin's default encoding follows the platform locale (e.g.
+    cp949 on Korean Windows), not UTF-8. json.load(sys.stdin) doesn't raise on
+    that mismatch -- it silently mangles non-ASCII input instead. These tests
+    spawn the real script as a subprocess with `PYTHONIOENCODING` forced to a
+    non-UTF-8 codec (portable across OSes -- this env var overrides the
+    platform locale everywhere, so the test reproduces the bug condition
+    identically on Windows/Linux/Mac) and feed it real UTF-8 bytes containing
+    a Korean trigger keyword, proving `_read_stdin_json()` decodes correctly
+    regardless of what the ambient locale/PYTHONIOENCODING says.
+    """
+
+    def _run_subprocess(self, script: str, payload: dict, encoding: str) -> subprocess.CompletedProcess:
+        env = dict(os.environ)
+        env["PYTHONIOENCODING"] = encoding
+        return subprocess.run(
+            [sys.executable, str(Path(__file__).parent / script)],
+            input=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            capture_output=True,
+            env=env,
+            timeout=10,
+        )
+
+    def test_korean_keyword_matches_under_forced_cp949_stdin(self, tmp_path):
+        state_dir = tmp_path / ".ai"
+        state_dir.mkdir()
+        (state_dir / "sim-state.json").write_text(
+            json.dumps({"tests": {"TOP015": {"phase": "fix-plan"}}}), encoding="utf-8",
+        )
+        payload = {"user_input": "시뮬레이션 결과 확인해줘", "cwd": str(tmp_path)}
+
+        result = self._run_subprocess("sim_prompt_detect.py", payload, "cp949")
+
+        assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+        out = result.stdout.decode("utf-8").strip()
+        assert out, "expected additionalContext output, got nothing (F-189 regression)"
+        ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+        assert "TOP015: fix-plan" in ctx
+
+    def test_ascii_keyword_still_matches_under_forced_cp949_stdin(self, tmp_path):
+        """Regression guard: the fix must not break the ASCII-only keywords
+        that happened to work before (ensure no regression from the encoding change)."""
+        state_dir = tmp_path / ".ai"
+        state_dir.mkdir()
+        (state_dir / "sim-state.json").write_text(
+            json.dumps({"tests": {"TOP017": {"phase": "debug"}}}), encoding="utf-8",
+        )
+        payload = {"user_input": "check the regression results", "cwd": str(tmp_path)}
+
+        result = self._run_subprocess("sim_prompt_detect.py", payload, "cp949")
+
+        assert result.returncode == 0
+        out = result.stdout.decode("utf-8").strip()
+        assert out
+        ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+        assert "TOP017: debug" in ctx
+
+    def test_post_compound_survives_forced_cp949_stdin(self):
+        """sim_post_compound.py's own _read_stdin_json() path (F-189 fix
+        applied there too) doesn't regress under a forced non-UTF-8 stdin
+        encoding, even though its own status match target is ASCII-only."""
+        payload = {
+            "tool_name": "mcp__xcelium-mcp__sim_run_and_check",
+            "tool_output": {"type": "text", "text": "status: PASS\n\nCOMPLETE. Errors: 0"},
+        }
+        result = self._run_subprocess("sim_post_compound.py", payload, "cp949")
+
+        assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+        ctx = json.loads(result.stdout.decode("utf-8"))["hookSpecificOutput"]["additionalContext"]
+        assert "regression" in ctx
