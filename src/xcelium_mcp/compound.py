@@ -68,6 +68,15 @@ def _classify_status(log: str) -> str:
     Reuses the same COMPLETE-verdict marker batch_runner.classify_regression_results
     already relies on (_COMPLETE_RE) instead of inventing a new pattern.
 
+    F-186: legacy directed tests (pre-dating the UVM harness convention) print
+    their own per-check verdicts as lowercase "failed!!"/"passed!!" (e.g.
+    `[REG BANK TEST] register 0x03: failed!!`) instead of "COMPLETE. Errors: N"
+    or uppercase "FAIL". Before this fix, such a log fell through both of those
+    checks and was classified PASS purely because it reached "$finish" —
+    silently discarding every internal failure the TB itself reported. A
+    case-insensitive "failed!!" search closes that gap without touching the
+    UVM/uppercase-FAIL priority order above it.
+
     ERROR is NOT produced here — infrastructure failures (EDA env missing, SSH
     timeout, etc.) surface as exceptions from run_batch_single itself and are
     mapped to CompoundResult(status="ERROR", ...) by the caller (run_and_check),
@@ -81,6 +90,8 @@ def _classify_status(log: str) -> str:
     if m:
         return "PASS" if int(m.group(1)) == 0 else "FAIL"
     if "FAIL" in log:
+        return "FAIL"
+    if "failed!!" in log.lower():
         return "FAIL"
     if "$finish" in log:
         return "PASS"  # waveform-only completion, no assertion failures

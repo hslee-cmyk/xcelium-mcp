@@ -127,6 +127,47 @@ class TestRunAndCheck:
 
 
 # ---------------------------------------------------------------------------
+# _classify_status — F-186 (legacy directed-test lowercase failed!!/passed!!
+# convention was silently ignored, letting internal check failures be
+# classified PASS purely because $finish was reached)
+# ---------------------------------------------------------------------------
+
+class TestClassifyStatus:
+    def test_lowercase_failed_marker_is_fail(self):
+        """The bug this fix closes: no COMPLETE./no uppercase FAIL, but a
+        legacy TB's own 'failed!!' verdict line and a normal $finish — this
+        used to classify PASS, silently discarding the TB's own failure."""
+        log = (
+            "[REG BANK TEST] register 0x03: failed!!, mask value: 0xff, "
+            "write data: 0xfa, read data: 0x00\n"
+            "Simulation complete via $finish(1) at time 3432520 NS + 0"
+        )
+        assert compound._classify_status(log) == "FAIL"
+
+    def test_lowercase_passed_only_still_pass(self):
+        """No regression: a clean legacy TB log with only 'passed!!' lines and
+        a $finish stays PASS."""
+        log = (
+            "[REG BANK TEST] register 0x03: passed!!, mask value: 0xff, "
+            "write data: 0xfa, read data: 0xfa\n"
+            "Simulation complete via $finish(1) at time 3432520 NS + 0"
+        )
+        assert compound._classify_status(log) == "PASS"
+
+    def test_uppercase_fail_still_takes_priority(self):
+        """No regression: the existing uppercase 'FAIL' path is untouched and
+        still wins regardless of any lowercase 'passed!!' also present."""
+        log = "[REG BANK TEST] register 0x03: passed!!\nFAIL: assertion violated"
+        assert compound._classify_status(log) == "FAIL"
+
+    def test_complete_errors_marker_still_takes_priority(self):
+        """No regression: the UVM COMPLETE./Errors: N marker is checked first
+        and still wins even if a stray lowercase 'failed!!' also appears."""
+        log = "some noise mentioning failed!! in passing\nCOMPLETE. Errors: 0"
+        assert compound._classify_status(log) == "PASS"
+
+
+# ---------------------------------------------------------------------------
 # analyze_waveform
 # ---------------------------------------------------------------------------
 

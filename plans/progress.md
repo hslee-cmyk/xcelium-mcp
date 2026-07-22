@@ -1303,3 +1303,31 @@ F-188과 같은 E-6 검증 세션에서 연이어 발견. `sys.stdin`의 기본 
 **Learnings:**
 - `PYTHONIOENCODING` 환경변수는 OS별 로케일 차이와 무관하게 어떤 플랫폼에서든 동일하게 stdin/stdout 인코딩을 강제할 수 있어, "특정 로케일에서만 재현되는 인코딩 버그"를 이식 가능한 pytest로 재현하는 데 이상적이다 — 실제 Windows cp949 로케일을 흉내내려고 다른 OS 설정을 건드릴 필요가 없다.
 - 수정이 실제로 버그를 고쳤는지 확인하려면 "지금 통과한다"만으로는 부족하고, **수정 전 코드로 되돌려서 새 테스트가 정확히 예상한 방식으로 실패하는지**까지 확인해야 한다(`git stash`로 손쉽게 가능) — 이번에 실제로 그렇게 했고, 실패 메시지가 정확히 F-189가 묘사한 증상(mojibake로 인한 매치 실패, 에러 없이 조용히)과 일치함을 확인했다.
+
+---
+
+## 2026-07-22 - F-186: compound.py _classify_status()가 legacy directed test의 소문자 failed!!/passed!! 컨벤션을 인식 못 해 실패를 조용히 PASS로 오분류
+
+### 배경
+F-188/F-189와 같은 세션에서 발견(venezia-fpga TID_TOP010 Fix Sub-cycle 도중 `verilog-tb-reviewer`가 지적). `_classify_status()`(compound.py)는 (1) UVM `COMPLETE. Errors: N` 마커, (2) 대문자 `FAIL` 리터럴, (3) 그 외엔 `$finish` 존재 시 무조건 PASS — 순서로 판정한다. UVM이 아닌 legacy directed test(`[REG BANK TEST] register 0x03: failed!!` 같은 소문자+`!!` 컨벤션)는 (1)(2) 어느 것도 매치하지 않아 `$finish`만 도달하면 내부 실패 메시지와 무관하게 항상 PASS로 집계됐다.
+
+### 구현
+- `_classify_status()`에 `if "failed!!" in log.lower(): return "FAIL"` 분기를 대문자 `FAIL` 체크 다음, `$finish` 체크 이전에 추가 — 기존 UVM/대문자 FAIL 우선순위는 그대로 유지.
+- `tests/test_compound.py`에 `TestClassifyStatus` 클래스 신규(`_classify_status()`를 직접 호출하는 순수 유닛 테스트, mock 불필요) — acceptance criteria의 3개 재현/회귀 테스트 + UVM marker 우선순위 회귀 테스트까지 4개.
+- **Sanity check**: `git stash`로 수정 전 코드 복원 후 신규 테스트 재실행 — `test_lowercase_failed_marker_is_fail`이 정확히 기대한 방식(`'PASS' == 'FAIL'` assertion 실패)으로 FAIL하는 것을 확인한 후 `git stash pop`으로 복원.
+
+### 결과
+- `tests/test_compound.py`: 20 passed(16 기존 + 4 신규), 회귀 없음
+- 전체 `pytest`: 719 passed, 회귀 없음
+- `ruff check src/`: clean
+
+### Files changed
+- src/xcelium_mcp/compound.py (`_classify_status()` 소문자 failed!! 분기 추가)
+- tests/test_compound.py (`TestClassifyStatus` 신규 4개)
+- plans/progress.md (this entry)
+
+**Note (prd.json `passes` 필드 미변경)**: F-188/F-189와 동일 — 사용자가 직접 검토 후 갱신.
+
+**Learnings:**
+- `_classify_status()`를 직접 단위 테스트하는 게(`run_and_check`를 통째로 mock해서 간접 검증하는 기존 패턴 대신) 이번처럼 순수 문자열 분류 로직만 검증할 땐 훨씬 빠르고 명확했다 — I/O나 async가 전혀 없는 순수 함수는 그 함수 자체를 직접 호출하는 테스트를 별도로 두는 게 낫다.
+- 이 버그와 F-189는 같은 패턴이다: "겉보기엔 정상 동작(에러 없음, 정상 종료)"인데 실제로는 **판정 대상 신호(한글 키워드/소문자 컨벤션)를 특정 조건에서 조용히 놓친다** — 이런 부류의 버그는 pytest 커버리지가 있어도 그 커버리지 자체가 버그를 재현 못 하는 조건으로 짜여 있으면(F-189의 `io.StringIO`처럼) 안 잡힌다. 실제 사용 조건(legacy TB의 실제 로그 포맷, 실제 로케일)을 직접 재현하는 테스트가 있어야 드러난다.
