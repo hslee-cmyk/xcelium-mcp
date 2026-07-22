@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -142,3 +143,35 @@ class TestSimPromptDetect:
         payload = {"user_input": "/sim run TOP015", "cwd": str(tmp_path)}
         _, result = _run_hook(sim_prompt_detect, payload, monkeypatch, capsys)
         assert result is not None
+
+
+class TestRegisteredHookCommand:
+    """F-188: SKILL.md's `hooks:` frontmatter registers the actual shell command
+    Claude Code invokes. The tests above call sim_post_compound.main()/
+    sim_prompt_detect.main() directly in-process, so they never exercise that
+    command string — a bare `python3 ...` resolves to a broken Windows App
+    Execution Alias stub on some machines (this dev machine included) and the
+    hook silently never runs. These tests guard the registered string itself.
+    """
+
+    def _hook_commands(self) -> list[str]:
+        skill_md = Path(__file__).parent.parent / "SKILL.md"
+        content = skill_md.read_text(encoding="utf-8")
+        frontmatter = content.split("---", 2)[1]
+        return re.findall(r'command:\s*"([^"]+)"', frontmatter)
+
+    def test_both_hooks_registered(self):
+        commands = self._hook_commands()
+        assert len(commands) == 2
+        assert any("sim_post_compound.py" in c for c in commands)
+        assert any("sim_prompt_detect.py" in c for c in commands)
+
+    def test_each_command_has_a_python_fallback(self):
+        """A bare 'python3 <script>' with no fallback is the F-188 regression --
+        require a '|| python <script>' (or better) fallback in every registered
+        hook command."""
+        for cmd in self._hook_commands():
+            assert cmd.count("python3") >= 1, f"missing python3 in: {cmd}"
+            assert "||" in cmd and re.search(r"\|\|\s*python\b(?!3)", cmd), (
+                f"hook command has no python3->python fallback (F-188 regression): {cmd}"
+            )

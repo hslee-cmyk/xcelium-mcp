@@ -14,11 +14,11 @@ hooks:
     - matcher: "mcp__xcelium-mcp__sim_run_and_check|mcp__xcelium-mcp__sim_analyze_waveform|mcp__xcelium-mcp__sim_regression_summary"
       hooks:
         - type: command
-          command: "python3 ~/.claude/skills/xcelium-sim/hooks/sim_post_compound.py"
+          command: "python3 ~/.claude/skills/xcelium-sim/hooks/sim_post_compound.py || python ~/.claude/skills/xcelium-sim/hooks/sim_post_compound.py"
   UserPromptSubmit:
     - hooks:
         - type: command
-          command: "python3 ~/.claude/skills/xcelium-sim/hooks/sim_prompt_detect.py"
+          command: "python3 ~/.claude/skills/xcelium-sim/hooks/sim_prompt_detect.py || python ~/.claude/skills/xcelium-sim/hooks/sim_prompt_detect.py"
 ---
 
 # xcelium-sim
@@ -31,6 +31,15 @@ xcelium-mcp(Cadence Xcelium/SimVision MCP 서버)의 25개 tool을 RTL 디버깅
 > **Phase 0~4 중 어디서 대화가 끝나든(Phase 5까지 못 가더라도) 이 확인은 생략하지 않는다.**
 > 상세: `references/phase-5-fix-regression.md` §5F. batch/regression 모드(`sim_batch_run`/`sim_regression`)는
 > 자체 정리 로직이 있어 이 확인 대상이 아니다.
+
+> ⚠️ **Windows에서 Hook(위 frontmatter `hooks:` 블록)이 안 뜨면**: 등록된 command는
+> `python3 ... || python ...` 순으로 시도한다 — 대부분의 Windows 환경에서 `python3`가
+> Microsoft Store App Execution Alias stub으로 깨져 있어도(`python`이 정상 설치된 인터프리터를
+> 가리키는 한) 이 fallback으로 정상 동작한다(F-188). 만약 `python`도 PATH에 없거나 마찬가지로
+> 깨져 있다면(예: `python`도 없이 `py`/`python3.14` 등 다른 이름만 있는 경우), 이 두 줄의
+> `command:` 값을 자신의 python 실행파일 절대경로(예: `C:/Python314/python.exe hooks/...py`)로
+> 직접 바꿔야 한다 — hook은 실패해도 조용히 무시되므로(PostToolUse/UserPromptSubmit 둘 다 fail-open)
+> 이 경우 "다음 단계 제안"/"미완료 작업 감지" 컨텍스트가 그냥 안 뜨는 것으로만 나타난다.
 
 ## Phase 1 — Tool 사용법 가이드 (이 문서 소관)
 
@@ -113,8 +122,11 @@ EOF
 2. backend-interface.md 참조해 compound tool 호출:
    --bridge → connect_simulator(개별 tool) / --regression → sim_regression_summary / 기본 → sim_run_and_check
 3. 반환된 CompoundResult로 sim-state.json 갱신(Backend는 파일에 관여 안 함 — Skill이 직접 기록):
-   `sim_state.py record_run --sim-dir {sim_dir} --test {test} --status {status} --dump-path {dump_path}`
-   (log_summary는 stdin)
+   기본(단일 테스트) → `sim_state.py record_run --sim-dir {sim_dir} --test {test} --status {status}
+     --dump-path {dump_path}`(log_summary는 stdin)
+   --regression → `sim_state.py record_regression --sim-dir {sim_dir} --test-list {test_list...}`
+     (log_summary는 stdin) — 프로젝트 전체 요약이라 개별 테스트의 `phase`는 건드리지 않음, 실패한
+     테스트를 알고 있으면(예: 개별 `/sim analyze`로 이미 확인) `--fail-tests {...}`로 함께 기록
 4. 결과 보고 + 아래 "Next-Skill 자동 제안" 표대로 다음 단계 제안
 ```
 
