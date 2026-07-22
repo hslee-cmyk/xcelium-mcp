@@ -197,6 +197,24 @@ class TestRecordRegression:
                                      fail_tests=["T2"], project_root=str(tmp_path))
         assert _state_json(tmp_path)["regression"]["fail_tests"] == ["T2"]
 
+    def test_fail_tests_derived_from_per_test_verdicts(self, tmp_path):
+        """F-190: sim_regression_summary now exposes per_test_verdicts, so
+        fail_tests can be auto-derived (fail/error) instead of staying empty."""
+        sim_state.record_regression(
+            "/remote/sim", ["T1", "T2", "T3"], "1/3 verdict tests PASS",
+            per_test_verdicts={"T1": "pass", "T2": "fail", "T3": "error"},
+            project_root=str(tmp_path),
+        )
+        assert _state_json(tmp_path)["regression"]["fail_tests"] == ["T2", "T3"]
+
+    def test_explicit_fail_tests_wins_over_per_test_verdicts(self, tmp_path):
+        sim_state.record_regression(
+            "/remote/sim", ["T1", "T2"], "1/2 verdict tests PASS",
+            fail_tests=["T1"], per_test_verdicts={"T1": "pass", "T2": "fail"},
+            project_root=str(tmp_path),
+        )
+        assert _state_json(tmp_path)["regression"]["fail_tests"] == ["T1"]
+
     def test_does_not_touch_per_test_entries(self, tmp_path):
         """regression is a project-wide summary — it must not create/modify tests[]."""
         sim_state.record_run("/remote/sim", "T1", "PASS", "log", project_root=str(tmp_path))
@@ -219,6 +237,18 @@ class TestRecordRegression:
         regression = _state_json(tmp_path)["regression"]
         assert regression["pass_rate"] == "2/2"
         assert regression["test_list"] == ["T1", "T2"]
+
+    def test_via_cli_with_per_test_verdicts_json(self, tmp_path):
+        parser = sim_state._build_parser()
+        args = parser.parse_args([
+            "--project-root", str(tmp_path),
+            "record_regression", "--sim-dir", "/remote/sim",
+            "--test-list", "T1", "T2", "--log-summary", "1/2 verdict tests PASS",
+            "--per-test-verdicts", '{"T1":"pass","T2":"fail"}',
+        ])
+        args.func(args)
+
+        assert _state_json(tmp_path)["regression"]["fail_tests"] == ["T2"]
 
 
 class TestAppendDebugNote:

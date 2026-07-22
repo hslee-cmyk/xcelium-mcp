@@ -219,7 +219,9 @@ _REGRESSION_RATIO_RE = re.compile(r'(\d+/\d+) (?:verdict tests PASS|waveform tes
 
 
 def record_regression(sim_dir: str, test_list: list[str], log_summary: str,
-                       fail_tests: list[str] | None = None, project_root: str = ".") -> None:
+                       fail_tests: list[str] | None = None,
+                       per_test_verdicts: dict[str, str] | None = None,
+                       project_root: str = ".") -> None:
     """Record a `/sim run --regression` (or `/sim verify --regression`) result
     into the top-level `regression` field (Plan §5.1: {"last_run", "pass_rate",
     "fail_tests"}) — same gap/rationale as `record_run`/`record_analyze`,
@@ -235,20 +237,38 @@ def record_regression(sim_dir: str, test_list: list[str], log_summary: str,
     `_classify_regression_status()` already parses to decide PASS/FAIL/
     PARTIAL, kept here as a display string, not re-classified.
 
-    `fail_tests` is best-effort and defaults to empty: `sim_regression_
-    summary`'s CompoundResult doesn't expose which specific tests failed
-    (TODO.md "run_batch_regression() — no structured per-test PASS/FAIL") —
-    pass it explicitly only if the caller determined it some other way
-    (e.g. per-test `/sim analyze` follow-ups), never guessed.
+    `fail_tests`: pass explicitly if the caller already knows which tests
+    failed some other way (e.g. per-test `/sim analyze` follow-ups) — this
+    always wins over `per_test_verdicts` when both are given.
+
+    `per_test_verdicts` (xcelium-mcp F-190): `sim_regression_summary`'s
+    CompoundResult now exposes `details["per_test_verdicts"]`
+    (`{test_name: "pass"|"fail"|"complete"|"error"}`) — pass that dict
+    straight through here and `fail_tests` is auto-derived as every test
+    verdict-marked "fail"/"error", instead of being left empty. Before F-190,
+    `sim_regression_summary` didn't expose which specific tests failed at
+    all, so `fail_tests` here defaulted to empty unless the caller guessed
+    some other way.
+
+    If neither is given, `fail_tests` defaults to empty (unknown), same as
+    before F-190.
     """
     state = _load_state(project_root)
     _set_sim_dir(state, sim_dir)
     m = _REGRESSION_RATIO_RE.search(log_summary)
+    if fail_tests is not None:
+        resolved_fail_tests = fail_tests
+    elif per_test_verdicts:
+        resolved_fail_tests = [
+            tn for tn in test_list if per_test_verdicts.get(tn) in ("fail", "error")
+        ]
+    else:
+        resolved_fail_tests = []
     state["regression"] = {
         "last_run": _now_iso(),
         "pass_rate": m.group(1) if m else None,
         "test_list": test_list,
-        "fail_tests": fail_tests or [],
+        "fail_tests": resolved_fail_tests,
     }
     _save_state(project_root, state)
 
@@ -522,8 +542,10 @@ def _cli_record_analyze(args: argparse.Namespace) -> None:
 
 def _cli_record_regression(args: argparse.Namespace) -> None:
     log_summary = args.log_summary if args.log_summary is not None else _read_stdin_text()
+    per_test_verdicts = json.loads(args.per_test_verdicts) if args.per_test_verdicts else None
     record_regression(args.sim_dir, args.test_list, log_summary,
-                       fail_tests=args.fail_tests or None, project_root=args.project_root)
+                       fail_tests=args.fail_tests or None,
+                       per_test_verdicts=per_test_verdicts, project_root=args.project_root)
 
 
 def _cli_append_debug_note(args: argparse.Namespace) -> None:
@@ -596,6 +618,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--sim-dir", required=True)
     p.add_argument("--test-list", nargs="+", required=True)
     p.add_argument("--fail-tests", nargs="*", default=None)
+    p.add_argument("--per-test-verdicts", default=None,
+                    help='JSON dict, e.g. \'{"T1":"pass","T2":"fail"}\' -- from '
+                         'sim_regression_summary\'s details.per_test_verdicts (F-190). '
+                         "Ignored if --fail-tests is also given.")
     p.add_argument("--log-summary", default=None, help="Omit to read from stdin")
     p.set_defaults(func=_cli_record_regression)
 

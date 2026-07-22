@@ -124,9 +124,13 @@ EOF
 3. 반환된 CompoundResult로 sim-state.json 갱신(Backend는 파일에 관여 안 함 — Skill이 직접 기록):
    기본(단일 테스트) → `sim_state.py record_run --sim-dir {sim_dir} --test {test} --status {status}
      --dump-path {dump_path}`(log_summary는 stdin)
-   --regression → `sim_state.py record_regression --sim-dir {sim_dir} --test-list {test_list...}`
-     (log_summary는 stdin) — 프로젝트 전체 요약이라 개별 테스트의 `phase`는 건드리지 않음, 실패한
-     테스트를 알고 있으면(예: 개별 `/sim analyze`로 이미 확인) `--fail-tests {...}`로 함께 기록
+   --regression → `sim_state.py record_regression --sim-dir {sim_dir} --test-list {test_list...}
+     --per-test-verdicts '{details.per_test_verdicts의 JSON}'`(log_summary는 stdin) — 프로젝트
+     전체 요약이라 개별 테스트의 `phase`는 건드리지 않음. `sim_regression_summary`의 CompoundResult가
+     `details.per_test_verdicts`(F-190, `{test_name: "pass"|"fail"|"complete"|"error"}`)를 그대로
+     노출하므로 이 JSON을 그대로 전달하면 `fail_tests`가 자동으로 채워짐(fail/error 테스트) — 실패
+     테스트를 다른 방식으로 이미 알고 있다면(예: 개별 `/sim analyze`로 확인) `--fail-tests {...}`를
+     대신 쓰면 그쪽이 우선한다
 4. 결과 보고 + 아래 "Next-Skill 자동 제안" 표대로 다음 단계 제안
 ```
 

@@ -1453,3 +1453,38 @@ F-186/F-186 Rev.2는 `compound.py::_classify_status()`(단일 테스트 경로, 
 **Learnings:**
 - 순수 additive 확장(기존 반환값 타입/포맷은 그대로 두고 새 값만 덧붙임)이라 기존 3-tuple 호출부를 찾는 게 리스크의 전부였다 — grep으로 `run_batch_regression(` 호출부를 전부 찾아 5곳(운영 코드 1곳 + 테스트 4곳)을 확인하지 않았다면 조용히 `ValueError: too many values to unpack`으로 배포 후에나 드러났을 것.
 - F-190/F-191은 같은 세션에서 서로를 전제로 걸려 있었다 — F-191(정확한 분류)이 먼저 고쳐져 있지 않았다면 F-190의 per-test verdict 노출이 여전히 부정확한 값("[TAG] ...!!" 실패를 complete로) 을 그대로 노출시켰을 것. 등록 순서(F-191 priority 2 → F-190 priority 3)와 구현 순서가 우연히도 의존관계와 맞아떨어졌다.
+
+---
+
+## 2026-07-23 - F-190 후속: skill 쪽(sim_state.py::record_regression, SKILL.md)이 여전히 "per-test 불명" 전제로 남아있던 gap 수정
+
+### 배경
+사용자가 "skill도 per test로 확인하도록 고쳐졌어?"라고 질문 — F-190은 MCP tool(`sim_regression_summary`) 레벨에서만 `per_test_verdicts`를 노출했을 뿐, Skill 쪽(`skill-src/xcelium-sim/`) 소비자는 아직 갱신되지 않은 상태였다. 확인해보니 3곳이 stale했다:
+1. `TODO.md`의 F-190 관련 섹션 전체 — 이미 고쳐진 known-limitation인데 그대로 남아있었음(순수 문서, 직접 삭제)
+2. `skill-src/xcelium-sim/references/backend-interface.md`의 "알려진 단순화" 문구 — F-190 이전 동작(test_list 전체 CSV 추출)을 그대로 서술(순수 문서, 직접 갱신)
+3. **`skill-src/xcelium-sim/scripts/sim_state.py::record_regression()`** — 진짜 동작 변경이 필요한 부분. docstring이 "`sim_regression_summary`의 CompoundResult는 어떤 테스트가 실패했는지 노출하지 않는다"는 F-190 이전 전제를 그대로 두고, `fail_tests`를 caller가 별도로 알아내서 넘겨야 하는 best-effort 파라미터로만 남겨뒀다. `SKILL.md`의 `/sim run --regression` 절차 안내(127-129행)도 마찬가지로 `--fail-tests`를 "알고 있으면"이라는 조건부로만 언급했다.
+
+이 3번 항목은 코드 로직 변경이라 사용자에게 AskUserQuestion으로 진행 방식을 확인 — "지금 직접 구현" 선택.
+
+### 구현
+- `sim_state.py::record_regression()`에 `per_test_verdicts: dict[str, str] | None = None` 파라미터 추가(순수 additive, 기존 호출자 회귀 없음). 우선순위: `fail_tests`가 명시적으로 주어지면 그대로 사용(기존 동작 유지) → 없으면 `per_test_verdicts`에서 `"fail"`/`"error"`로 분류된 테스트를 자동으로 `fail_tests`에 채움 → 둘 다 없으면 기존처럼 빈 리스트.
+- CLI(`_cli_record_regression`/`_build_parser`)에 `--per-test-verdicts` 플래그 추가 — JSON 문자열(`sim_regression_summary`의 `details.per_test_verdicts`를 그대로)을 받아 `json.loads`로 파싱, `--fail-tests`가 함께 오면 그쪽이 우선.
+- `SKILL.md`의 `/sim run --regression` 절차(127-129행)를 갱신 — `--per-test-verdicts '{details.per_test_verdicts의 JSON}'`을 표준 호출 형태로 명시, `--fail-tests`는 "다른 방식으로 이미 알고 있을 때"의 대안으로 재서술.
+
+### 결과
+- `skill-src/xcelium-sim/scripts/test_sim_state.py`에 신규 테스트 3개: per_test_verdicts에서 fail/error 자동 추출 검증, `fail_tests` 명시 시 우선순위 확인(회귀 없음), CLI `--per-test-verdicts` JSON 플래그 검증
+- `skill-src` 자체 테스트: `test_sim_state.py` 41 passed(37→41), `hooks/test_hooks.py` 18 passed(변화 없음)
+- 전체(main 패키지 루트) `pytest`: 728 passed(725→728, skill-src 테스트가 rootdir 기준 자동 수집되므로 함께 집계됨), `ruff check src/`: clean(skill-src는 대상 아님)
+
+### Files changed
+- TODO.md (F-190 관련 known-limitation 섹션 삭제)
+- skill-src/xcelium-sim/references/backend-interface.md (알려진 단순화 문구를 F-190 반영으로 갱신)
+- skill-src/xcelium-sim/SKILL.md (`/sim run --regression` 절차에 `--per-test-verdicts` 명시)
+- skill-src/xcelium-sim/scripts/sim_state.py (`record_regression()`/`_cli_record_regression`/`_build_parser`)
+- skill-src/xcelium-sim/scripts/test_sim_state.py (신규 테스트 3개)
+- plans/progress.md (this entry)
+
+**Note**: 이 항목은 prd.json에 별도 F-번호로 등록하지 않았다 — 사용자가 AskUserQuestion에서 "지금 직접 구현"(등록만 하는 옵션이 아니라)을 명시적으로 선택했기 때문. 배포(`cp -r skill-src/xcelium-sim ~/.claude/skills/`)는 미완료 — 사용자 확인 후 진행.
+
+**Learnings:**
+- MCP tool(백엔드) 레벨에서 새 데이터를 노출하는 fix가 들어가도, 그 데이터를 실제로 소비하는 Skill/CLI 레이어가 자동으로 따라 갱신되지 않는다 — "F-190이 고쳐졌다"와 "F-190이 실제로 쓰이고 있다"는 별개의 주장이며, 후자는 소비자 쪽(이번 경우 skill-src) 코드까지 직접 확인해야 알 수 있다. 이번 세션에서 F-186 Rev.2 때 배운 "구현했다 ≠ 실제로 문제를 해결했다"는 교훈과 같은 계열이다.

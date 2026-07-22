@@ -24,7 +24,7 @@ dump_path: ...        (있으면)
 csv_path: ...          (있으면)
 
 details:
-{JSON}                 (있으면 — dump_summary/bisect_result/conditions/tb_provenance/csv_by_test 등)
+{JSON}                 (있으면 — dump_summary/bisect_result/conditions/tb_provenance/per_test_verdicts/csv_by_test 등)
 ```
 
 | status | 의미 |
@@ -59,7 +59,12 @@ CSV 추출이 실패해도(예: simvisdbutil 오류) 시뮬레이션 자체의 P
 | `csv_on_fail` | `True`면 전체 status가 PASS가 아닐 때 CSV 추출 시도 |
 | `csv_signals` | `csv_on_fail=True`일 때 추출할 신호 목록 |
 
-**알려진 단순화**(TODO.md "run_batch_regression() — no structured per-test PASS/FAIL" 참조): `csv_on_fail`은 정확히 실패한 테스트만 골라내지 못하고 **`test_list` 전체**에 대해 CSV를 추출한다 — `run_batch_regression()`이 테스트별 구조화된 결과를 반환하지 않기 때문이다. 안전하지만(잘못된 테스트에 CSV를 잘못 붙이는 일은 없음) 다소 비효율적이다.
+`run_batch_regression()`은 `classify_regression_results()`가 이미 계산하는 테스트별 분류를
+`per_test_verdicts`(`{test_name: "pass"|"fail"|"complete"|"error"}`)로도 반환한다(F-190).
+`csv_on_fail=True`일 때 `sim_regression_summary`는 이 dict를 이용해 **실제로 "fail"/"error"로
+분류된 테스트에 대해서만** CSV를 추출한다 — `test_list` 전체를 훑던 이전 동작(과거엔 "알려진
+단순화"로 문서화돼 있었음, `TODO.md`에서 제거됨)을 대체. `per_test_verdicts`는 응답의
+`details`에도 그대로 노출되므로, Skill이 규명 없이 실패 테스트를 바로 알 수 있다.
 
 ## 두 번째 Backend를 추가하려면
 
