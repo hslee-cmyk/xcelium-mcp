@@ -528,7 +528,9 @@ def register(mcp: FastMCP, bridges: BridgeManager) -> dict:
                 await bridges.simvision_raw.disconnect()
                 bridges.set_simvision(None)
                 results.append("simvision: disconnected")
-            return "\n".join(results) if results else f"No {target} bridge connected."
+            if results:
+                return "\n".join(results)
+            return "No bridge connected." if target == "all" else f"No {target} bridge connected."
 
         elif action == "shutdown":
             user_tmp = await get_user_tmp_dir()

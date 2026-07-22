@@ -1331,3 +1331,32 @@ F-188/F-189와 같은 세션에서 발견(venezia-fpga TID_TOP010 Fix Sub-cycle 
 **Learnings:**
 - `_classify_status()`를 직접 단위 테스트하는 게(`run_and_check`를 통째로 mock해서 간접 검증하는 기존 패턴 대신) 이번처럼 순수 문자열 분류 로직만 검증할 땐 훨씬 빠르고 명확했다 — I/O나 async가 전혀 없는 순수 함수는 그 함수 자체를 직접 호출하는 테스트를 별도로 두는 게 낫다.
 - 이 버그와 F-189는 같은 패턴이다: "겉보기엔 정상 동작(에러 없음, 정상 종료)"인데 실제로는 **판정 대상 신호(한글 키워드/소문자 컨벤션)를 특정 조건에서 조용히 놓친다** — 이런 부류의 버그는 pytest 커버리지가 있어도 그 커버리지 자체가 버그를 재현 못 하는 조건으로 짜여 있으면(F-189의 `io.StringIO`처럼) 안 잡힌다. 실제 사용 조건(legacy TB의 실제 로그 포맷, 실제 로케일)을 직접 재현하는 테스트가 있어야 드러난다.
+
+---
+
+## 2026-07-22 - F-187: sim_disconnect(target='all')가 미연결 시 'No all bridge connected.' 비문 반환
+
+### 배경
+F-186/F-188/F-189와 같은 세션, Plan §8.2 E-7(25개 tool 하위호환 스윕) 진행 중 venezia-fpga/cloud0 실환경에서 직접 재현. `sim_disconnect(action="bridge", target="all")`를 아무 브리지도 연결 안 된 상태로 호출하면 `f"No {target} bridge connected."`(target="all")가 그대로 대입되어 "No all bridge connected."라는 비문이 나온다. 기능 결함은 아님(에러/크래시 없음) — 순수 사용자 대면 메시지 품질 이슈라 priority 4(최저).
+
+### 구현
+- `sim_lifecycle.py::sim_disconnect()`의 `action="bridge"` 분기: `target == "all"`이면 `"No bridge connected."`, 그 외(`"xmsim"`/`"simvision"` 등 구체적 값)는 기존처럼 `f"No {target} bridge connected."` 유지.
+- `tests/test_sim_lifecycle.py`에 2개 신규 테스트 — target="all" 미연결 시 문구 확인(재현 테스트) + target="xmsim" 미연결 시 기존 문구 유지 확인(회귀 없음).
+- **Sanity check**: `git stash`로 수정 전 코드 복원 후 재현 테스트가 정확히 `'No all bridge connected.'`를 반환해 실패하는 것을 확인한 후 복원.
+
+### 결과
+- `tests/test_sim_lifecycle.py`(F-187 관련): 2 passed
+- 전체 `pytest`: 721 passed, 회귀 없음
+- `ruff check src/`: clean
+
+### Files changed
+- src/xcelium_mcp/tools/sim_lifecycle.py (`sim_disconnect()` 문구 분기)
+- tests/test_sim_lifecycle.py (신규 테스트 2개)
+- plans/progress.md (this entry)
+
+**Note (prd.json `passes` 필드 미변경)**: 앞선 3건과 동일 — 사용자가 직접 검토 후 갱신.
+
+**세션 요약**: 이번 세션에서 발견된 4건(F-186/F-187/F-188/F-189) 전부 구현·테스트(각각 sanity-check로 수정 전 코드가 정확히 예상대로 실패함을 확인)·커밋 완료. prd.json에 non-skip pending 항목 없음(사용자의 `passes` 검토만 남음). 스킬 재배포(hooks 관련 F-188/F-189)도 완료.
+
+**Learnings:**
+- 가장 낮은 priority(4) 항목이라도 나머지 3건과 동일한 엄격도(재현 테스트 + 회귀 테스트 + sanity-check)로 처리하는 게 일관성 있었다 — "사소한 문구 버그니까 대충 고쳐도 된다"는 유혹이 있었지만, 실제로 해보니 비용은 거의 같고(2개 테스트, 몇 분) 품질 차이는 크다.

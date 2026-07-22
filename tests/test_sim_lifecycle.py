@@ -876,3 +876,44 @@ async def test_list_tests_glob_pattern_matches_cached_tests() -> None:
     assert "VENEZIA_TOP015_i2c_8bit_offset_test" in result
     assert "VENEZIA_TOP016_test" in result
     assert "No tests found" not in result
+
+
+# ---------------------------------------------------------------------------
+# F-187: sim_disconnect(action="bridge", target="all") grammar when nothing
+# is connected — used to return "No all bridge connected." (bad grammar)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bridge_disconnect_all_nothing_connected_message_grammar() -> None:
+    """target='all' (the default) with nothing connected must not read
+    'No all bridge connected.' — that's the F-187 regression."""
+    from xcelium_mcp.tools.sim_lifecycle import register
+
+    mock_mcp = _MockMCP()
+    mock_bridges = MagicMock()
+    mock_bridges.xmsim_raw = None
+    mock_bridges.simvision_raw = None
+
+    register(mock_mcp, mock_bridges)
+    result = await mock_mcp.tools["sim_disconnect"](action="bridge", target="all")
+
+    assert not result.startswith("No all"), f"F-187 regression: {result!r}"
+    assert result == "No bridge connected."
+
+
+@pytest.mark.asyncio
+async def test_bridge_disconnect_specific_target_message_unchanged() -> None:
+    """target='xmsim'/'simvision' (a specific bridge, not 'all') keeps the
+    original 'No {target} bridge connected.' wording — no regression."""
+    from xcelium_mcp.tools.sim_lifecycle import register
+
+    mock_mcp = _MockMCP()
+    mock_bridges = MagicMock()
+    mock_bridges.xmsim_raw = None
+    mock_bridges.simvision_raw = None
+
+    register(mock_mcp, mock_bridges)
+    result = await mock_mcp.tools["sim_disconnect"](action="bridge", target="xmsim")
+
+    assert result == "No xmsim bridge connected."
