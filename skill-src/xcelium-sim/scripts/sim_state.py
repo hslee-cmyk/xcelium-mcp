@@ -74,6 +74,7 @@ def _reject_if_msys_mangled(label: str, value: str) -> None:
 __all__ = [
     "record_run",
     "record_analyze",
+    "record_regression",
     "append_debug_note",
     "write_fix_plan",
     "approve_fix_plan",
@@ -211,6 +212,44 @@ def record_analyze(sim_dir: str, test: str, csv_path: str,
     if fail_type is not None:
         entry["fail_type"] = fail_type
     entry["origin_chain"]["analyze"] = {"csv_path": csv_path, "anomaly_time_ns": anomaly_time_ns}
+    _save_state(project_root, state)
+
+
+_REGRESSION_RATIO_RE = re.compile(r'(\d+/\d+) (?:verdict tests PASS|waveform tests COMPLETE)')
+
+
+def record_regression(sim_dir: str, test_list: list[str], log_summary: str,
+                       fail_tests: list[str] | None = None, project_root: str = ".") -> None:
+    """Record a `/sim run --regression` (or `/sim verify --regression`) result
+    into the top-level `regression` field (Plan §5.1: {"last_run", "pass_rate",
+    "fail_tests"}) — same gap/rationale as `record_run`/`record_analyze`,
+    found while actually driving a live 2-test regression (2026-07-22).
+
+    This is a project-wide summary, NOT a per-test phase transition — it does
+    not touch any individual test's `origin_chain`/`phase` (those still need
+    their own `record_run`/`record_analyze`/... calls if per-test tracking is
+    wanted; `test_list` here is recorded only as context for what was run).
+
+    `pass_rate` is parsed from `log_summary`'s own "N/M verdict tests PASS" /
+    "N/M waveform tests COMPLETE" line — the same text `compound.py`'s
+    `_classify_regression_status()` already parses to decide PASS/FAIL/
+    PARTIAL, kept here as a display string, not re-classified.
+
+    `fail_tests` is best-effort and defaults to empty: `sim_regression_
+    summary`'s CompoundResult doesn't expose which specific tests failed
+    (TODO.md "run_batch_regression() — no structured per-test PASS/FAIL") —
+    pass it explicitly only if the caller determined it some other way
+    (e.g. per-test `/sim analyze` follow-ups), never guessed.
+    """
+    state = _load_state(project_root)
+    _set_sim_dir(state, sim_dir)
+    m = _REGRESSION_RATIO_RE.search(log_summary)
+    state["regression"] = {
+        "last_run": _now_iso(),
+        "pass_rate": m.group(1) if m else None,
+        "test_list": test_list,
+        "fail_tests": fail_tests or [],
+    }
     _save_state(project_root, state)
 
 
@@ -481,6 +520,12 @@ def _cli_record_analyze(args: argparse.Namespace) -> None:
                    project_root=args.project_root)
 
 
+def _cli_record_regression(args: argparse.Namespace) -> None:
+    log_summary = args.log_summary if args.log_summary is not None else _read_stdin_text()
+    record_regression(args.sim_dir, args.test_list, log_summary,
+                       fail_tests=args.fail_tests or None, project_root=args.project_root)
+
+
 def _cli_append_debug_note(args: argparse.Namespace) -> None:
     append_debug_note(args.sim_dir, args.test, _read_stdin_text(), args.context,
                        project_root=args.project_root)
@@ -546,6 +591,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--fail-type", default=None,
                     help='e.g. "data_mismatch"/"timeout"/"assertion"/"protocol"')
     p.set_defaults(func=_cli_record_analyze)
+
+    p = sub.add_parser("record_regression")
+    p.add_argument("--sim-dir", required=True)
+    p.add_argument("--test-list", nargs="+", required=True)
+    p.add_argument("--fail-tests", nargs="*", default=None)
+    p.add_argument("--log-summary", default=None, help="Omit to read from stdin")
+    p.set_defaults(func=_cli_record_regression)
 
     p = sub.add_parser("append_debug_note")
     p.add_argument("--sim-dir", required=True)

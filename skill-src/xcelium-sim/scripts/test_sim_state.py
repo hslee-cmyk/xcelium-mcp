@@ -166,6 +166,61 @@ class TestRecordAnalyze:
         assert entry["fail_signals"] == ["sig.a", "sig.b"]
 
 
+class TestRecordRegression:
+    def test_parses_verdict_pass_rate(self, tmp_path):
+        sim_state.record_regression(
+            "/remote/sim", ["T1", "T2"], "1/2 verdict tests PASS (5 checks passed, 1 failed)",
+            project_root=str(tmp_path),
+        )
+        regression = _state_json(tmp_path)["regression"]
+        assert regression["pass_rate"] == "1/2"
+        assert regression["test_list"] == ["T1", "T2"]
+        assert regression["fail_tests"] == []
+        assert regression["last_run"] is not None
+
+    def test_parses_waveform_complete_pass_rate(self, tmp_path):
+        """The fallback form (no explicit verdict), same regex used by
+        compound.py's own _classify_regression_status()."""
+        sim_state.record_regression(
+            "/remote/sim", ["T1", "T2"], "2/2 waveform tests COMPLETE",
+            project_root=str(tmp_path),
+        )
+        assert _state_json(tmp_path)["regression"]["pass_rate"] == "2/2"
+
+    def test_no_parseable_ratio_yields_none(self, tmp_path):
+        sim_state.record_regression("/remote/sim", ["T1"], "some unrelated log text",
+                                     project_root=str(tmp_path))
+        assert _state_json(tmp_path)["regression"]["pass_rate"] is None
+
+    def test_fail_tests_recorded_when_given(self, tmp_path):
+        sim_state.record_regression("/remote/sim", ["T1", "T2"], "1/2 verdict tests PASS",
+                                     fail_tests=["T2"], project_root=str(tmp_path))
+        assert _state_json(tmp_path)["regression"]["fail_tests"] == ["T2"]
+
+    def test_does_not_touch_per_test_entries(self, tmp_path):
+        """regression is a project-wide summary — it must not create/modify tests[]."""
+        sim_state.record_run("/remote/sim", "T1", "PASS", "log", project_root=str(tmp_path))
+        sim_state.record_regression("/remote/sim", ["T1", "T2"], "2/2 waveform tests COMPLETE",
+                                     project_root=str(tmp_path))
+
+        state = _state_json(tmp_path)
+        assert list(state["tests"]) == ["T1"]  # T2 never got its own entry
+        assert state["tests"]["T1"]["phase"] == "run"  # untouched by the regression call
+
+    def test_via_cli(self, tmp_path):
+        parser = sim_state._build_parser()
+        args = parser.parse_args([
+            "--project-root", str(tmp_path),
+            "record_regression", "--sim-dir", "/remote/sim",
+            "--test-list", "T1", "T2", "--log-summary", "2/2 waveform tests COMPLETE",
+        ])
+        args.func(args)
+
+        regression = _state_json(tmp_path)["regression"]
+        assert regression["pass_rate"] == "2/2"
+        assert regression["test_list"] == ["T1", "T2"]
+
+
 class TestAppendDebugNote:
     def test_first_call_creates_debug_md_and_iteration_1(self, tmp_path):
         sim_state.append_debug_note("/remote/sim", "TOP015", "hypothesis A", "최초 조사",
