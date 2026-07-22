@@ -24,7 +24,10 @@ mcp = FastMCP(
 bridges = BridgeManager()
 
 # ---------------------------------------------------------------------------
-# Tool registration — 7 modules, 28 tools total
+# Tool registration — 8 modules (compound.py added by xcelium-mcp-debug-workflow-v2
+# Phase B, +3 compound-operation tools; see that module's docstring for the exact
+# current tool count — this comment intentionally doesn't hardcode a stale total,
+# see docs/01-plan/features/xcelium-mcp-debug-workflow-v2.plan.md Dependencies section).
 #
 # Registration order matters: simvision needs references to tools from
 # waveform, sim_lifecycle, and debug modules (cross-tool calls).
@@ -32,6 +35,7 @@ bridges = BridgeManager()
 from xcelium_mcp.tools import (  # noqa: E402
     batch,
     checkpoint,
+    compound,
     debug,
     signal_inspection,
     sim_lifecycle,
@@ -55,6 +59,10 @@ batch.register(
     mcp, bridges,
     restore_checkpoint_fn=functools.partial(restore_checkpoint_impl, bridges),
 )
+
+# Phase 3b: compound operations (Plan §8.2 Phase B) — no bridge dependency,
+# imports tools.batch's validation helpers so no cross-tool register() ordering needed.
+compound.register(mcp)
 
 # Phase 4: simvision needs cross-tool references
 simvision.register(

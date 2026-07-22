@@ -38,6 +38,8 @@ mcp_config(action="get", key="runner.default_mode")   # 필요 시 수동 조정
 
 필수 포함 항목: 인터페이스 API, 프로토콜/시퀀스, 타이밍, 알려진 제약, DUT 계층 참조, 상위 호출 패턴, 판정 기여.
 
+> **0B의 YAML frontmatter는 이 문서(0A)엔 적용하지 않는다** — 아래 frontmatter 필드(`pass_signals`/`fail_conditions` 등)는 "테스트 하나의 판별 신호/기대값"이라는 테스트케이스 단위 개념이라 공유 컴포넌트 문서에는 자연스럽게 대응되지 않는다. 공유 컴포넌트가 여러 테스트에서 참조되는 인터페이스 API 자체를 구조화하고 싶다면 별도 스키마가 필요하지만, 지금은 정의하지 않는다(YAGNI).
+
 ### 0B. 테스트케이스별 분석 캐시
 
 파일 네이밍: `.ai/analysis/tb_{env}_{test_name}.analysis.md`
@@ -49,6 +51,30 @@ mcp_config(action="get", key="runner.default_mode")   # 필요 시 수동 조정
 4. 공통 Dump 신호 추출(regression 직전 1회) — 전체 테스트 DUT 신호 합집합 → `tb_{env}_regression_common_signals.analysis.md`
 
 필수 포함 항목(환경 무관): 테스트 목적, 사용 공유 컴포넌트, 테스트 시나리오(tid별 표), 판별 방법, 판별 신호+기대값, DUT 내부 참조, 시뮬레이션 길이, 버그 이력.
+
+### 0B-YAML. Frontmatter 필수 첨부 (Phase 2, `/sim run` 자동 파싱용)
+
+**분석서를 작성·갱신하는 바로 이 시점에** 위 "필수 포함 항목"의 판별 신호+기대값/시뮬레이션 길이를 아래 YAML frontmatter로도 함께 기록한다 — 프로즈 작성과 동시에 하는 것이지, 별도 후속 단계가 아니다. `/sim run`(Phase 2)이 이 frontmatter를 그대로 파싱해 `pass_signals`/`fail_conditions`를 자동 구성한다 — 재파싱·재생성 단계는 없다.
+
+```markdown
+---
+test: VENEZIA_TOP015_i2c_8bit_offset_test
+short_name: TOP015
+env: ncsim-legacy
+pass_signals:
+  - top.hw.u_ext.u_ext_d_main.u_ext_i2cSlave.r_regAddr
+  - top.hw.u_ext.u_ext_d_main.u_ext_i2cSlave.r_streamRwState
+fail_conditions:
+  - "r_regAddr==0xAA"
+  - "r_regAddr==0x55"
+sim_duration: "15ms"
+tb_source: { files: [...], combined_sha256: "..." }   # F-175 자동 산출 — 수동으로 채우지 않는다
+---
+```
+
+`tb_source`는 `sim_batch_run`/`sim_regression`/`sim_bridge_run`의 반환값에 이미 포함돼 있으므로(F-175) 그 값을 그대로 옮겨 적기만 한다 — 직접 계산하지 않는다.
+
+**frontmatter가 없는 문서를 만나면(레거시 backfill 대상 또는 `verilog-tb-analyst` 미설치 환경)**: `/sim run`은 본문을 읽어 판단하는 fallback으로 넘어간다(정상 경로 아님) — 이 문서를 갱신하는 김에 frontmatter도 함께 채워 넣는 것이 좋다.
 
 **env가 `uvm`/`dsv`/`ams`일 때는 위 4단계 절차가 그대로 적용되지 않는다** — 이 절차는 legacy directed Verilog(task 기반 시퀀스)를 전제로 쓰여 있어서, UVM agent/driver/monitor/sequencer 구조나 듀얼탑(hdl_top/hvl_top) 인터페이스, AMS 아날로그 모델을 그대로 grep 패턴으로 스캔할 수 없다. 이 경우 아래 skill을 **같은 방식으로 직접 Read**해서 절차를 그 env에 맞게 재해석한다(전체 skill이 아니라 필요 절만, `verilog-tb-analyst.plan.md` FR-10/FR-11/FR-12와 동일한 근거·동일한 절 한정):
 - `~/.claude/skills/verilog-rtl/SKILL.md` §8(Verification 연계 — SVA Assertion, Coverage) + `references/covergroup-patterns.md`/`coverage-methodology.md`/`coverage-examples.md` — TB 코드 자체가 SystemVerilog 문법(covergroup/coverpoint/cross, assertion)으로 작성되므로 정확히 해석하려면 필요
