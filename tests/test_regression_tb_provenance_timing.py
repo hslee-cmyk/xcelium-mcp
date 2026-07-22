@@ -64,7 +64,7 @@ async def test_provenance_captured_per_test_not_batched_at_end() -> None:
               return_value=(None, None)),
         patch("xcelium_mcp.tb_provenance.build_tb_provenance", side_effect=fake_provenance),
     ):
-        _log_str, _dump_stats, tb_provenance = await run_batch_regression(
+        _log_str, _dump_stats, tb_provenance, _per_test_verdicts = await run_batch_regression(
             sim_dir="/sim",
             test_list=["T1", "T2"],
             runner=runner,
@@ -103,7 +103,7 @@ async def test_shared_tb_file_edited_mid_regression_does_not_taint_earlier_test(
         patch("xcelium_mcp.tb_provenance.build_tb_provenance",
               side_effect=provenance_sequence),
     ):
-        _log_str, _dump_stats, tb_provenance = await run_batch_regression(
+        _log_str, _dump_stats, tb_provenance, _per_test_verdicts = await run_batch_regression(
             sim_dir="/sim",
             test_list=["T1", "T2"],
             runner=runner,

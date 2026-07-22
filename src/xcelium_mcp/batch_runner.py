@@ -580,7 +580,7 @@ def classify_regression_results(
     per_test_results: dict[str, list[str]],
     per_test_errors: dict[str, str],
     log_file: str,
-) -> str:
+) -> tuple[str, dict[str, str]]:
     """5-way classify each test's collected log lines and build the summary log string.
 
     F-155: extracted from run_batch_regression's tail — pure function, no I/O,
@@ -603,6 +603,12 @@ def classify_regression_results(
     silently counted as "complete" in a regression run. Same root cause as
     F-186 (compound.py::_classify_status(), the single-test path) — reuses
     the same _TB_BANG_LINE_RE convention instead of duplicating the pattern.
+
+    F-190: returns the per-test classification (cases 1-5 collapsed to
+    "pass"/"fail"/"complete"/"error") alongside the aggregate summary string
+    — additive, the summary string's format/content is unchanged. Lets
+    callers (e.g. compound.py::regression_summary) target only the tests
+    that actually failed instead of treating the whole test_list uniformly.
     """
     all_parts: list[str] = []
     pass_count = 0       # HAS_VERDICT: COMPLETE. Errors: 0
@@ -611,6 +617,7 @@ def classify_regression_results(
     error_count = 0      # NO_VERDICT: $finish + errors, or no $finish (timeout/crash)
     check_pass = 0       # check-level substring count
     check_fail = 0       # check-level substring count
+    per_test_verdict: dict[str, str] = {}
     for tn in test_list:
         t_raw = "\n".join(per_test_results[tn])
         all_parts.append(f"=== {tn} ===\n{t_raw}")
@@ -620,11 +627,14 @@ def classify_regression_results(
             # (1) HAS_VERDICT: COMPLETE. Errors: N
             if int(m.group(1)) == 0:
                 pass_count += 1
+                per_test_verdict[tn] = "pass"
             else:
                 fail_count += 1
+                per_test_verdict[tn] = "fail"
         elif "FAIL" in t_raw:
             # (2) HAS_VERDICT: crash/abort with FAIL but no COMPLETE
             fail_count += 1
+            per_test_verdict[tn] = "fail"
         elif "$finish" in t_raw:
             # (3)/(4) NO_VERDICT: $finish reached
             has_bang_failure = any(
@@ -633,11 +643,14 @@ def classify_regression_results(
             )
             if per_test_errors.get(tn) or has_bang_failure:
                 error_count += 1  # $finish + errors, or a legacy "[TAG] ...!!" failure line
+                per_test_verdict[tn] = "error"
             else:
                 complete_count += 1  # $finish, no errors → waveform complete
+                per_test_verdict[tn] = "complete"
         else:
             # (5) NO_VERDICT: no $finish → timeout or crash
             error_count += 1
+            per_test_verdict[tn] = "error"
         # Check-level counts (individual assertion lines)
         check_pass += t_raw.count("PASS")
         check_fail += t_raw.count("FAIL")
@@ -658,7 +671,7 @@ def classify_regression_results(
         summary_lines.append(f"0/{total} tests classified")
     summary = "\n".join(summary_lines)
     details = raw[:4000] if raw.strip() else "(no PASS/FAIL/$finish lines found in per-test logs)"
-    return f"{summary}\n\nLog ({log_file}):\n{details}"
+    return f"{summary}\n\nLog ({log_file}):\n{details}", per_test_verdict
 
 
 def aggregate_dump_stats(per_test_dump_summaries: dict[str, dict]) -> dict | None:
@@ -711,7 +724,7 @@ async def run_batch_regression(
     sdf_corner: str = "max",
     dump_scopes: dict | None = None,
     use_dump_history: bool = False,
-) -> tuple[str, dict | None, dict[str, dict]]:
+) -> tuple[str, dict | None, dict[str, dict], dict[str, str]]:
     """Execute regression tests via nohup batch with job resume.
 
     nohup + PID watcher + adaptive log polling (P6-1/P6-2/P6-5).
@@ -727,11 +740,13 @@ async def run_batch_regression(
       These checkpoints are used later by sim_batch_run(from_checkpoint=...)
       for faster debugging (skip compile+init).
 
-    Returns: (log_str, dump_stats, tb_provenance). tb_provenance is captured
-    per-test right after that test's own run (F-175) — not batched at the
-    end after the whole regression completes — so a shared TB source file
-    edited mid-regression can't get attributed to an earlier test that had
-    already finished running against the old content.
+    Returns: (log_str, dump_stats, tb_provenance, per_test_verdicts).
+    tb_provenance is captured per-test right after that test's own run
+    (F-175) — not batched at the end after the whole regression completes —
+    so a shared TB source file edited mid-regression can't get attributed to
+    an earlier test that had already finished running against the old
+    content. per_test_verdicts (F-190) is {test_name: "pass"|"fail"|
+    "complete"|"error"}, straight from classify_regression_results().
     """
     user_tmp = await get_user_tmp_dir()
     job_file = f"{user_tmp}/regression_job.json"
@@ -997,9 +1012,12 @@ async def run_batch_regression(
         per_test_errors[tn] = err
 
     # F-155: verdict classification + summary formatting extracted to a pure function
-    log_str = classify_regression_results(test_list, per_test_results, per_test_errors, log_file)
+    # F-190: also returns the per-test pass/fail/complete/error dict, additively
+    log_str, per_test_verdicts = classify_regression_results(
+        test_list, per_test_results, per_test_errors, log_file
+    )
 
     # v5.2: aggregate dump_stats across per-test summaries (F-155: extracted to a pure function)
     dump_stats = aggregate_dump_stats(per_test_dump_summaries)
 
-    return log_str, dump_stats, per_test_tb_provenance
+    return log_str, dump_stats, per_test_tb_provenance, per_test_verdicts

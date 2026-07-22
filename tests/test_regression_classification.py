@@ -14,40 +14,44 @@ from xcelium_mcp.batch_runner import aggregate_dump_stats, classify_regression_r
 
 class TestClassifyRegressionResults:
     def test_has_verdict_pass(self):
-        log_str = classify_regression_results(
+        log_str, verdicts = classify_regression_results(
             test_list=["T1"],
             per_test_results={"T1": ["COMPLETE. Errors: 0"]},
             per_test_errors={"T1": ""},
             log_file="/tmp/regression.log",
         )
         assert "1/1 verdict tests PASS" in log_str
+        assert verdicts == {"T1": "pass"}
 
     def test_has_verdict_fail_via_complete_nonzero(self):
-        log_str = classify_regression_results(
+        log_str, verdicts = classify_regression_results(
             test_list=["T1"],
             per_test_results={"T1": ["COMPLETE. Errors: 2"]},
             per_test_errors={"T1": ""},
             log_file="/tmp/regression.log",
         )
         assert "0/1 verdict tests PASS" in log_str
+        assert verdicts == {"T1": "fail"}
 
     def test_has_verdict_fail_via_fail_without_complete(self):
-        log_str = classify_regression_results(
+        log_str, verdicts = classify_regression_results(
             test_list=["T1"],
             per_test_results={"T1": ["[V-01] FAIL: assertion"]},
             per_test_errors={"T1": ""},
             log_file="/tmp/regression.log",
         )
         assert "0/1 verdict tests PASS" in log_str
+        assert verdicts == {"T1": "fail"}
 
     def test_no_verdict_finish_no_errors_is_complete(self):
-        log_str = classify_regression_results(
+        log_str, verdicts = classify_regression_results(
             test_list=["T1"],
             per_test_results={"T1": ["$finish called at 1000ns"]},
             per_test_errors={"T1": ""},
             log_file="/tmp/regression.log",
         )
         assert "1/1 waveform tests COMPLETE" in log_str
+        assert verdicts == {"T1": "complete"}
 
     def test_no_verdict_finish_with_real_tb_bang_line_is_error(self):
         """F-191: the exact real message that motivated this fix (and F-186
@@ -55,7 +59,7 @@ class TestClassifyRegressionResults:
         No COMPLETE./no uppercase FAIL/no separate error-grep line, $finish
         reached -- this used to be silently counted as "complete" (waveform
         tests COMPLETE) in a regression run."""
-        log_str = classify_regression_results(
+        log_str, verdicts = classify_regression_results(
             test_list=["T1"],
             per_test_results={"T1": [
                 "[REG BANK TEST] register 0x05: back-tel NOT sent (timeout)!!",
@@ -65,37 +69,41 @@ class TestClassifyRegressionResults:
             log_file="/tmp/regression.log",
         )
         assert "0/1 waveform tests COMPLETE" in log_str
+        assert verdicts == {"T1": "error"}
 
     def test_no_verdict_finish_with_errors_is_error(self):
-        log_str = classify_regression_results(
+        log_str, verdicts = classify_regression_results(
             test_list=["T1"],
             per_test_results={"T1": ["$finish called at 1000ns"]},
             per_test_errors={"T1": "*E fatal error"},
             log_file="/tmp/regression.log",
         )
         assert "0/1 waveform tests COMPLETE" in log_str
+        assert verdicts == {"T1": "error"}
 
     def test_no_verdict_no_finish_is_error_timeout(self):
         """No verdict + no $finish -> error bucket, which still counts toward
         waveform_total (error_count contributes there too)."""
-        log_str = classify_regression_results(
+        log_str, verdicts = classify_regression_results(
             test_list=["T1"],
             per_test_results={"T1": []},
             per_test_errors={"T1": ""},
             log_file="/tmp/regression.log",
         )
         assert "0/1 waveform tests COMPLETE" in log_str
+        assert verdicts == {"T1": "error"}
 
     def test_all_categories_absent_shows_fallback(self):
         """The '0/N tests classified' fallback only fires when there is
         nothing at all to summarize (empty test_list)."""
-        log_str = classify_regression_results(
+        log_str, verdicts = classify_regression_results(
             test_list=[],
             per_test_results={},
             per_test_errors={},
             log_file="/tmp/regression.log",
         )
         assert "0/0 tests classified" in log_str
+        assert verdicts == {}
 
     def test_mixed_regression_all_five_categories(self):
         """2 HAS_VERDICT + 3 NO_VERDICT, matching the classic mixed scenario."""
@@ -111,7 +119,7 @@ class TestClassifyRegressionResults:
             "pass1": "", "fail1": "", "complete1": "",
             "error_finish1": "*E fatal", "error_timeout1": "",
         }
-        log_str = classify_regression_results(
+        log_str, verdicts = classify_regression_results(
             test_list, per_test_results, per_test_errors, "/tmp/regression.log"
         )
         assert "1/2 verdict tests PASS" in log_str
@@ -119,9 +127,32 @@ class TestClassifyRegressionResults:
         assert "1/3 waveform tests COMPLETE" in log_str
         assert "=== pass1 ===" in log_str
         assert "=== error_timeout1 ===" in log_str
+        assert verdicts == {
+            "pass1": "pass",
+            "fail1": "fail",
+            "complete1": "complete",
+            "error_finish1": "error",
+            "error_timeout1": "error",
+        }
+
+    def test_per_test_verdict_dict_pass_fail_complete(self):
+        """F-190: classify_regression_results() returns a {test_name: verdict}
+        dict alongside the summary string — additive, verified directly here
+        with one test per verdict rather than folded into the mixed test."""
+        test_list = ["p", "f", "c"]
+        per_test_results = {
+            "p": ["COMPLETE. Errors: 0"],
+            "f": ["COMPLETE. Errors: 1"],
+            "c": ["$finish called"],
+        }
+        per_test_errors = {"p": "", "f": "", "c": ""}
+        _log_str, verdicts = classify_regression_results(
+            test_list, per_test_results, per_test_errors, "/tmp/regression.log"
+        )
+        assert verdicts == {"p": "pass", "f": "fail", "c": "complete"}
 
     def test_log_file_path_included_in_output(self):
-        log_str = classify_regression_results(
+        log_str, _verdicts = classify_regression_results(
             test_list=["T1"],
             per_test_results={"T1": ["COMPLETE. Errors: 0"]},
             per_test_errors={"T1": ""},
@@ -133,7 +164,7 @@ class TestClassifyRegressionResults:
         """The placeholder only fires when there's truly nothing to show —
         even a test with no result lines still emits an '=== T1 ===' header,
         so this requires an empty test_list."""
-        log_str = classify_regression_results(
+        log_str, _verdicts = classify_regression_results(
             test_list=[],
             per_test_results={},
             per_test_errors={},

@@ -249,7 +249,7 @@ class TestRegressionSummary:
         summary_text = "1/2 verdict tests PASS (5 checks passed, 1 failed)\n\nLog (...): ..."
         with patch(
             "xcelium_mcp.compound.run_batch_regression", new_callable=AsyncMock,
-            return_value=(summary_text, None, {"T1": {}, "T2": {}}),
+            return_value=(summary_text, None, {"T1": {}, "T2": {}}, {"T1": "pass", "T2": "fail"}),
         ) as mock_regr:
             result = await regression_summary(
                 sim_dir="/sim", test_list=["T1", "T2"], runner=RUNNER,
@@ -257,6 +257,7 @@ class TestRegressionSummary:
 
         assert result.status == "PARTIAL"
         assert result.details["tb_provenance"] == {"T1": {}, "T2": {}}
+        assert result.details["per_test_verdicts"] == {"T1": "pass", "T2": "fail"}
         mock_regr.assert_called_once()
 
     @pytest.mark.asyncio
@@ -264,7 +265,7 @@ class TestRegressionSummary:
         summary_text = "2/2 verdict tests PASS (10 checks passed, 0 failed)"
         with patch(
             "xcelium_mcp.compound.run_batch_regression", new_callable=AsyncMock,
-            return_value=(summary_text, None, {}),
+            return_value=(summary_text, None, {}, {"T1": "pass", "T2": "pass"}),
         ):
             result = await regression_summary(sim_dir="/sim", test_list=["T1", "T2"], runner=RUNNER)
 
@@ -275,7 +276,7 @@ class TestRegressionSummary:
         summary_text = "0/2 verdict tests PASS (0 checks passed, 4 failed)"
         with patch(
             "xcelium_mcp.compound.run_batch_regression", new_callable=AsyncMock,
-            return_value=(summary_text, None, {}),
+            return_value=(summary_text, None, {}, {"T1": "fail", "T2": "fail"}),
         ):
             result = await regression_summary(sim_dir="/sim", test_list=["T1", "T2"], runner=RUNNER)
 
@@ -292,17 +293,18 @@ class TestRegressionSummary:
         assert result.status == "ERROR"
 
     @pytest.mark.asyncio
-    async def test_csv_on_fail_extracts_for_every_test_in_list(self):
-        """Documented module-1 simplification: csv_on_fail extracts for the
-        whole test_list (not pinpointed failures) when overall status != PASS."""
+    async def test_csv_on_fail_extracts_only_failing_tests(self):
+        """F-190: csv_on_fail now targets only the tests classify_regression_
+        results() marked "fail"/"error" via per_test_verdicts, not the whole
+        test_list (the earlier module-1 simplification this replaces)."""
         summary_text = "1/2 verdict tests PASS (5 checks passed, 1 failed)"
         with patch(
             "xcelium_mcp.compound.run_batch_regression", new_callable=AsyncMock,
-            return_value=(summary_text, None, {}),
+            return_value=(summary_text, None, {}, {"T1": "pass", "T2": "fail"}),
         ), patch(
             "xcelium_mcp.compound.find_shm", new_callable=AsyncMock,
             side_effect=lambda sim_dir, tn: f"/sim/dump/{tn}.shm",
-        ), patch.object(
+        ) as mock_find_shm, patch.object(
             compound.csv_cache,
             "extract", new_callable=AsyncMock,
             side_effect=lambda shm_path, signals: f"{shm_path}.csv",
@@ -312,17 +314,15 @@ class TestRegressionSummary:
                 csv_on_fail=True, csv_signals=["dut.sig_a"],
             )
 
-        assert result.details["csv_by_test"] == {
-            "T1": "/sim/dump/T1.shm.csv",
-            "T2": "/sim/dump/T2.shm.csv",
-        }
+        assert result.details["csv_by_test"] == {"T2": "/sim/dump/T2.shm.csv"}
+        mock_find_shm.assert_called_once_with("/sim", "T2")
 
     @pytest.mark.asyncio
     async def test_csv_on_fail_skipped_when_all_pass(self):
         summary_text = "2/2 verdict tests PASS (10 checks passed, 0 failed)"
         with patch(
             "xcelium_mcp.compound.run_batch_regression", new_callable=AsyncMock,
-            return_value=(summary_text, None, {}),
+            return_value=(summary_text, None, {}, {"T1": "pass", "T2": "pass"}),
         ), patch(
             "xcelium_mcp.compound.find_shm", new_callable=AsyncMock,
         ) as mock_find_shm:

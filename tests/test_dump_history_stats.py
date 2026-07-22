@@ -221,7 +221,7 @@ async def test_regression_updates_dump_history_and_dump_stats_shape() -> None:
         patch("xcelium_mcp.batch_runner._preprocess_setup_tcl", side_effect=fake_preprocess),
         patch("xcelium_mcp.batch_runner._update_dump_history", side_effect=fake_update_history),
     ):
-        log_str, dump_stats, _tb_provenance = await run_batch_regression(
+        log_str, dump_stats, _tb_provenance, _per_test_verdicts = await run_batch_regression(
             sim_dir="/sim",
             test_list=["T1", "T2", "T3"],
             runner=runner,

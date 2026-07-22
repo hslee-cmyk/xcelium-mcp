@@ -171,16 +171,15 @@ def register(mcp: FastMCP) -> None:
         follow-up extract_csv per failing test would otherwise take separate
         round-trips for.
 
-        **Known simplification** (compound.py::regression_summary docstring,
-        tracked in TODO.md "run_batch_regression() — no structured per-test
-        PASS/FAIL"): csv_on_fail extracts CSV for every test in test_list when
-        the overall regression isn't a full PASS, not only the ones that
-        actually failed — run_batch_regression doesn't expose which specific
-        tests failed, only aggregate counts.
+        F-190: csv_on_fail now targets only the tests classify_regression_
+        results() classified "fail"/"error" (compound.py::regression_summary's
+        per_test_verdicts), not the whole test_list — the earlier module-1
+        simplification (extract for everyone when the run isn't a full PASS)
+        this replaces.
 
         Args:
             csv_on_fail: If True and the overall regression isn't a full PASS,
-                extract CSV(csv_signals) for every test in test_list.
+                extract CSV(csv_signals) for the tests that failed.
             csv_signals: Signals to extract when csv_on_fail triggers.
             (remaining args match sim_regression — see its docstring)
         """

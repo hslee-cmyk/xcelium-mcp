@@ -293,20 +293,17 @@ async def regression_summary(
     Composes run_batch_regression() (execution) + csv_cache.extract() — no new
     regression/CSV logic.
 
-    **Documented simplification (module-1 scope)**: run_batch_regression()
-    returns an aggregate summary string, not a structured per-test PASS/FAIL
-    dict — exposing that structure would require changing batch_runner.py
-    itself, which Plan §3.4 explicitly avoids (risk of new bugs in an
-    already-verified path). So when csv_on_fail=True and the overall status
-    is not "PASS", this extracts CSV for every test in test_list rather than
-    pinpointing exactly which ones failed. Precise per-test-failure CSV
-    extraction is left as a future extension to run_batch_regression's return
-    contract (YAGNI for Phase A).
+    **F-190**: run_batch_regression() now also returns a per-test
+    {test_name: "pass"|"fail"|"complete"|"error"} dict (classify_regression_
+    results()'s own per-test classification, exposed additively). When
+    csv_on_fail=True and the overall status is not "PASS", this extracts CSV
+    only for the tests verdict-marked "fail"/"error", instead of the whole
+    test_list (the earlier module-1 simplification this replaces).
 
     Args:
         sim_dir, test_list, runner: Forwarded to run_batch_regression as-is.
         csv_on_fail: If True and overall status != "PASS", extract CSV
-            (csv_signals) for every test in test_list.
+            (csv_signals) for tests classified "fail" or "error".
         csv_signals: Signals to extract when csv_on_fail triggers.
         **run_kwargs: Forwarded to run_batch_regression (dump_depth, sim_mode,
             save_checkpoints, ...).
@@ -315,11 +312,12 @@ async def regression_summary(
         CompoundResult.status: "PASS" (all verdict/waveform tests passed),
         "FAIL" (none passed), "PARTIAL" (some passed, some didn't), "ERROR"
         (run_batch_regression raised, or produced no parseable verdict/
-        waveform count at all). details = {"tb_provenance", "dump_stats"
-        (if any), "csv_by_test" (if csv_on_fail triggered)}.
+        waveform count at all). details = {"tb_provenance", "per_test_
+        verdicts", "dump_stats" (if any), "csv_by_test" (if csv_on_fail
+        triggered)}.
     """
     try:
-        summary, dump_stats, tb_provenance = await run_batch_regression(
+        summary, dump_stats, tb_provenance, per_test_verdicts = await run_batch_regression(
             sim_dir=sim_dir, test_list=test_list, runner=runner, **run_kwargs,
         )
     except (RuntimeError, ValueError, OSError, TimeoutError) as e:
@@ -327,13 +325,16 @@ async def regression_summary(
 
     status = _classify_regression_status(summary)
 
-    details: dict = {"tb_provenance": tb_provenance}
+    details: dict = {"tb_provenance": tb_provenance, "per_test_verdicts": per_test_verdicts}
     if dump_stats is not None:
         details["dump_stats"] = dump_stats
 
     if csv_on_fail and status != "PASS" and csv_signals:
+        failing_tests = [
+            tn for tn in test_list if per_test_verdicts.get(tn) in ("fail", "error")
+        ]
         csv_by_test: dict[str, str] = {}
-        for tn in test_list:
+        for tn in failing_tests:
             try:
                 shm = await find_shm(sim_dir, tn)
                 if shm:

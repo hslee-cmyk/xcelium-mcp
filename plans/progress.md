@@ -1420,3 +1420,36 @@ F-186/F-186 Rev.2는 `compound.py::_classify_status()`(단일 테스트 경로, 
 **Learnings:**
 - 겉보기에 "같은 버그를 이미 고쳤다"고 착각하기 쉬운 함정이 있었다 — `_classify_status()`(compound.py)와 `classify_regression_results()`(batch_runner.py)는 이름도 다르고 파일도 다르지만 **같은 로그 컨벤션을 각자 독립적으로 파싱**하고 있어서, 한쪽만 고치면 다른 쪽에 동일한 맹점이 그대로 남는다 — 이런 "이름은 다르지만 같은 문제를 재구현한 함수 쌍"은 한 곳을 고칠 때 자매 함수가 있는지 먼저 찾아봐야 한다.
 - F-186 Rev.2에서 배운 "실제 원본 메시지를 그대로 테스트에 박아 넣기" 원칙을 처음부터(Rev.1 없이) 적용해 한 번에 올바르게 재현 테스트를 작성할 수 있었다 — 교훈을 다음 유사 버그에 선제적으로 전이시킨 첫 사례.
+
+---
+
+## 2026-07-23 - F-190: run_batch_regression()/classify_regression_results()가 테스트별 구조화된 PASS/FAIL을 반환하지 않던 gap 해소
+
+### 배경
+`TODO.md`의 "run_batch_regression() — no structured per-test PASS/FAIL, only aggregate summary text" 섹션에 이미 상세 기록돼 있던 알려진 제약. `compound.py::regression_summary()`의 `csv_on_fail`이 실제로 실패한 테스트만 골라내지 못하고 "PASS가 아니면 test_list 전체에 대해 CSV 추출"이라는 부정확하지만 안전한 우회책을 쓰고 있었다(모듈-1 스코프 문서화된 단순화). 사용자가 이 TODO 항목의 위치를 물어 재확인한 뒤, prd 등록을 요청해 F-190으로 추가.
+
+### 구현
+- `batch_runner.py::classify_regression_results()`: 반환 타입을 `str` → `tuple[str, dict[str, str]]`로 확장(순수 additive, 기존 summary 문자열은 완전히 동일). 5-way 분류 루프에서 이미 계산 중이던 pass/fail/complete/error 판정을 `per_test_verdict[tn]`에 그대로 기록해 두 번째 반환값으로 노출.
+- `run_batch_regression()`: 반환 타입을 3-tuple `(log_str, dump_stats, tb_provenance)` → 4-tuple `(log_str, dump_stats, tb_provenance, per_test_verdicts)`로 확장.
+- `compound.py::regression_summary()`: 4-tuple을 받아 `details["per_test_verdicts"]`로 노출. `csv_on_fail=True`일 때 이제 `per_test_verdicts.get(tn) in ("fail", "error")`인 테스트만 걸러 CSV 추출(기존 "test_list 전체" 우회책 대체).
+- `tools/batch.py`/`tools/compound.py`: `run_batch_regression()`의 4-tuple 언패킹으로 갱신(호출부 자체 동작 변경 없음, `tools/compound.py` docstring만 F-190 해소를 반영해 갱신).
+- 기존 3-tuple 언패킹을 하던 테스트 3개 파일(`test_dump_history_stats.py`, `test_regression_result_collection.py`×2, `test_regression_tb_provenance_timing.py`×2) 전부 4-tuple 언패킹으로 갱신(4번째 값은 사용하지 않는 곳은 `_per_test_verdicts`로 무시).
+
+### 결과
+- `tests/test_regression_classification.py`: 기존 모든 케이스에 `verdicts == {...}` assertion 추가 + 신규 `test_per_test_verdict_dict_pass_fail_complete`(pass/fail/complete 각 1개 전용 검증, acceptance criteria 명시 요구사항)
+- `tests/test_compound.py`: `test_csv_on_fail_extracts_for_every_test_in_list` → `test_csv_on_fail_extracts_only_failing_tests`로 개명+재작성 — 이제 `per_test_verdicts={"T1":"pass","T2":"fail"}`일 때 T2만 CSV 추출되고 `find_shm`도 T2 하나에 대해서만 호출됨을 검증(mock으로)
+- **Sanity check**: `git stash push -- src/xcelium_mcp/batch_runner.py src/xcelium_mcp/compound.py`로 수정 전 코드를 복원한 뒤 재실행 — `test_regression_classification.py`의 12개 테스트 전부(3-tuple/2-tuple 언패킹 불일치)와 `test_compound.py`의 신규/갱신 테스트 4개가 예상대로 실패(`ValueError: too many values to unpack` 계열 또는 `KeyError: 'csv_by_test'`)한 것을 확인 후 `git stash pop`으로 복원.
+- 전체 `pytest`: 725 passed(724→725, 신규 1개), `ruff check src/`: clean
+
+### Files changed
+- src/xcelium_mcp/batch_runner.py (`classify_regression_results()`/`run_batch_regression()` 반환 타입 확장)
+- src/xcelium_mcp/compound.py (`regression_summary()`가 per_test_verdicts로 타겟 CSV 추출)
+- src/xcelium_mcp/tools/batch.py, src/xcelium_mcp/tools/compound.py (4-tuple 언패킹 갱신, docstring 갱신)
+- tests/test_regression_classification.py, tests/test_compound.py, tests/test_dump_history_stats.py, tests/test_regression_result_collection.py, tests/test_regression_tb_provenance_timing.py
+- plans/progress.md (this entry)
+
+**Note (prd.json `passes` 필드 미변경)**: 프로젝트 규칙대로 사용자가 직접 검토 후 갱신.
+
+**Learnings:**
+- 순수 additive 확장(기존 반환값 타입/포맷은 그대로 두고 새 값만 덧붙임)이라 기존 3-tuple 호출부를 찾는 게 리스크의 전부였다 — grep으로 `run_batch_regression(` 호출부를 전부 찾아 5곳(운영 코드 1곳 + 테스트 4곳)을 확인하지 않았다면 조용히 `ValueError: too many values to unpack`으로 배포 후에나 드러났을 것.
+- F-190/F-191은 같은 세션에서 서로를 전제로 걸려 있었다 — F-191(정확한 분류)이 먼저 고쳐져 있지 않았다면 F-190의 per-test verdict 노출이 여전히 부정확한 값("[TAG] ...!!" 실패를 complete로) 을 그대로 노출시켰을 것. 등록 순서(F-191 priority 2 → F-190 priority 3)와 구현 순서가 우연히도 의존관계와 맞아떨어졌다.

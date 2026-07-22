@@ -327,7 +327,7 @@ def register(
                 dump_window = _build_dump_window(dump_window_start_ms, dump_window_end_ms)
             except ValueError as e:
                 return str(e)
-            summary, dump_stats, tb_provenance = await run_batch_regression(
+            summary, dump_stats, tb_provenance, _per_test_verdicts = await run_batch_regression(
                 sim_dir=resolved_sim_dir,
                 test_list=test_list,
                 runner=runner,
