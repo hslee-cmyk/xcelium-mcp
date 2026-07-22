@@ -49,6 +49,23 @@ class TestClassifyRegressionResults:
         )
         assert "1/1 waveform tests COMPLETE" in log_str
 
+    def test_no_verdict_finish_with_real_tb_bang_line_is_error(self):
+        """F-191: the exact real message that motivated this fix (and F-186
+        before it) -- TID_TOP010_register_bank_test's bounded-timeout guard.
+        No COMPLETE./no uppercase FAIL/no separate error-grep line, $finish
+        reached -- this used to be silently counted as "complete" (waveform
+        tests COMPLETE) in a regression run."""
+        log_str = classify_regression_results(
+            test_list=["T1"],
+            per_test_results={"T1": [
+                "[REG BANK TEST] register 0x05: back-tel NOT sent (timeout)!!",
+                "Simulation complete via $finish(1) at time 48133520 NS + 0",
+            ]},
+            per_test_errors={"T1": ""},
+            log_file="/tmp/regression.log",
+        )
+        assert "0/1 waveform tests COMPLETE" in log_str
+
     def test_no_verdict_finish_with_errors_is_error(self):
         log_str = classify_regression_results(
             test_list=["T1"],

@@ -17,7 +17,12 @@ import re
 from dataclasses import dataclass, field
 
 import xcelium_mcp.csv_cache as csv_cache
-from xcelium_mcp.batch_runner import _COMPLETE_RE, run_batch_regression, run_batch_single
+from xcelium_mcp.batch_runner import (
+    _COMPLETE_RE,
+    _TB_BANG_LINE_RE,
+    run_batch_regression,
+    run_batch_single,
+)
 from xcelium_mcp.shell_utils import find_shm
 
 __all__ = ["CompoundResult", "run_and_check", "analyze_waveform", "regression_summary"]
@@ -62,9 +67,6 @@ class CompoundResult:
         return "\n".join(parts)
 
 
-_TB_BANG_LINE_RE = re.compile(r'^\[[^\]]+\].*!!', re.MULTILINE)
-
-
 def _classify_status(log: str) -> str:
     """Classify a single test's raw log into PASS/FAIL (Plan §3.4 "log_grep" step).
 
@@ -84,9 +86,11 @@ def _classify_status(log: str) -> str:
     NOT sent (timeout)!!"` — no "failed", no "passed", but unmistakably a
     failure in the same "[TAG] ...!!" convention. Re-verifying the fix
     against that exact real message (not just a synthetic "failed!!" example)
-    is what caught the gap. `_TB_BANG_LINE_RE` generalizes to the convention
-    itself: any line starting with a bracketed `[TAG]` (this whole TB family's
-    own `$display` prefix) and containing "!!" is a verdict line; if none of
+    is what caught the gap. `_TB_BANG_LINE_RE` (imported from batch_runner.py,
+    F-191 — shared with classify_regression_results()'s identical need for
+    the regression path) generalizes to the convention itself: any line
+    starting with a bracketed `[TAG]` (this whole TB family's own `$display`
+    prefix) and containing "!!" is a verdict line; if none of
     those lines say "passed", the test failed. This still can't misfire on
     unrelated "!!" noise elsewhere in a log, since it requires the `[TAG]`
     line-start anchor.

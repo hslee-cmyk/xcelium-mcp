@@ -231,6 +231,17 @@ _TEST_NAME_RE = _re.compile(r'^[A-Za-z0-9_.\-]+$')
 # Matches "COMPLETE. Errors: N" verdict line produced by UVM test harness
 _COMPLETE_RE = _re.compile(r'COMPLETE\.\s*Errors:\s*(\d+)')
 
+# F-186/F-191: legacy directed tests (pre-dating the UVM harness convention)
+# print their own per-check verdicts as bracketed-tag lines ending in "!!"
+# (e.g. "[REG BANK TEST] register 0x03: failed!!", or
+# "[REG BANK TEST] register 0x05: back-tel NOT sent (timeout)!!" -- no
+# "failed" substring at all, only the "[TAG] ...!!" convention itself marks
+# it as a verdict line). Shared between compound.py::_classify_status()
+# (F-186, single-test path) and classify_regression_results() below
+# (F-191, regression path) -- defined once here since compound.py already
+# imports _COMPLETE_RE from this module (same direction of dependency).
+_TB_BANG_LINE_RE = _re.compile(r'^\[[^\]]+\].*!!', _re.MULTILINE)
+
 
 async def build_batch_cmd(
     runner: dict,
@@ -578,9 +589,20 @@ def classify_regression_results(
     Classification (per test):
       (1) HAS_VERDICT: "COMPLETE. Errors: 0" -> pass
       (2) HAS_VERDICT: "COMPLETE. Errors: N>0", or "FAIL" without COMPLETE -> fail
-      (3) NO_VERDICT: "$finish" reached, no error lines -> complete (waveform-only)
-      (4) NO_VERDICT: "$finish" reached, with error lines -> error
+      (3) NO_VERDICT: "$finish" reached, no error lines, no "[TAG] ...!!"
+          verdict line -> complete (waveform-only)
+      (4) NO_VERDICT: "$finish" reached, with error lines OR a legacy
+          "[TAG] ...!!" (not "passed") verdict line -> error
       (5) NO_VERDICT: no "$finish" (timeout/crash) -> error
+
+    F-191: case (3) used to be unconditional on "no error lines" alone, so a
+    legacy directed test that reaches $finish cleanly but printed its own
+    "[TAG] ...!!" failure (e.g. TID_TOP010_register_bank_test's bounded-
+    timeout guard, "[REG BANK TEST] register 0x05: back-tel NOT sent
+    (timeout)!!" -- no "failed" substring, no separate error-grep line) was
+    silently counted as "complete" in a regression run. Same root cause as
+    F-186 (compound.py::_classify_status(), the single-test path) — reuses
+    the same _TB_BANG_LINE_RE convention instead of duplicating the pattern.
     """
     all_parts: list[str] = []
     pass_count = 0       # HAS_VERDICT: COMPLETE. Errors: 0
@@ -605,8 +627,12 @@ def classify_regression_results(
             fail_count += 1
         elif "$finish" in t_raw:
             # (3)/(4) NO_VERDICT: $finish reached
-            if per_test_errors.get(tn):
-                error_count += 1  # $finish + errors
+            has_bang_failure = any(
+                "passed" not in bang_line.lower()
+                for bang_line in _TB_BANG_LINE_RE.findall(t_raw)
+            )
+            if per_test_errors.get(tn) or has_bang_failure:
+                error_count += 1  # $finish + errors, or a legacy "[TAG] ...!!" failure line
             else:
                 complete_count += 1  # $finish, no errors → waveform complete
         else:
