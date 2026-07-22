@@ -62,6 +62,9 @@ class CompoundResult:
         return "\n".join(parts)
 
 
+_TB_BANG_LINE_RE = re.compile(r'^\[[^\]]+\].*!!', re.MULTILINE)
+
+
 def _classify_status(log: str) -> str:
     """Classify a single test's raw log into PASS/FAIL (Plan §3.4 "log_grep" step).
 
@@ -69,13 +72,24 @@ def _classify_status(log: str) -> str:
     already relies on (_COMPLETE_RE) instead of inventing a new pattern.
 
     F-186: legacy directed tests (pre-dating the UVM harness convention) print
-    their own per-check verdicts as lowercase "failed!!"/"passed!!" (e.g.
+    their own per-check verdicts as bracketed-tag lines ending in "!!" (e.g.
     `[REG BANK TEST] register 0x03: failed!!`) instead of "COMPLETE. Errors: N"
     or uppercase "FAIL". Before this fix, such a log fell through both of those
     checks and was classified PASS purely because it reached "$finish" —
-    silently discarding every internal failure the TB itself reported. A
-    case-insensitive "failed!!" search closes that gap without touching the
-    UVM/uppercase-FAIL priority order above it.
+    silently discarding every internal failure the TB itself reported.
+
+    A literal "failed!!" search was the first attempt at this fix, but it
+    missed the actual case that motivated it: TID_TOP010_register_bank_test's
+    bounded-timeout guard prints `"[REG BANK TEST] register 0x05: back-tel
+    NOT sent (timeout)!!"` — no "failed", no "passed", but unmistakably a
+    failure in the same "[TAG] ...!!" convention. Re-verifying the fix
+    against that exact real message (not just a synthetic "failed!!" example)
+    is what caught the gap. `_TB_BANG_LINE_RE` generalizes to the convention
+    itself: any line starting with a bracketed `[TAG]` (this whole TB family's
+    own `$display` prefix) and containing "!!" is a verdict line; if none of
+    those lines say "passed", the test failed. This still can't misfire on
+    unrelated "!!" noise elsewhere in a log, since it requires the `[TAG]`
+    line-start anchor.
 
     ERROR is NOT produced here — infrastructure failures (EDA env missing, SSH
     timeout, etc.) surface as exceptions from run_batch_single itself and are
@@ -91,8 +105,9 @@ def _classify_status(log: str) -> str:
         return "PASS" if int(m.group(1)) == 0 else "FAIL"
     if "FAIL" in log:
         return "FAIL"
-    if "failed!!" in log.lower():
-        return "FAIL"
+    for bang_line in _TB_BANG_LINE_RE.findall(log):
+        if "passed" not in bang_line.lower():
+            return "FAIL"
     if "$finish" in log:
         return "PASS"  # waveform-only completion, no assertion failures
     return "FAIL"  # no verdict, no $finish — timeout or crash

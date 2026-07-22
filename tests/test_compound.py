@@ -127,16 +127,40 @@ class TestRunAndCheck:
 
 
 # ---------------------------------------------------------------------------
-# _classify_status — F-186 (legacy directed-test lowercase failed!!/passed!!
+# _classify_status — F-186 (legacy directed-test "[TAG] ...!!" verdict-line
 # convention was silently ignored, letting internal check failures be
 # classified PASS purely because $finish was reached)
+#
+# Rev.2: the first version of this fix only matched the literal substring
+# "failed!!" and shipped/deployed to cloud0 as such -- re-verifying against
+# the REAL log line that actually motivated F-186 (TID_TOP010_register_bank_
+# test's bounded-timeout guard, "[REG BANK TEST] register 0x05: back-tel NOT
+# sent (timeout)!!") found that it does NOT contain "failed!!" and was still
+# misclassified PASS even after that first fix. `_TB_BANG_LINE_RE` replaces
+# the literal substring check with the actual TB convention (bracketed [TAG]
+# line + "!!", not "passed") so this and any future similarly-worded verdict
+# line in the same convention family is caught without needing to enumerate
+# every possible wording.
 # ---------------------------------------------------------------------------
 
 class TestClassifyStatus:
+    def test_real_timeout_guard_message_is_fail(self):
+        """The exact real-world case that originally motivated F-186 (verilog-
+        tb-reviewer flagged it during TID_TOP010's Fix Sub-cycle): the TB's
+        bounded-timeout guard prints this exact line, with no "failed" or
+        "passed" in it at all -- only the "[TAG] ...!!" convention marks it as
+        a verdict line. A literal "failed!!" substring check (this fix's first,
+        insufficient attempt) misses this case entirely."""
+        log = (
+            "[REG BANK TEST] register 0x05: back-tel NOT sent (timeout)!!\n"
+            "Simulation complete via $finish(1) at time 48133520 NS + 0"
+        )
+        assert compound._classify_status(log) == "FAIL"
+
     def test_lowercase_failed_marker_is_fail(self):
-        """The bug this fix closes: no COMPLETE./no uppercase FAIL, but a
-        legacy TB's own 'failed!!' verdict line and a normal $finish — this
-        used to classify PASS, silently discarding the TB's own failure."""
+        """No COMPLETE./no uppercase FAIL, but a legacy TB's own 'failed!!'
+        verdict line and a normal $finish — this used to classify PASS,
+        silently discarding the TB's own failure."""
         log = (
             "[REG BANK TEST] register 0x03: failed!!, mask value: 0xff, "
             "write data: 0xfa, read data: 0x00\n"
@@ -162,8 +186,15 @@ class TestClassifyStatus:
 
     def test_complete_errors_marker_still_takes_priority(self):
         """No regression: the UVM COMPLETE./Errors: N marker is checked first
-        and still wins even if a stray lowercase 'failed!!' also appears."""
+        and still wins even if a stray 'failed!!'-like phrase also appears
+        outside of the bracketed [TAG] convention."""
         log = "some noise mentioning failed!! in passing\nCOMPLETE. Errors: 0"
+        assert compound._classify_status(log) == "PASS"
+
+    def test_unrelated_bang_noise_without_bracket_tag_does_not_misfire(self):
+        """No false positive: '!!' appearing outside the bracketed [TAG] line
+        convention (unrelated log noise) must not be treated as a verdict."""
+        log = "wow!! that was fast\nSimulation complete via $finish(1) at time 100 NS + 0"
         assert compound._classify_status(log) == "PASS"
 
 
