@@ -64,7 +64,18 @@ xcelium-mcp(Cadence Xcelium/SimVision MCP 서버)의 25개 tool을 RTL 디버깅
 
 `/sim` subcommand는 위 Phase 1의 phase reference 판단 로직 위에, "지금 어떤 phase reference를 자동으로 골라 로드할지"를 결정하는 라우팅 계층이다 — Phase 1 reference 8개는 그대로 재사용하고, 새로 추가되는 산출물은 `scripts/sim_state.py`(상태 CRUD) + `references/backend-interface.md`(compound tool 계약) + `references/fix-plan-template.md`(수정 계획 문서 양식) 3개뿐이다.
 
-**`sim_state.py` 호출 방법**: 아래 절차의 `sim_state.py {command} ...`는 Bash tool로 실제 배포된 절대경로를 호출하는 축약 표기다 — 예: `python3 ~/.claude/skills/xcelium-sim/scripts/sim_state.py append_debug_note --sim-dir {sim_dir} --test {test} --context "..."` (note/content/report 같은 자유 텍스트는 `<<'EOF'` heredoc으로 stdin에 넘긴다 — argv 이스케이프 문제 회피). `--project-root`는 생략하면 현재 작업 디렉터리(=RTL 프로젝트 루트, Bash tool의 기본 cwd)를 쓴다 — 다른 위치에서 실행해야 하면 명시적으로 지정한다.
+**`sim_state.py` 호출 방법**: 아래 절차의 `sim_state.py {command} ...`는 Bash tool로 실제 배포된 절대경로를 호출하는 축약 표기다. **Windows/Git-Bash 환경에서는 반드시 `MSYS_NO_PATHCONV=1`을 앞에 붙인다** — 이게 없으면 `/usrdata/...`처럼 `/`로 시작하는 `--sim-dir`/`--dump-path` 값을 MSYS가 자기 마음대로 `C:/Program Files/Git/usrdata/...`로 바꿔버려서 sim-state.json에 오염된 값이 기록된다(2026-07-22 실제 발생·확인). 표준 호출 형태:
+
+```bash
+MSYS_NO_PATHCONV=1 python3 ~/.claude/skills/xcelium-sim/scripts/sim_state.py \
+  append_debug_note --sim-dir {sim_dir} --test {test} --context "..." <<'EOF'
+{note 내용}
+EOF
+```
+
+(note/content/report 같은 자유 텍스트는 `<<'EOF'` heredoc으로 stdin에 넘긴다 — argv 이스케이프 문제 회피). `--project-root`는 생략하면 현재 작업 디렉터리(=RTL 프로젝트 루트, Bash tool의 기본 cwd)를 쓴다 — 다른 위치에서 실행해야 하면 명시적으로 지정한다.
+
+**`MSYS_NO_PATHCONV=1`을 깜빡해도 안전하다**: `sim_state.py` 자체가 `sim_dir`/`dump_path`에 Windows 드라이브 문자 접두(`C:\` 등)가 들어오면 이 오염 패턴으로 판단해 즉시 에러로 거부한다(`_reject_if_msys_mangled`, `scripts/test_sim_state.py::TestMsysMangledPathGuard`) — 이 문서를 안 읽고 호출해도 조용히 오염된 상태가 저장되는 대신 명확한 에러 메시지로 실패한다.
 
 ### Subcommand 목록
 
@@ -101,7 +112,9 @@ xcelium-mcp(Cadence Xcelium/SimVision MCP 서버)의 25개 tool을 RTL 디버깅
    frontmatter 없음 → 본문 읽어서 판단(fallback) / 분석서 자체 없음 → Phase 0 절차로 먼저 작성
 2. backend-interface.md 참조해 compound tool 호출:
    --bridge → connect_simulator(개별 tool) / --regression → sim_regression_summary / 기본 → sim_run_and_check
-3. 반환된 CompoundResult로 sim-state.json 갱신(Backend는 파일에 관여 안 함 — Skill이 직접 기록)
+3. 반환된 CompoundResult로 sim-state.json 갱신(Backend는 파일에 관여 안 함 — Skill이 직접 기록):
+   `sim_state.py record_run --sim-dir {sim_dir} --test {test} --status {status} --dump-path {dump_path}`
+   (log_summary는 stdin)
 4. 결과 보고 + 아래 "Next-Skill 자동 제안" 표대로 다음 단계 제안
 ```
 
@@ -111,7 +124,9 @@ xcelium-mcp(Cadence Xcelium/SimVision MCP 서버)의 25개 tool을 RTL 디버깅
 1. sim-state.json에서 이전 run의 dump_path/log_summary 참조 — 없으면 "먼저 /sim run 필요"
 2. 로그 판별: PASS → "regression?" 제안 / FAIL·불확정 → 3단계
 3. sim_analyze_waveform 호출(신호=frontmatter pass_signals, 조건=frontmatter fail_conditions)
-4. FAIL 유형 자동 분류(아래 표) + sim-state 갱신 + next-skill 제안
+4. FAIL 유형 자동 분류(아래 표) + sim-state 갱신 + next-skill 제안:
+   `sim_state.py record_analyze --sim-dir {sim_dir} --test {test} --csv-path {csv_path}
+   [--fail-signals {신호들} --fail-type {유형}]`
 ```
 
 **FAIL 유형 자동 분류**:
@@ -151,7 +166,10 @@ xcelium-mcp(Cadence Xcelium/SimVision MCP 서버)의 25개 tool을 RTL 디버깅
                 요청 재조사(revision N)") 먼저 → write_fix_plan 재호출 → b 재진입
       보류 → `sim_state.py hold_fix_plan ...`(진짜 no-op) — 세션 종료, 다음 세션에서 이어서 결정 또는 새로 시작
    c. coder의 A0가 ARCH 판정 → verilog-rtl-architect-advisor escalate → ADR(fix-design.md, adr-template.md
-      재사용) → 재승인 → fix-implement 재개. 사람 구현 경로엔 이 자동 escalate 없음(필요시 수동 호출)
+      재사용) 산출 → `sim_state.py write_fix_design --sim-dir ... --test ...`(ADR 본문은 stdin, phase가
+      fix-design으로 전환) → AskUserQuestion으로 재승인 → 승인되면 `sim_state.py ratify_fix_design --sim-dir
+      ... --test ...` 호출(phase가 fix-implement로 복귀) → fix-implement 재개. 사람 구현 경로엔 이 자동
+      escalate 없음(필요시 수동 호출)
    d. fix-implement 완료(주체 무관) → fix-review 게이트(필수, 조건부 아님):
       fix_target=rtl → verilog-rtl-reviewer 정적 리뷰 → self-contained 항목은 verilog-rtl-prover formal 증명
       fix_target=tb → verilog-tb-reviewer 정적 리뷰(formal 대응 없음)

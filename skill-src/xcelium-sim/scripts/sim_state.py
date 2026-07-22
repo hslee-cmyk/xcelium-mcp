@@ -22,18 +22,22 @@ to locate a *local* file even if this script had that value. So here,
 `project_root` (default: current working directory), matching how the Skill
 is actually invoked (Claude Code's Bash tool runs in the RTL project's cwd).
 
-**Known gap (documented, not silently skipped)**: Plan §5.1 defines exactly
-7 CRUD functions and explicitly scopes them as "CRUD 계약만 고정" — none of
-them cover recording a `fix-design` ADR ratification (`origin_chain.
-fix_design.ratified_at`, entering `phase="fix-design"`). That transition is
-therefore out of this module's scope; the Skill must set those two fields
-directly (see `_load_state`/`_save_state`, exported for that purpose) until
-Plan is revised to add an 8th function.
+**History**: Plan §5.1 defined exactly 7 CRUD functions ("CRUD 계약만 고정")
+covering only the Fix Sub-cycle proper (debug/fix-plan/fix-design mentioned
+in schema but not wired/fix-implement/fix-review). Driving `/sim run` and
+`/sim analyze` end-to-end (2026-07-22) found two more gaps the Plan's schema
+already implied but never gave a function for: `record_run`/`record_analyze`
+(basic run/analyze result recording) and `write_fix_design`/
+`ratify_fix_design` (the `origin_chain.fix_design` ADR transition, previously
+left as a documented-but-unfixed gap here). All four now exist below —
+`origin_chain`'s full 7 fields (run/analyze/debug/fix_plan/fix_design/
+fix_implement/fix_review) each have a writer function.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,12 +47,40 @@ VALID_FIX_TARGETS = ("rtl", "tb")
 VALID_IMPLEMENTERS = ("verilog-rtl-coder", "verilog-tb-coder", "human")
 VALID_VERDICTS = ("clean", "issues_found")
 
+# Structural defense against a real incident (2026-07-22): on Windows,
+# Git-Bash/MSYS auto-translates any `/`-leading argv value into a Windows
+# path before the argv ever reaches this script — e.g. the remote path
+# "/usrdata/hoseung.lee/..." silently became "C:/Program Files/Git/usrdata/
+# hoseung.lee/...". This corrupted sim_dir/dump_path is never legitimate:
+# this project's remote sim-server is always Linux, so a drive-letter
+# prefix on a value that's supposed to be a remote path can only mean the
+# shell mangled it. Fail loudly here instead of silently persisting
+# corrupted state — this check is what makes the fix structural rather
+# than "remember to set MSYS_NO_PATHCONV=1 every time" (still documented in
+# SKILL.md as the actual fix; this is the safety net for when someone
+# doesn't, or a different shell has the same problem).
+_WINDOWS_DRIVE_RE = re.compile(r'^[A-Za-z]:[\\/]')
+
+
+def _reject_if_msys_mangled(label: str, value: str) -> None:
+    if value and _WINDOWS_DRIVE_RE.match(value):
+        raise ValueError(
+            f"{label}={value!r} looks like a Windows-drive-letter path, but remote "
+            "sim_dir/dump_path must be Unix paths on the (Linux) sim-server. This is "
+            "almost certainly Git-Bash/MSYS auto-converting a '/'-leading argument — "
+            "re-run with MSYS_NO_PATHCONV=1 set (see SKILL.md)."
+        )
+
 __all__ = [
+    "record_run",
+    "record_analyze",
     "append_debug_note",
     "write_fix_plan",
     "approve_fix_plan",
     "supersede_fix_plan",
     "hold_fix_plan",
+    "write_fix_design",
+    "ratify_fix_design",
     "record_fix_implement",
     "append_fix_review_note",
 ]
@@ -101,12 +133,85 @@ def _companion_path(project_root: str, rel_path: str) -> Path:
     return Path(project_root) / rel_path
 
 
+def _set_sim_dir(state: dict, sim_dir: str) -> None:
+    """Validate + persist `sim_dir` metadata — the single choke point every
+    public function goes through, so the MSYS-mangling guard only needs to
+    live in one place (see `_reject_if_msys_mangled` above)."""
+    _reject_if_msys_mangled("sim_dir", sim_dir)
+    state["sim_dir"] = sim_dir
+
+
 def _append_section(doc_path: Path, header: str, body: str) -> None:
     """Append `## {header}\\n\\n{body}\\n\\n` to doc_path (create if missing)."""
     doc_path.parent.mkdir(parents=True, exist_ok=True)
     prefix = "" if not doc_path.exists() or not doc_path.read_text(encoding="utf-8").strip() else "\n"
     with doc_path.open("a", encoding="utf-8") as fh:
         fh.write(f"{prefix}## {header}\n\n{body.rstrip()}\n")
+
+
+# ---------------------------------------------------------------------------
+# run — Plan §5.1 schema has top-level phase/result/dump_path/log_summary +
+# origin_chain.run, but Plan's own 7-function CRUD list (§5.1/§5.8) never
+# actually defined how those fields get written — it only covers the Fix
+# Sub-cycle (debug/fix-plan/fix-design/fix-implement/fix-review), which all
+# come AFTER a run+analyze already happened. Found this gap by actually
+# driving `/sim run TOP015` end-to-end (2026-07-22) — SKILL.md's own "run"
+# step 3 ("Skill이 compound 반환값으로 sim-state.json 갱신") had nothing to
+# call. Added as the 8th function, same CRUD-only spirit as the other 7.
+# ---------------------------------------------------------------------------
+
+def record_run(sim_dir: str, test: str, status: str, log_summary: str,
+                dump_path: str = "", project_root: str = ".") -> None:
+    """Record a `/sim run` (or `--regression`) result's CompoundResult.
+
+    Sets the top-level "current state" fields (`phase="run"`, `result`,
+    `dump_path`, `log_summary`) AND `origin_chain.run` (the immutable record
+    of what this run produced, referenced later by `/sim analyze`/`/sim
+    debug` regardless of how many times `phase`/`result` get overwritten by
+    later runs). `run`/`analyze` are deterministic derived data (re-running
+    the same dump reproduces the same CSV), not accumulated prose — so unlike
+    debug/fix-plan/fix-review, this has no companion git-tracked `.md` file
+    and simply overwrites (Plan §5.1 "어느 phase가 JSON=포인터, MD=문서 패턴을
+    쓰는가").
+    """
+    _reject_if_msys_mangled("dump_path", dump_path)
+    state = _load_state(project_root)
+    _set_sim_dir(state, sim_dir)
+    entry = _get_test_entry(state, test)
+    entry["phase"] = "run"
+    entry["result"] = status
+    entry["dump_path"] = dump_path
+    entry["log_summary"] = log_summary
+    entry["origin_chain"]["run"] = {"dump_path": dump_path, "log": log_summary}
+    _save_state(project_root, state)
+
+
+def record_analyze(sim_dir: str, test: str, csv_path: str,
+                    anomaly_time_ns: int | None = None,
+                    fail_signals: list[str] | None = None,
+                    fail_type: str | None = None,
+                    project_root: str = ".") -> None:
+    """Record a `/sim analyze` result — same gap/rationale as `record_run`
+    (found while actually driving `/sim analyze TOP015`, 2026-07-22).
+
+    Sets `phase="analyze"`, `csv_path`, and optionally `fail_signals`/
+    `fail_type` (Plan §5.4 FAIL 유형 자동 분류) at the top level, plus
+    `origin_chain.analyze={csv_path, anomaly_time_ns}`. Like `record_run`,
+    overwrites rather than accumulates (deterministic derived data, not
+    prose) and does not touch `result`/`dump_path` (those stay whatever the
+    prior `record_run` call set — analyze doesn't re-run the simulation).
+    """
+    state = _load_state(project_root)
+    _set_sim_dir(state, sim_dir)
+    entry = _get_test_entry(state, test)
+    entry["phase"] = "analyze"
+    entry["csv_path"] = csv_path
+    if fail_signals is not None:
+        entry["fail_signals"] = fail_signals
+    if fail_type is not None:
+        entry["fail_type"] = fail_type
+    entry["origin_chain"]["analyze"] = {"csv_path": csv_path, "anomaly_time_ns": anomaly_time_ns}
+    _save_state(project_root, state)
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +227,7 @@ def append_debug_note(sim_dir: str, test: str, note: str, context: str,
     "0) debug"). Does not change `phase`.
     """
     state = _load_state(project_root)
-    state["sim_dir"] = sim_dir
+    _set_sim_dir(state, sim_dir)
     entry = _get_test_entry(state, test)
     debug = entry["origin_chain"]["debug"]
     debug["iteration_count"] += 1
@@ -164,7 +269,7 @@ def write_fix_plan(sim_dir: str, test: str, content: str, project_root: str = ".
     the first write and increments on every subsequent write to the same test.
     """
     state = _load_state(project_root)
-    state["sim_dir"] = sim_dir
+    _set_sim_dir(state, sim_dir)
     entry = _get_test_entry(state, test)
     fix_plan = entry["origin_chain"]["fix_plan"]
     is_first_write = fix_plan.get("status") == "pending" and fix_plan.get("revision_count", 0) == 0 \
@@ -191,7 +296,7 @@ def approve_fix_plan(sim_dir: str, test: str, project_root: str = ".") -> None:
     docstring "Known gap" — no dedicated function for that transition).
     """
     state = _load_state(project_root)
-    state["sim_dir"] = sim_dir
+    _set_sim_dir(state, sim_dir)
     entry = _get_test_entry(state, test)
     fix_plan = entry["origin_chain"]["fix_plan"]
     fix_plan["status"] = "approved"
@@ -209,7 +314,7 @@ def supersede_fix_plan(sim_dir: str, test: str, project_root: str = ".") -> None
     history of the file itself is the record.
     """
     state = _load_state(project_root)
-    state["sim_dir"] = sim_dir
+    _set_sim_dir(state, sim_dir)
     entry = _get_test_entry(state, test)
     entry["origin_chain"]["fix_plan"]["status"] = "superseded"
     entry["phase"] = "run"
@@ -223,6 +328,61 @@ def hold_fix_plan(sim_dir: str, test: str, project_root: str = ".") -> None:
     the session ends with state exactly as it already is.
     """
     return None
+
+
+# ---------------------------------------------------------------------------
+# 2) fix-design (Plan §5.8 "2)") — conditional, ARCH-classification only.
+# Previously the one origin_chain field with no writer (module docstring
+# "History"). LOCAL/IFACE-classified fixes skip this phase entirely and go
+# straight from fix-plan to fix-implement — never call these two.
+# ---------------------------------------------------------------------------
+
+def write_fix_design(sim_dir: str, test: str, content: str, project_root: str = ".") -> None:
+    """Write `.ai/sim-state/{test}/fix-design.md` — the ADR `verilog-rtl-
+    architect-advisor` produces after the coder's A0 gate escalates a
+    fix-plan to ARCH (new FSM/module/instance/case-arm, clock/reset re-wire).
+
+    Sets `phase="fix-design"` and `origin_chain.fix_design={"path", ...,
+    "ratified_at": None}` — pending the user's re-approval (`ratify_fix_
+    design`) before `fix-implement` can resume. Overwrites on revision, same
+    as `write_fix_plan` (the ADR is a single evolving document, not an
+    append-only log).
+    """
+    state = _load_state(project_root)
+    _set_sim_dir(state, sim_dir)
+    entry = _get_test_entry(state, test)
+    path = f".ai/sim-state/{test}/fix-design.md"
+    entry["origin_chain"]["fix_design"] = {"path": path, "ratified_at": None}
+    entry["phase"] = "fix-design"
+    doc_path = _companion_path(project_root, path)
+    doc_path.parent.mkdir(parents=True, exist_ok=True)
+    doc_path.write_text(content.rstrip() + "\n", encoding="utf-8")
+    _save_state(project_root, state)
+
+
+def ratify_fix_design(sim_dir: str, test: str, project_root: str = ".") -> None:
+    """User re-approves the ADR (`origin_chain.fix_design.ratified_at` set).
+
+    Resumes `phase="fix-implement"` so the coder can continue implementing
+    against the now-ratified partitioning decision. Raises `ValueError` if
+    `write_fix_design` was never called for this test (nothing to ratify) —
+    unlike `approve_fix_plan`, which always has a fix-plan to act on by the
+    time it's reachable, fix-design is conditional and may genuinely be
+    skipped (LOCAL/IFACE), so a missing entry here is a caller bug worth
+    catching rather than silently no-op'ing.
+    """
+    state = _load_state(project_root)
+    _set_sim_dir(state, sim_dir)
+    entry = _get_test_entry(state, test)
+    fix_design = entry["origin_chain"].get("fix_design")
+    if fix_design is None:
+        raise ValueError(
+            f"no fix-design.md recorded for test {test!r} — call write_fix_design() first "
+            "(this phase is ARCH-only; skip it entirely for LOCAL/IFACE fixes)"
+        )
+    fix_design["ratified_at"] = _now_iso()
+    entry["phase"] = "fix-implement"
+    _save_state(project_root, state)
 
 
 # ---------------------------------------------------------------------------
@@ -241,7 +401,7 @@ def record_fix_implement(sim_dir: str, test: str, implementer: str,
     if implementer not in VALID_IMPLEMENTERS:
         raise ValueError(f"implementer must be one of {VALID_IMPLEMENTERS}, got {implementer!r}")
     state = _load_state(project_root)
-    state["sim_dir"] = sim_dir
+    _set_sim_dir(state, sim_dir)
     entry = _get_test_entry(state, test)
     fix_impl = entry["origin_chain"]["fix_implement"]
     fix_impl["implementer"] = implementer
@@ -277,7 +437,7 @@ def append_fix_review_note(sim_dir: str, test: str, note: str, verdict: str,
     if verdict not in VALID_VERDICTS:
         raise ValueError(f"verdict must be one of {VALID_VERDICTS}, got {verdict!r}")
     state = _load_state(project_root)
-    state["sim_dir"] = sim_dir
+    _set_sim_dir(state, sim_dir)
     entry = _get_test_entry(state, test)
     fix_review = entry["origin_chain"]["fix_review"]
     fix_review["iteration_count"] += 1
@@ -307,6 +467,20 @@ def _read_stdin_text() -> str:
     return sys.stdin.read()
 
 
+def _cli_record_run(args: argparse.Namespace) -> None:
+    log_summary = args.log_summary if args.log_summary is not None else _read_stdin_text()
+    record_run(args.sim_dir, args.test, args.status, log_summary,
+               dump_path=args.dump_path, project_root=args.project_root)
+
+
+def _cli_record_analyze(args: argparse.Namespace) -> None:
+    record_analyze(args.sim_dir, args.test, args.csv_path,
+                   anomaly_time_ns=args.anomaly_time_ns,
+                   fail_signals=args.fail_signals or None,
+                   fail_type=args.fail_type or None,
+                   project_root=args.project_root)
+
+
 def _cli_append_debug_note(args: argparse.Namespace) -> None:
     append_debug_note(args.sim_dir, args.test, _read_stdin_text(), args.context,
                        project_root=args.project_root)
@@ -328,6 +502,14 @@ def _cli_hold_fix_plan(args: argparse.Namespace) -> None:
     hold_fix_plan(args.sim_dir, args.test, project_root=args.project_root)
 
 
+def _cli_write_fix_design(args: argparse.Namespace) -> None:
+    write_fix_design(args.sim_dir, args.test, _read_stdin_text(), project_root=args.project_root)
+
+
+def _cli_ratify_fix_design(args: argparse.Namespace) -> None:
+    ratify_fix_design(args.sim_dir, args.test, project_root=args.project_root)
+
+
 def _cli_record_fix_implement(args: argparse.Namespace) -> None:
     report = args.report if args.report is not None else _read_stdin_text()
     record_fix_implement(args.sim_dir, args.test, args.implementer,
@@ -346,6 +528,24 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--project-root", default=".", help="RTL project root (default: cwd)")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("record_run")
+    p.add_argument("--sim-dir", required=True)
+    p.add_argument("--test", required=True)
+    p.add_argument("--status", required=True, help='e.g. "PASS"/"FAIL"/"ERROR"/"PARTIAL"')
+    p.add_argument("--dump-path", default="")
+    p.add_argument("--log-summary", default=None, help="Omit to read from stdin")
+    p.set_defaults(func=_cli_record_run)
+
+    p = sub.add_parser("record_analyze")
+    p.add_argument("--sim-dir", required=True)
+    p.add_argument("--test", required=True)
+    p.add_argument("--csv-path", required=True)
+    p.add_argument("--anomaly-time-ns", type=int, default=None)
+    p.add_argument("--fail-signals", nargs="*", default=None)
+    p.add_argument("--fail-type", default=None,
+                    help='e.g. "data_mismatch"/"timeout"/"assertion"/"protocol"')
+    p.set_defaults(func=_cli_record_analyze)
 
     p = sub.add_parser("append_debug_note")
     p.add_argument("--sim-dir", required=True)
@@ -373,6 +573,16 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--test", required=True)
     p.set_defaults(func=_cli_hold_fix_plan)
 
+    p = sub.add_parser("write_fix_design")
+    p.add_argument("--sim-dir", required=True)
+    p.add_argument("--test", required=True)
+    p.set_defaults(func=_cli_write_fix_design)
+
+    p = sub.add_parser("ratify_fix_design")
+    p.add_argument("--sim-dir", required=True)
+    p.add_argument("--test", required=True)
+    p.set_defaults(func=_cli_ratify_fix_design)
+
     p = sub.add_parser("record_fix_implement")
     p.add_argument("--sim-dir", required=True)
     p.add_argument("--test", required=True)
@@ -390,11 +600,16 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> None:
+def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
-    args.func(args)
+    try:
+        args.func(args)
+    except ValueError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
